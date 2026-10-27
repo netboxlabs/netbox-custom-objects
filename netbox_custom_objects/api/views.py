@@ -4,7 +4,6 @@ import logging
 from pathlib import Path
 
 import jsonschema
-
 from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q
@@ -12,22 +11,19 @@ from django.http import Http404
 from django.utils.translation import gettext_lazy as _
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema
-from extras.choices import CustomFieldTypeChoices
 from rest_framework import status
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import JSONParser
 from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework.routers import APIRootView
 from rest_framework.views import APIView
-from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from core.signals import clear_events
+from extras.choices import CustomFieldTypeChoices
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired, TokenWritePermission
 from netbox.api.renderers import FormlessBrowsableAPIRenderer
 from netbox.api.viewsets import NetBoxModelViewSet
-from utilities.permissions import get_permission_for_model
-
-
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.filtersets import (
     CustomObjectTypeConstraintFilterSet,
@@ -37,21 +33,23 @@ from netbox_custom_objects.filtersets import (
 )
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.schema.comparator import FieldOp, diff_document
-from netbox_custom_objects.schema.format import CUSTOM_OBJECTS_APP_LABEL_SLUG
-from netbox_custom_objects.utilities import polymorphic_m2m_field_names
 from netbox_custom_objects.schema.executor import (
-    apply_diffs,
-    schema_transaction,
     CircularDependencyError,
     DestructiveChangesError,
     InvalidConstraintError,
     InvalidRelatedNameError,
     UnknownChoiceSetError,
-    UnsupportedFieldChangeError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
+    UnsupportedFieldChangeError,
     UnsupportedTypeChangeError,
+    apply_diffs,
+    schema_transaction,
 )
+from netbox_custom_objects.schema.format import CUSTOM_OBJECTS_APP_LABEL_SLUG
+from netbox_custom_objects.utilities import polymorphic_m2m_field_names
+from utilities.permissions import get_permission_for_model
+
 from . import serializers
 from .parsers import YAMLParser
 from .renderers import YAMLRenderer
@@ -75,7 +73,7 @@ _SCHEMA_RENDERER_CLASSES = [JSONRenderer, YAMLRenderer, FormlessBrowsableAPIRend
 @functools.lru_cache(maxsize=1)
 def _get_validator():
     """Load the COT JSON Schema file and return a validator. Cached after first call."""
-    with open(_SCHEMA_FILE) as f:
+    with Path(_SCHEMA_FILE).open() as f:
         schema = json.load(f)
     return jsonschema.Draft202012Validator(schema)
 

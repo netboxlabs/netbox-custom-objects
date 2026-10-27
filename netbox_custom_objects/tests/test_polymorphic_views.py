@@ -10,16 +10,15 @@ from django.urls import reverse
 from core.models import ObjectChange, ObjectType
 from dcim.models import Site
 from extras.validators import CustomValidator
-from ipam.models import Prefix
 from ipam.choices import PrefixStatusChoices
-from utilities.testing import create_test_user
-
+from ipam.models import Prefix
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.tests.base import (
     CustomObjectsTestCase,
     _grant_perm,
 )
+from utilities.testing import create_test_user
 
 
 class PolymorphicFieldUITestCase(CustomObjectsTestCase, TestCase):

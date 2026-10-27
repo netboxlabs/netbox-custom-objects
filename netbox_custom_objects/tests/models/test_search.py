@@ -14,7 +14,6 @@ from django.test.utils import CaptureQueriesContext
 
 import netbox_custom_objects as nco_package
 import netbox_custom_objects.models as nco_models
-
 from core.choices import JobIntervalChoices, JobStatusChoices
 from core.models import Job
 from dcim.models import Site
@@ -25,6 +24,7 @@ from netbox_custom_objects.constants import DISPLAY_EXPRESSION_SEARCH_WEIGHT
 from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.jobs import RefreshDisplayExpressionSearchJob, ReindexCustomObjectTypeJob
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+
 from ..base import CustomObjectsTestCase
 
 
@@ -122,9 +122,8 @@ class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
         # Save the field with a new weight (suppress automatic enqueue)
         field = CustomObjectTypeField.objects.get(pk=self.field.pk)
         field.search_weight = 100
-        with patch.object(ReindexCustomObjectTypeJob, 'enqueue'):
-            with self.captureOnCommitCallbacks(execute=True):
-                field.save()
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue'), self.captureOnCommitCallbacks(execute=True):
+            field.save()
 
         # Run the job synchronously via immediate=True
         ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk, immediate=True)

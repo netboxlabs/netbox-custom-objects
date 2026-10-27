@@ -6,17 +6,17 @@ from django.apps import apps as django_apps
 from django.contrib.contenttypes.management import create_contenttypes
 from django.db import connection, connections
 from django.test import Client, override_settings
+
 from core.models import ObjectChange, ObjectType
 from extras.models import CustomFieldChoiceSet
-from users.models import ObjectPermission, Token
-from utilities.testing import create_test_user
-
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import (
     CustomObjectType,
     CustomObjectTypeField,
     _deferred_co_field_data,
 )
+from users.models import ObjectPermission, Token
+from utilities.testing import create_test_user
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ def _purge_stale_generated_models():
         # clears the apps registry's own cache, but per-model
         # ``_meta._relation_tree`` snapshots taken by Django outside this
         # plugin survive — they need explicit expiry.
-        from django.contrib.contenttypes.models import ContentType  # noqa: PLC0415
+        from django.contrib.contenttypes.models import ContentType
 
         ContentType._meta._expire_cache(forward=False)
         for app_models in django_apps.all_models.values():
@@ -219,6 +219,7 @@ def _drop_dynamic_tables():
        ``_meta.related_objects`` without phantom FK references.
     """
     from django.apps import apps as django_apps
+
     from netbox_custom_objects.constants import APP_LABEL
     from netbox_custom_objects.models import CustomObjectType
 
@@ -319,7 +320,7 @@ def _remove_reverse_descriptors(keep=frozenset()):
 def create_api_token(user):
     """Create an API token for *user*, handling the NetBox ≥ 4.5 version field."""
     try:
-        from users.choices import TokenVersionChoices  # noqa: PLC0415
+        from users.choices import TokenVersionChoices
 
         token = Token(version=TokenVersionChoices.V1, user=user)
     except ImportError:
@@ -440,6 +441,7 @@ class CustomObjectsTestCase:
     def setUp(self):
         """Set up test data."""
         from django.apps import apps as django_apps
+
         from netbox_custom_objects.constants import APP_LABEL
 
         self.user = create_test_user('testuser')
@@ -462,6 +464,7 @@ class CustomObjectsTestCase:
         """Clean up after each test."""
         from django.apps import apps as django_apps
         from django.contrib.contenttypes.models import ContentType
+
         from netbox_custom_objects.constants import APP_LABEL
 
         CustomObjectType.clear_model_cache()
@@ -504,6 +507,7 @@ class CustomObjectsTestCase:
         """Remove class-level dynamic model registrations after all tests run."""
         from django.apps import apps as django_apps
         from django.contrib.contenttypes.models import ContentType
+
         from netbox_custom_objects.constants import APP_LABEL
 
         # After tearDownClass the class-level savepoint rolls back, dropping

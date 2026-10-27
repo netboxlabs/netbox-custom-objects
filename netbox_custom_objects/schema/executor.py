@@ -33,11 +33,11 @@ Public API
 import logging
 from contextlib import contextmanager
 
-from core.models import ObjectType
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, transaction
-from extras.models import CustomFieldChoiceSet
 
+from core.models import ObjectType
+from extras.models import CustomFieldChoiceSet
 from netbox_custom_objects import constants
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.models import (
@@ -249,10 +249,10 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
         kwargs['validation_regex'] = schema_def.get('validation_regex', '')
 
     if 'validation_minimum' in type_specific:
-        kwargs['validation_minimum'] = schema_def.get('validation_minimum', None)
+        kwargs['validation_minimum'] = schema_def.get('validation_minimum')
 
     if 'validation_maximum' in type_specific:
-        kwargs['validation_maximum'] = schema_def.get('validation_maximum', None)
+        kwargs['validation_maximum'] = schema_def.get('validation_maximum')
 
     for attr in ('array_element_type', 'array_tuple_size', 'array_min_length', 'array_max_length'):
         if attr in type_specific:

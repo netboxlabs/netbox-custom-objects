@@ -10,20 +10,21 @@ from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
-from netbox.api.viewsets import mixins as netbox_viewset_mixins
 from packaging.version import Version
-
-from utilities.testing import TestCase as NetBoxTestCase, create_test_user
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from netbox_custom_objects.models import CustomObjectType
-from ..base import CustomObjectsTestCase, create_token
 from core.models import Job, ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
 from extras.models import ExportTemplate, Tag
+from netbox.api.viewsets import mixins as netbox_viewset_mixins
+from netbox_custom_objects.models import CustomObjectType
 from users.models import ObjectPermission
+from utilities.testing import TestCase as NetBoxTestCase
+from utilities.testing import create_test_user
 from virtualization.models import Cluster, ClusterType
+
+from ..base import CustomObjectsTestCase, create_token
 
 
 class CustomObjectAPITestCaseMixin:

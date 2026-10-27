@@ -7,7 +7,8 @@ from unittest.mock import patch
 from django.test import TestCase
 
 from netbox_custom_objects import CustomObjectsPluginConfig
-from netbox_custom_objects.navigation import get_grouped_menu_items, CustomObjectTypeMenuItems
+from netbox_custom_objects.navigation import CustomObjectTypeMenuItems, get_grouped_menu_items
+
 from .base import CustomObjectsTestCase
 
 

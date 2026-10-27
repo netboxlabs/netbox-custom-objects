@@ -15,8 +15,7 @@ from django.test import SimpleTestCase
 from packaging.version import Version
 
 import netbox_custom_objects
-from netbox_custom_objects import CustomObjectsPluginConfig
-from netbox_custom_objects import checks
+from netbox_custom_objects import CustomObjectsPluginConfig, checks
 
 MARKER_RE = re.compile(r'COMPAT\(([a-z][a-z0-9-]*)<([0-9][0-9.]*)\)')
 PACKAGE_ROOT = Path(netbox_custom_objects.__file__).parent

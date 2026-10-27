@@ -28,8 +28,9 @@ def _inject_co_urls():
     ``plugins:netbox_custom_objects:customobject_custom_objects``.
     """
     try:
-        import netbox_custom_objects.urls as co_urls
         from django.urls import path as url_path
+
+        import netbox_custom_objects.urls as co_urls
     except ImportError:
         return
 
@@ -55,8 +56,9 @@ def _public_host_model_classes():
     Returns ``[]`` if the database isn't usable yet (fresh install before
     ``migrate``); registration is retried on the next process start.
     """
-    from core.models import ObjectType
     from django.db.utils import OperationalError, ProgrammingError
+
+    from core.models import ObjectType
 
     try:
         object_types = list(ObjectType.objects.public().exclude(app_label=APP_LABEL))

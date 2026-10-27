@@ -7,10 +7,9 @@ from django.urls import reverse
 
 from core.models import ObjectType
 from extras.models import JournalEntry
-from users.models import ObjectPermission
-
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.navigation import CustomObjectTypeMenuItems, custom_object_type_plugin_menu_item
+from users.models import ObjectPermission
 
 from .base import CustomObjectsTestCase
 

@@ -8,13 +8,13 @@ from django.db.utils import ProgrammingError
 from django.test import TestCase, tag
 from django.urls import reverse
 
-
 from core.models import ObjectType
 from dcim.models import Site
 from extras.models import CustomFieldChoiceSet
 from netbox_custom_objects.api.serializers import get_serializer_class
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+
 from ..base import CustomObjectsTestCase
 
 

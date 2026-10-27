@@ -13,16 +13,16 @@ Users who never install netbox-branching keep the broader compatibility
 window declared by PluginConfig.
 """
 
-from importlib.metadata import PackageNotFoundError, version as _pkg_version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 
 from django.apps import apps
 from django.conf import settings
 from django.core.checks import Error, Warning, register
-from netbox.plugins import get_plugin_config
 from packaging.version import InvalidVersion, Version
 
+from netbox.plugins import get_plugin_config
 from netbox_custom_objects.utilities import is_branching_enabled
-
 
 # Version floors enforced only when netbox-branching is installed.
 # COMPAT(netbox<4.6.2): once min_version reaches this floor, remove this constant and

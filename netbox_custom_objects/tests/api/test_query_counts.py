@@ -6,16 +6,16 @@ from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
-
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from netbox_custom_objects.utilities import is_branching_enabled
-from ..base import CustomObjectsTestCase, create_token
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 from extras.models import Tag
+from netbox_custom_objects.utilities import is_branching_enabled
 from users.models import ObjectPermission, Owner
+
+from ..base import CustomObjectsTestCase, create_token
 
 try:
     from utilities.testing.query_counts import assert_expected_query_count

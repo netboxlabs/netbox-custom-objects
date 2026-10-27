@@ -444,11 +444,14 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         model_source.objects.create(name='Source Object', ref_target=obj_target)
 
         target_table = cot_target.get_database_table_name()
-        with self.assertRaises(
-            IntegrityError, msg='DB-level ON DELETE RESTRICT must block raw-SQL deletion of the target'
+        with (
+            self.assertRaises(
+                IntegrityError, msg='DB-level ON DELETE RESTRICT must block raw-SQL deletion of the target'
+            ),
+            transaction.atomic(),
+            connection.cursor() as cursor,
         ):
-            with transaction.atomic(), connection.cursor() as cursor:
-                cursor.execute(f'DELETE FROM {target_table} WHERE id = %s', [obj_target.pk])
+            cursor.execute(f'DELETE FROM {target_table} WHERE id = %s', [obj_target.pk])
 
         self.assertTrue(
             model_target.objects.filter(pk=obj_target.pk).exists(),

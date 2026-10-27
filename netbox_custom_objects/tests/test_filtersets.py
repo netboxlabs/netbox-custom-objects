@@ -14,7 +14,6 @@ from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 from extras.choices import CustomFieldTypeChoices
 from extras.models import CustomFieldChoiceSet
-
 from netbox_custom_objects.field_types import MultiObjectFieldType, ObjectFieldType
 from netbox_custom_objects.filtersets import (
     ArrayContainsFilter,
@@ -760,7 +759,7 @@ class DateTimePrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
         )
 
         model = cls.cot.get_model()
-        utc = datetime.timezone.utc
+        utc = datetime.UTC
         cls.obj_morning = model.objects.create(ts=datetime.datetime(2025, 3, 10, 9, 0, 0, tzinfo=utc))
         cls.obj_evening = model.objects.create(ts=datetime.datetime(2025, 3, 10, 18, 30, 0, tzinfo=utc))
 

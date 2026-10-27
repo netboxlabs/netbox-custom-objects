@@ -16,10 +16,9 @@ from core.models import ObjectType
 from dcim.models import Site
 from ipam.choices import PrefixStatusChoices
 from ipam.models import Prefix
-from tenancy.models import Tenant
-
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.tests.base import CustomObjectsTestCase, TransactionCleanupMixin
+from tenancy.models import Tenant
 
 
 class _SignalRecorder:

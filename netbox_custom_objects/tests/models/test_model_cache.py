@@ -446,12 +446,14 @@ class FailedFieldChangeTestCase(CustomObjectsTestCase, TestCase):
 
         field = CustomObjectTypeField.objects.get(pk=field.pk)
         field.name = 'coordinates'
-        with patch(
-            'netbox_custom_objects.models._rename_objectchange_field_key',
-            side_effect=RuntimeError('boom'),
+        with (
+            patch(
+                'netbox_custom_objects.models._rename_objectchange_field_key',
+                side_effect=RuntimeError('boom'),
+            ),
+            self.assertRaises(RuntimeError),
         ):
-            with self.assertRaises(RuntimeError):
-                field.save()
+            field.save()
 
         self.assertIn('coordinatescoordinates', self._db_columns(cot.get_model()))
         self._assert_model_matches_db(cot)
@@ -461,12 +463,14 @@ class FailedFieldChangeTestCase(CustomObjectsTestCase, TestCase):
         self.create_custom_object_type_field(cot, name='name', type='text', primary=True)
         cot.get_model()
 
-        with patch(
-            'netbox_custom_objects.models._apply_deferred_co_field',
-            side_effect=RuntimeError('boom'),
+        with (
+            patch(
+                'netbox_custom_objects.models._apply_deferred_co_field',
+                side_effect=RuntimeError('boom'),
+            ),
+            self.assertRaises(RuntimeError),
         ):
-            with self.assertRaises(RuntimeError):
-                self.create_custom_object_type_field(cot, name='extra', type='text')
+            self.create_custom_object_type_field(cot, name='extra', type='text')
 
         self.assertNotIn('extra', self._db_columns(cot.get_model()))
         self._assert_model_matches_db(cot)
@@ -477,12 +481,14 @@ class FailedFieldChangeTestCase(CustomObjectsTestCase, TestCase):
         field = self.create_custom_object_type_field(cot, name='extra', type='text')
         cot.get_model()
 
-        with patch(
-            'django.db.backends.postgresql.schema.DatabaseSchemaEditor.remove_field',
-            side_effect=RuntimeError('boom'),
+        with (
+            patch(
+                'django.db.backends.postgresql.schema.DatabaseSchemaEditor.remove_field',
+                side_effect=RuntimeError('boom'),
+            ),
+            self.assertRaises(RuntimeError),
         ):
-            with self.assertRaises(RuntimeError):
-                field.delete()
+            field.delete()
 
         self.assertIn('extra', self._db_columns(cot.get_model()))
         self._assert_model_matches_db(cot)
@@ -511,18 +517,20 @@ class FailedFieldChangeTestCase(CustomObjectsTestCase, TestCase):
         cot.get_model()
         self.addCleanup(lambda: 'failed_links' in Site.__dict__ and delattr(Site, 'failed_links'))
 
-        with patch(
-            'netbox_custom_objects.models._apply_deferred_co_field',
-            side_effect=RuntimeError('boom'),
+        with (
+            patch(
+                'netbox_custom_objects.models._apply_deferred_co_field',
+                side_effect=RuntimeError('boom'),
+            ),
+            self.assertRaises(RuntimeError),
         ):
-            with self.assertRaises(RuntimeError):
-                self.create_custom_object_type_field(
-                    cot,
-                    name='site',
-                    type='object',
-                    related_object_type=ObjectType.objects.get_for_model(Site),
-                    related_name='failed_links',
-                )
+            self.create_custom_object_type_field(
+                cot,
+                name='site',
+                type='object',
+                related_object_type=ObjectType.objects.get_for_model(Site),
+                related_name='failed_links',
+            )
 
         self.assertNotIn('failed_links', Site.__dict__)
         self._assert_model_matches_db(cot)
@@ -539,10 +547,9 @@ class FailedFieldChangeTestCase(CustomObjectsTestCase, TestCase):
 
         field = CustomObjectTypeField.objects.get(pk=field.pk)
         field.name = 'coordinates'
-        with self.assertRaises(RuntimeError):
-            with transaction.atomic():
-                field.save()
-                raise RuntimeError('boom')
+        with self.assertRaises(RuntimeError), transaction.atomic():
+            field.save()
+            raise RuntimeError('boom')
         return cot, field.custom_object_type
 
     def _assert_fits_table(self, model):

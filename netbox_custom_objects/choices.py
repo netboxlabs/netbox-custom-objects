@@ -1,4 +1,5 @@
 from django.utils.translation import gettext_lazy as _
+
 from extras.choices import CustomFieldTypeChoices
 from utilities.choices import ChoiceSet
 

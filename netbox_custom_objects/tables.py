@@ -1,8 +1,8 @@
 import django_tables2 as tables
 from django.utils.translation import gettext_lazy as _
 from django_tables2.data import TableQuerysetData
-from netbox.tables import NetBoxTable, columns
 
+from netbox.tables import NetBoxTable, columns
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.models import (
     CustomObject,

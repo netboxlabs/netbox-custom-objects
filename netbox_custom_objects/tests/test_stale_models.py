@@ -7,10 +7,10 @@ from django.apps import apps
 from django.core.cache import cache
 from django.test import TestCase
 from django.urls import reverse
-from extras.models import Tag
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from extras.models import Tag
 from netbox_custom_objects import stale_models
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType

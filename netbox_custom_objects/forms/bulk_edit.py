@@ -1,10 +1,10 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
+
 from netbox.forms import NetBoxModelBulkEditForm
+from netbox_custom_objects.models import CustomObjectType
 from utilities.forms.fields import CommentField
 from utilities.forms.rendering import FieldSet
-
-from netbox_custom_objects.models import CustomObjectType
 
 __all__ = ('CustomObjectTypeBulkEditForm',)
 

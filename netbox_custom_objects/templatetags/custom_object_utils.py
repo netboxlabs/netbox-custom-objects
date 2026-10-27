@@ -1,20 +1,20 @@
 from django import template
 from django.conf import settings
-from extras.choices import CustomFieldUIVisibleChoices
+from packaging.version import InvalidVersion, Version
 
+from extras.choices import CustomFieldUIVisibleChoices
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.field_types import URLFieldType, format_array_value
 from netbox_custom_objects.models import CustomObjectTypeField
 from netbox_custom_objects.utilities import build_map_url
-from packaging.version import InvalidVersion, Version
 
 __all__ = (
+    'get_child_relations',
+    'get_coordinate_map_url',
+    'get_field_is_ui_visible',
     'get_field_object_type',
     'get_field_type_verbose_name',
     'get_field_value',
-    'get_field_is_ui_visible',
-    'get_child_relations',
-    'get_coordinate_map_url',
     'get_url_field_html',
     'sticky_actions_supported',
 )

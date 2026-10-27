@@ -1,9 +1,31 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
+
 from extras.choices import CustomFieldTypeChoices
 from extras.forms import CustomFieldForm
 from netbox.forms import NetBoxModelForm
 from netbox.forms.mixins import ChangelogMessageMixin
+from netbox_custom_objects.choices import (
+    ArrayElementTypeChoices,
+    ConstraintTypeChoices,
+    CustomObjectFieldTypeChoices,
+    SearchWeightChoices,
+)
+from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.field_types import (
+    CustomColorSelect,
+    MACAddressFormField,
+    PolymorphicMultiObjectReverseDescriptor,
+    PolymorphicObjectReverseDescriptor,
+)
+from netbox_custom_objects.models import (
+    CONSTRAINT_FIELD_TYPES,
+    CustomObjectObjectType,
+    CustomObjectType,
+    CustomObjectTypeConstraint,
+    CustomObjectTypeField,
+)
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name, predicate_field_ref
 from utilities.forms.fields import (
     CommentField,
     ContentTypeChoiceField,
@@ -15,28 +37,6 @@ from utilities.forms.fields import (
 from utilities.forms.rendering import FieldSet
 from utilities.forms.utils import get_field_value
 from utilities.object_types import object_type_name
-
-from netbox_custom_objects.choices import (
-    ArrayElementTypeChoices,
-    ConstraintTypeChoices,
-    CustomObjectFieldTypeChoices,
-    SearchWeightChoices,
-)
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name, predicate_field_ref
-from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.field_types import (
-    CustomColorSelect,
-    MACAddressFormField,
-    PolymorphicObjectReverseDescriptor,
-    PolymorphicMultiObjectReverseDescriptor,
-)
-from netbox_custom_objects.models import (
-    CONSTRAINT_FIELD_TYPES,
-    CustomObjectObjectType,
-    CustomObjectType,
-    CustomObjectTypeConstraint,
-    CustomObjectTypeField,
-)
 
 __all__ = (
     'CustomObjectTypeConstraintForm',

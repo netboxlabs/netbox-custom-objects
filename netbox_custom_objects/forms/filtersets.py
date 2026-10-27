@@ -1,11 +1,11 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
-from netbox.forms import NetBoxModelFilterSetForm
-from utilities.forms.fields import TagFilterField
-from utilities.forms.constants import BOOLEAN_WITH_BLANK_CHOICES
-from utilities.forms.rendering import FieldSet
 
+from netbox.forms import NetBoxModelFilterSetForm
 from netbox_custom_objects.models import CustomObjectType
+from utilities.forms.constants import BOOLEAN_WITH_BLANK_CHOICES
+from utilities.forms.fields import TagFilterField
+from utilities.forms.rendering import FieldSet
 
 __all__ = ('CustomObjectTypeFilterForm',)
 

@@ -195,7 +195,7 @@ def heal_cot(cot, verbosity=1, dry_run=False, using=DEFAULT_DB_ALIAS):
     # so it runs even if the table itself can't be introspected below.
     # Imported locally: models.py imports heal_unmasked_fields from this module
     # at its own top level, so a top-level import here would be circular.
-    from netbox_custom_objects.models import detect_backing_column_collisions  # noqa: PLC0415
+    from netbox_custom_objects.models import detect_backing_column_collisions
 
     for collision in detect_backing_column_collisions(cot):
         entry = {
@@ -347,7 +347,7 @@ def heal_all_cots(verbosity=1, dry_run=False, using=DEFAULT_DB_ALIAS):
       "healed"   : number of COTs that had columns added
       "warnings" : total number of non-auto-fixable issues
     """
-    from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+    from netbox_custom_objects.models import CustomObjectType
 
     total = healed = warnings = 0
 
@@ -396,7 +396,7 @@ def heal_branch(branch, verbosity=1, dry_run=False):
     main); using=branch.connection_name makes the actual introspection/DDL
     target the branch's own schema, not main's. Both are required together.
     """
-    from netbox_branching.utilities import activate_branch  # noqa: PLC0415
+    from netbox_branching.utilities import activate_branch
 
     with activate_branch(branch):
         return heal_all_cots(verbosity=verbosity, dry_run=dry_run, using=branch.connection_name)
@@ -460,8 +460,8 @@ def heal_all_branches(verbosity=1, dry_run=False):
     if not is_branching_enabled():
         return {'total': 0, 'healed': 0, 'warnings': 0}
 
-    from netbox_branching.choices import BranchStatusChoices  # noqa: PLC0415
-    from netbox_branching.models import Branch  # noqa: PLC0415
+    from netbox_branching.choices import BranchStatusChoices
+    from netbox_branching.models import Branch
 
     no_schema_statuses = (
         BranchStatusChoices.NEW,

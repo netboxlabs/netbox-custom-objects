@@ -4,7 +4,8 @@ Sequential field renames in main and a branch, through sync and merge.
 
 import unittest
 
-from django.db import connection as main_conn, connections
+from django.db import connection as main_conn
+from django.db import connections
 
 from netbox_custom_objects.models import (
     CustomObjectType,
@@ -13,17 +14,18 @@ from netbox_custom_objects.models import (
 
 from .base import (
     HAS_BRANCHING,
-    _make_request,
-    _TestBase,
-    _provision_branch,
-    _close_branch_connections,
     BranchingTestBase,
+    _close_branch_connections,
+    _make_request,
+    _provision_branch,
+    _TestBase,
 )
 
 if HAS_BRANCHING:
-    from netbox.context_managers import event_tracking
     from netbox_branching.choices import BranchStatusChoices
     from netbox_branching.utilities import activate_branch
+
+    from netbox.context_managers import event_tracking
 
 
 # ── Sequential multi-rename tests ─────────────────────────────────────────────

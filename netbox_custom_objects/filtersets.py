@@ -1,14 +1,14 @@
 import copy
-import django_filters
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, Optional, Type
+from typing import Any
 
+import django_filters
 from django import forms as django_forms
 from django.apps import apps as django_apps
-from django.db.models import QuerySet, Q
+from django.db.models import Q, QuerySet
 from django.utils.dateparse import parse_date, parse_datetime
-from django.utils.timezone import make_aware, is_aware
+from django.utils.timezone import is_aware, make_aware
 from django.utils.translation import gettext_lazy as _
 
 from core.models import ObjectType
@@ -287,13 +287,11 @@ class FilterSpec:
     should be translated into a django-filter Filter instance.
     """
 
-    filter_class: Type[django_filters.Filter]
-    lookup_expr: Optional[str] = None
-    extra_kwargs: Optional[Dict[str, Any]] = None
+    filter_class: type[django_filters.Filter]
+    lookup_expr: str | None = None
+    extra_kwargs: dict[str, Any] | None = None
 
-    def build(
-        self, field_name: str, label: str, queryset: Optional[QuerySet] = None, **kwargs
-    ) -> django_filters.Filter:
+    def build(self, field_name: str, label: str, queryset: QuerySet | None = None, **kwargs) -> django_filters.Filter:
         """
         Instantiate and return a django-filter Filter.
         Allows overriding defaults via **kwargs.

@@ -66,7 +66,6 @@ from netbox_custom_objects.schema.format import (
     SCHEMA_TYPE_TO_CHOICES,
 )
 
-
 # COT-level attributes that may change between schema versions.
 # Each maps to its schema-absent default (empty string).
 _COT_ATTRS = (
@@ -235,13 +234,13 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
 
     if 'validation_minimum' in type_specific:
         dv = db_field.validation_minimum
-        sv = schema_field.get('validation_minimum', None)
+        sv = schema_field.get('validation_minimum')
         if dv != sv:
             changes['validation_minimum'] = (dv, sv)
 
     if 'validation_maximum' in type_specific:
         dv = db_field.validation_maximum
-        sv = schema_field.get('validation_maximum', None)
+        sv = schema_field.get('validation_maximum')
         if dv != sv:
             changes['validation_maximum'] = (dv, sv)
 
@@ -289,7 +288,7 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
 
     if 'related_object_filter' in type_specific:
         dv = db_field.related_object_filter
-        sv = schema_field.get('related_object_filter', None)
+        sv = schema_field.get('related_object_filter')
         if dv != sv:
             changes['related_object_filter'] = (dv, sv)
 

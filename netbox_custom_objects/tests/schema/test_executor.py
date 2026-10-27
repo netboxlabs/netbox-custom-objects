@@ -19,6 +19,7 @@ import copy
 
 from django.test import SimpleTestCase, TestCase
 
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint
 from netbox_custom_objects.schema.comparator import (
     COTDiff,
     FieldChange,
@@ -31,20 +32,18 @@ from netbox_custom_objects.schema.executor import (
     DestructiveChangesError,
     InvalidConstraintError,
     InvalidRelatedNameError,
-    UnsupportedFieldChangeError,
     UnknownChoiceSetError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
+    UnsupportedFieldChangeError,
     UnsupportedTypeChangeError,
     _build_dep_order,
-    apply_document,
     apply_diffs,
+    apply_document,
 )
 from netbox_custom_objects.schema.exporter import export_cot
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint
 
 from ..base import CustomObjectsTestCase
-
 
 # ---------------------------------------------------------------------------
 # Pure-logic tests (no DB required)

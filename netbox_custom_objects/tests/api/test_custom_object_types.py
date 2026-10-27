@@ -5,15 +5,15 @@ Tests for the Custom Object Type REST API endpoint.
 from django.db import connection
 from django.test import TestCase
 from django.urls import reverse
-
-from utilities.testing import create_test_user
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
-from ..base import CustomObjectsTestCase, create_token
 from core.models import ObjectType
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from users.models import ObjectPermission
+from utilities.testing import create_test_user
+
+from ..base import CustomObjectsTestCase, create_token
 
 
 class CustomObjectTypeAPITestCase(CustomObjectsTestCase, TestCase):
@@ -402,7 +402,7 @@ class Pep440APIValidationTestCase(CustomObjectsTestCase, TestCase):
         add_cot_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
 
         # Permission to change CustomObjectTypeField records.
-        from netbox_custom_objects.models import CustomObjectTypeField  # noqa: PLC0415
+        from netbox_custom_objects.models import CustomObjectTypeField
 
         change_field_perm = ObjectPermission(name='pep440_change_field', actions=['add', 'change'])
         change_field_perm.save()

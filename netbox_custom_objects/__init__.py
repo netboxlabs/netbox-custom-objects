@@ -10,8 +10,9 @@ import warnings
 from django.db import connection, transaction
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.recorder import MigrationRecorder
-from django.db.models.signals import pre_delete, pre_migrate, post_migrate
+from django.db.models.signals import post_migrate, pre_delete, pre_migrate
 from django.db.utils import OperationalError, ProgrammingError
+
 from netbox.plugins import PluginConfig
 
 from .constants import APP_LABEL as APP_LABEL
@@ -93,7 +94,7 @@ def _heal_branch_on_migrate(sender, branch, **kwargs):
     alongside a schema change.
     """
     try:
-        from netbox_custom_objects.mixin_migration import heal_branch  # noqa: PLC0415
+        from netbox_custom_objects.mixin_migration import heal_branch
 
         heal_branch(branch, verbosity=kwargs.get('verbosity', 1))
     except Exception:
@@ -122,19 +123,22 @@ def _register_branching_hooks_once():
     # Unguarded: netbox-branching >= 1.0.4 is required (checks.E002), and an
     # older release should fail loudly rather than silently skip every hook.
     from netbox_branching.signals import (
-        pre_merge,
         post_merge,
-        pre_sync,
-        post_sync,
-        pre_revert,
         post_revert,
-        post_migrate as branching_post_migrate,
+        post_sync,
+        pre_merge,
+        pre_revert,
+        pre_sync,
         squash_dependency_graph_built,
+    )
+    from netbox_branching.signals import (
+        post_migrate as branching_post_migrate,
     )
     from netbox_branching.utilities import (
         register_branching_resolver,
         register_objectchange_field_migrator,
     )
+
     from .branching import (
         add_custom_object_dependencies,
         objectchange_field_migrator,
@@ -185,14 +189,14 @@ def _heal_mixin_columns(sender, **kwargs):
         return
 
     try:
-        from netbox_custom_objects.mixin_migration import heal_all_branches, heal_all_cots  # noqa: PLC0415
+        from netbox_custom_objects.mixin_migration import heal_all_branches, heal_all_cots
 
         heal_all_cots(verbosity=kwargs.get('verbosity', 1))
         # No-ops (zero-result) when netbox-branching isn't installed -- see
         # heal_all_branches()'s own apps.is_installed() check.
         heal_all_branches(verbosity=kwargs.get('verbosity', 1))
     except Exception:
-        import logging  # noqa: PLC0415
+        import logging
 
         logging.getLogger(__name__).exception('upgrade_custom_objects: unexpected error during mixin drift check')
         # Leave _heal_ran False so a subsequent post_migrate firing (or a
@@ -256,7 +260,6 @@ def _patch_choice_set_clean():
         return
 
     from extras.models import CustomFieldChoiceSet
-
     from netbox_custom_objects import models
 
     _original_clean = CustomFieldChoiceSet.clean
@@ -294,6 +297,7 @@ def _patch_graphql_view():
         return
 
     from django.views.decorators.csrf import csrf_exempt
+
     from netbox.graphql.views import NetBoxGraphQLView
 
     _original_dispatch = NetBoxGraphQLView.dispatch
@@ -310,8 +314,9 @@ def _patch_graphql_view():
         # Core authenticates API tokens inside dispatch(), but the schema depends on the
         # user, so do it first, as core does; core then sees an authenticated request.
         if not request.user.is_authenticated:
-            from netbox.api.authentication import TokenAuthentication
             from rest_framework.exceptions import AuthenticationFailed
+
+            from netbox.api.authentication import TokenAuthentication
 
             try:
                 auth_info = TokenAuthentication().authenticate(request)
@@ -324,7 +329,7 @@ def _patch_graphql_view():
             live_schema = get_live_schema(request.user)
             if live_schema is not None:
                 self.schema = live_schema
-        except Exception:  # noqa: BLE001 - fall back to the static schema
+        except Exception:
             logger.warning('Failed to load live GraphQL schema; using static schema', exc_info=True)
         return _original_dispatch(self, request, *args, **kwargs)
 
@@ -515,17 +520,16 @@ class CustomObjectsPluginConfig(PluginConfig):
         # Register Django system checks (import triggers @register).  These
         # enforce the conditional NetBox/netbox-branching version floors that
         # PluginConfig's static min_version/max_version can't express.
-        from . import checks  # noqa: F401
-
-        from .models import CustomObjectType
-        from netbox_custom_objects.api.serializers import get_serializer_class
-
         # Run core's pre_delete handler after apply_polymorphic_on_delete(), so what a
         # polymorphic field's on-delete behaviour deletes or clears is logged before the
         # deletion that caused it.  Django logs a real foreign key's dependents first too, and
         # a branch revert relies on it: it restores the referenced object before the
         # custom objects pointing at it.
         from core.signals import handle_deleted_object
+        from netbox_custom_objects.api.serializers import get_serializer_class
+
+        from . import checks  # noqa: F401
+        from .models import CustomObjectType
 
         pre_delete.disconnect(handle_deleted_object)
         pre_delete.connect(handle_deleted_object)

@@ -11,12 +11,11 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 
 from core.models import ObjectType
-from users.models import ObjectPermission
-
 from netbox_custom_objects.graphql import live as live_module
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.schema.exporter import export_cot
 from netbox_custom_objects.utilities import visible_custom_object_type_ids
+from users.models import ObjectPermission
 
 from .base import CustomObjectsTestCase, create_token
 

@@ -13,15 +13,16 @@ from netbox_custom_objects.models import (
 
 from .base import (
     HAS_BRANCHING,
-    _make_request,
-    _TestBase,
-    _provision_branch,
     BranchingTestBase,
+    _make_request,
+    _provision_branch,
+    _TestBase,
 )
 
 if HAS_BRANCHING:
-    from netbox.context_managers import event_tracking
     from netbox_branching.utilities import activate_branch
+
+    from netbox.context_managers import event_tracking
 
 
 # ── Sync test ─────────────────────────────────────────────────────────────────

@@ -4,7 +4,6 @@ Tests for the plugin's utility functions.
 
 from django.test import TestCase
 
-
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 
 

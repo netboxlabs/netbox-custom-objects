@@ -14,10 +14,9 @@ from django.test import TestCase
 
 from core.models import ObjectType
 from dcim.models import Device, Site
-
 from netbox_custom_objects.graphql import live as live_module
 from netbox_custom_objects.graphql import schema as schema_module
-from netbox_custom_objects.graphql.schema import build_query_classes, _query_field_name
+from netbox_custom_objects.graphql.schema import _query_field_name, build_query_classes
 from netbox_custom_objects.graphql.types import build_object_type
 
 from ..base import CustomObjectsTestCase
@@ -296,9 +295,10 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
 
     def test_get_live_schema_without_get_schema_extensions(self):
         # NetBox < 4.6.1 has no get_schema_extensions(); its extensions are inline.
-        import netbox.graphql.schema as ngs
         from strawberry.extensions import MaxAliasesLimiter
         from strawberry_django.optimizer import DjangoOptimizerExtension
+
+        import netbox.graphql.schema as ngs
 
         with mock.patch.dict(ngs.__dict__):
             ngs.__dict__.pop('get_schema_extensions', None)

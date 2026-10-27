@@ -13,7 +13,6 @@ from core.models import ObjectType
 from dcim.models import Device, Site
 from ipam.choices import PrefixStatusChoices
 from ipam.models import Prefix
-
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import (
     FIELD_TYPE_CLASS,
@@ -26,7 +25,6 @@ from netbox_custom_objects.models import (
     _unwire_polymorphic_reverse_descriptors,
 )
 from netbox_custom_objects.tests.base import CustomObjectsTestCase
-
 
 # ---------------------------------------------------------------------------
 # Referenced-object deletion

@@ -13,9 +13,9 @@ from django.test import TestCase
 
 import netbox_custom_objects as nco
 import netbox_custom_objects.models as nco_models
-
 from netbox_custom_objects.graphql.live import _active_branch_key
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+
 from ..base import CustomObjectsTestCase
 
 
@@ -193,7 +193,7 @@ class _BranchingImportBlocker(importlib.abc.MetaPathFinder):
     def find_spec(self, name, path, target=None):
         if name == 'netbox_branching' or name.startswith('netbox_branching.'):
             raise AssertionError(f'{name} was imported while netbox-branching is not enabled')
-        return None
+        return
 
 
 class BranchingInstalledNotEnabledTestCase(CustomObjectsTestCase, TestCase):

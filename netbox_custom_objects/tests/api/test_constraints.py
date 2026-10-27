@@ -6,11 +6,11 @@ from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
-
 from rest_framework import status
 from rest_framework.test import APIClient
 
 from netbox_custom_objects.models import CustomObjectTypeConstraint
+
 from ..base import CustomObjectsTestCase, create_token
 
 

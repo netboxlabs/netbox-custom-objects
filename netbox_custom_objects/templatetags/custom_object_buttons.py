@@ -2,11 +2,11 @@ from django import template
 from django.contrib.contenttypes.models import ContentType
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+
 from extras.models import Bookmark, Subscription
 from netbox.models.features import NotificationsMixin
-from utilities.querydict import prepare_cloned_fields
-
 from netbox_custom_objects.utilities import get_viewname
+from utilities.querydict import prepare_cloned_fields
 
 __all__ = (
     'custom_object_bookmark_button',

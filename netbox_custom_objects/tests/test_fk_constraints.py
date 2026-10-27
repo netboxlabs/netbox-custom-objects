@@ -1,16 +1,16 @@
 from unittest import mock
 
-from core.models import ObjectType
-from dcim.models import Site
 from django.db import IntegrityError, OperationalError, connection, transaction
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
-from tenancy.models import Tenant
-from users.models import Owner
 
+from core.models import ObjectType
+from dcim.models import Site
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.tests.base import CustomObjectsTestCase, TransactionCleanupMixin, _fk_constraints
+from tenancy.models import Tenant
+from users.models import Owner
 
 
 class ObjectFieldFKConstraintTestCase(CustomObjectsTestCase, TestCase):

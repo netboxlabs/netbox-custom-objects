@@ -16,7 +16,6 @@ from netbox_custom_objects.models import CustomObjectType
 
 from .base import CustomObjectsTestCase
 
-
 # ---------------------------------------------------------------------------
 # _collect_base_columns()
 # ---------------------------------------------------------------------------

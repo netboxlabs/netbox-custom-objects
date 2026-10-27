@@ -1,12 +1,12 @@
+from django.db import transaction
+
 from core.choices import JobIntervalChoices
 from core.models import ObjectType
-from django.db import transaction
 from extras.choices import CustomFieldTypeChoices
 from extras.models import CachedValue
 from netbox.jobs import JobRunner, system_job
 from netbox.search import FieldTypes
 from netbox.search.backends import CachedValueSearchBackend, get_backend
-
 from netbox_custom_objects.constants import DISPLAY_EXPRESSION_SEARCH_WEIGHT
 
 _RELATED_FIELD_TYPES = (CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT)

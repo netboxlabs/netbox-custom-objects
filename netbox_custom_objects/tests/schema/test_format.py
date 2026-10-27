@@ -19,8 +19,8 @@ from django.test import TestCase
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.models import CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.schema.format import (
-    CONSTRAINT_DEFAULTS,
     CHOICES_TO_SCHEMA_TYPE,
+    CONSTRAINT_DEFAULTS,
     FIELD_DEFAULTS,
     SCHEMA_FORMAT_VERSION,
     SCHEMA_TYPE_TO_CHOICES,
@@ -94,9 +94,8 @@ class SchemaIdAutoAssignmentTestCase(CustomObjectsTestCase, TestCase):
         # by assertRaises, the savepoint is rolled back cleanly. Without this, PostgreSQL
         # leaves the connection in an aborted-transaction state and all subsequent SQL
         # calls (including tearDown) fail with "connection is closed".
-        with self.assertRaises(IntegrityError):
-            with transaction.atomic():
-                self.create_custom_object_type_field(cot, name='second', type='text', schema_id=7)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            self.create_custom_object_type_field(cot, name='second', type='text', schema_id=7)
 
     def test_schema_id_gap_after_deletion(self):
         """
@@ -344,7 +343,7 @@ class COTJsonSchemaTestCase(TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        with open(_SCHEMA_PATH) as fh:
+        with Path(_SCHEMA_PATH).open() as fh:
             cls.schema = json.load(fh)
         cls.validator_cls = jsonschema.Draft202012Validator
         cls.validator_cls.check_schema(cls.schema)

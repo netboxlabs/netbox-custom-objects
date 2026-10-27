@@ -15,7 +15,6 @@ from django.test import TestCase, override_settings
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer
 from extras.models import Tag
-
 from netbox_custom_objects.constants import APP_LABEL
 
 from ..base import CustomObjectsTestCase

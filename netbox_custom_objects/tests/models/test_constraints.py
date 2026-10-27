@@ -11,9 +11,9 @@ from django.db import IntegrityError, connection, transaction
 from django.test import TestCase
 
 import netbox_custom_objects as nco
-
 from dcim.models import Site
 from netbox_custom_objects.models import CustomObjectTypeConstraint, CustomObjectTypeField
+
 from ..base import CustomObjectsTestCase
 
 
@@ -101,14 +101,16 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
     def test_nulls_not_distinct(self):
         # PostgreSQL < 15 would silently skip the database constraint.
         # A property on Django 5.2, a class attribute on 6.x; patch the class to cover both.
-        with patch.object(
-            type(connection.features),
-            'supports_nulls_distinct_unique_constraints',
-            new_callable=PropertyMock,
-            return_value=False,
+        with (
+            patch.object(
+                type(connection.features),
+                'supports_nulls_distinct_unique_constraints',
+                new_callable=PropertyMock,
+                return_value=False,
+            ),
+            self.assertRaisesMessage(ValidationError, 'PostgreSQL 15'),
         ):
-            with self.assertRaisesMessage(ValidationError, 'PostgreSQL 15'):
-                self._constraint(nulls_distinct=False)
+            self._constraint(nulls_distinct=False)
         self._constraint(nulls_distinct=False)
         model = self._model()
         model.objects.create(vendor='acme')

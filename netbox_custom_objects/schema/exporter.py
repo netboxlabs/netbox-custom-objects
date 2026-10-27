@@ -75,7 +75,7 @@ def _encode_related_object_type(rot) -> str:
         if m:
             # Avoid a circular import — import here so the module can be loaded
             # independently of the full Django app stack in unit tests.
-            from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+            from netbox_custom_objects.models import CustomObjectType
 
             cot_id = int(m.group(1))
             slug = CustomObjectType.objects.values_list('slug', flat=True).get(pk=cot_id)

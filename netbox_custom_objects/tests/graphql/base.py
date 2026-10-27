@@ -11,9 +11,8 @@ from rest_framework.test import APIClient
 
 from core.models import ObjectType
 from dcim.models import Site
-from users.models import ObjectPermission
-
 from netbox_custom_objects.graphql import live as live_module
+from users.models import ObjectPermission
 
 from ..base import create_token
 

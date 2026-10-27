@@ -9,8 +9,6 @@ from decimal import Decimal
 from urllib.parse import urlparse
 
 import django_tables2 as tables
-from rest_framework import serializers as drf_serializers
-from strawberry.scalars import JSON
 from django import forms
 from django.apps import apps
 from django.apps.registry import Apps
@@ -21,20 +19,34 @@ from django.contrib.postgres.utils import prefix_validation_error
 from django.contrib.postgres.validators import ArrayMaxLengthValidator, ArrayMinLengthValidator
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
-from django.forms.fields import InvalidJSONInput
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models, router, transaction
-from django.db.utils import OperationalError, ProgrammingError
 from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
 from django.db.models.manager import Manager
 from django.db.models.signals import m2m_changed
+from django.db.utils import OperationalError, ProgrammingError
+from django.forms.fields import InvalidJSONInput
 from django.urls import reverse
 from django.utils.html import escape, format_html
 from django.utils.safestring import mark_safe
 from django.utils.text import Truncator, format_lazy
 from django.utils.translation import gettext_lazy as _
+from rest_framework import serializers as drf_serializers
+from strawberry.scalars import JSON
+
+from dcim.fields import MACAddressField
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
+from netbox.config import get_config
+from netbox.tables.columns import BooleanColumn, ColorColumn
+from netbox_custom_objects.choices import (
+    ArrayElementTypeChoices,
+    CustomObjectFieldTypeChoices,
+    ObjectFieldOnDeleteChoices,
+)
+from netbox_custom_objects.constants import APP_LABEL, CHOICE_VALUE_MAX_LENGTH, DECIMAL_MAX_DIGITS, DECIMAL_PLACES
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name, generate_model
 from utilities.api import get_serializer_for_model
+from utilities.fields import ColorField
 from utilities.forms.fields import (
     CSVChoiceField,
     CSVModelChoiceField,
@@ -56,19 +68,7 @@ from utilities.forms.widgets import (
     DateTimePicker,
 )
 from utilities.templatetags.builtins.filters import linkify, render_markdown
-from netbox.config import get_config
-from dcim.fields import MACAddressField
-from utilities.fields import ColorField
 from utilities.validators import ColorValidator
-from netbox.tables.columns import BooleanColumn, ColorColumn
-
-from netbox_custom_objects.choices import (
-    ArrayElementTypeChoices,
-    CustomObjectFieldTypeChoices,
-    ObjectFieldOnDeleteChoices,
-)
-from netbox_custom_objects.constants import APP_LABEL, CHOICE_VALUE_MAX_LENGTH, DECIMAL_MAX_DIGITS, DECIMAL_PLACES
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name, generate_model
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +182,7 @@ class LazyForeignKey(ForeignKey):
     def _resolve_model(self, model):
         """Resolve the lazy reference to the actual model class."""
         from django.apps import apps as django_apps
+
         from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 
         # Retrieve the current class from the app registry.
@@ -240,7 +241,7 @@ def resolve_lazy_target(field):
         if cot_id is None:
             logger.warning('Could not resolve target %r of field %r', field._to_model_name, field.name)
             return
-        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+        from netbox_custom_objects.models import CustomObjectType
 
         try:
             target = CustomObjectType.objects.get(pk=int(cot_id)).get_model()
@@ -900,15 +901,14 @@ class SelectFieldType(FieldType):
         if for_csv_import:
             field_class = CSVChoiceField
             return field_class(choices=choices, required=field.required, initial=initial)
-        else:
-            field_class = DynamicChoiceField
-            widget_class = APISelect
-            return field_class(
-                choices=choices,
-                required=field.required,
-                initial=initial,
-                widget=widget_class(api_url=f'/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/'),
-            )
+        field_class = DynamicChoiceField
+        widget_class = APISelect
+        return field_class(
+            choices=choices,
+            required=field.required,
+            initial=initial,
+            widget=widget_class(api_url=f'/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/'),
+        )
 
 
 class MultiSelectFieldType(FieldType):
@@ -970,15 +970,14 @@ class MultiSelectFieldType(FieldType):
         if for_csv_import:
             field_class = CSVMultipleChoiceField
             return field_class(choices=choices, required=field.required, initial=initial)
-        else:
-            field_class = DynamicMultipleChoiceField
-            widget_class = APISelectMultiple
-            return field_class(
-                choices=choices,
-                required=field.required,
-                initial=initial,
-                widget=widget_class(api_url=f'/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/'),
-            )
+        field_class = DynamicMultipleChoiceField
+        widget_class = APISelectMultiple
+        return field_class(
+            choices=choices,
+            required=field.required,
+            initial=initial,
+            widget=widget_class(api_url=f'/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/'),
+        )
 
     # TODO: Implement this
     # def get_form_field(self, field, required, label, **kwargs):
@@ -1064,10 +1063,9 @@ class ObjectFieldType(FieldType):
             # (skip_object_fields=True) whenever the target hasn't been generated yet,
             # permanently stripping its FK fields on future lookups.
             return _make_lazy_cot_fk(custom_object_type, field, on_delete, **field_kwargs)
-        else:
-            # to_model = content_type.model_class()._meta.object_name
-            to_ct = f'{content_type.app_label}.{to_model}'
-            model = apps.get_model(to_ct)
+        # to_model = content_type.model_class()._meta.object_name
+        to_ct = f'{content_type.app_label}.{to_model}'
+        model = apps.get_model(to_ct)
 
         # Use user-specified related_name if provided, otherwise generate a unique one
         if field.related_name:
@@ -1122,29 +1120,28 @@ class ObjectFieldType(FieldType):
                 required=field.required,
                 to_field_name=to_field_name,
             )
-        else:
-            field_class = DynamicModelChoiceField
-            form_field = field_class(
-                queryset=model.objects.all(),
-                required=field.required,
-                # Remove initial=field.default to allow Django to handle instance data properly
-                query_params=(field.related_object_filter if hasattr(field, 'related_object_filter') else None),
-                selector=model._meta.app_label != APP_LABEL,
-            )
-            if has_context:
-                form_field.widget.attrs['ts-parent-field'] = '_context'
-            # Enable quick-add for custom object targets: set quick_add_context
-            # directly on the widget (bypassing DynamicModelChoiceMixin.get_bound_field
-            # which uses get_action_url, a tag that can't resolve COT URLs).
-            if content_type.app_label == APP_LABEL:
-                form_field.widget.quick_add_context = {
-                    'url': reverse(
-                        'plugins:netbox_custom_objects:customobject_add',
-                        kwargs={'custom_object_type': custom_object_type.slug},
-                    ),
-                    'params': {},
-                }
-            return form_field
+        field_class = DynamicModelChoiceField
+        form_field = field_class(
+            queryset=model.objects.all(),
+            required=field.required,
+            # Remove initial=field.default to allow Django to handle instance data properly
+            query_params=(field.related_object_filter if hasattr(field, 'related_object_filter') else None),
+            selector=model._meta.app_label != APP_LABEL,
+        )
+        if has_context:
+            form_field.widget.attrs['ts-parent-field'] = '_context'
+        # Enable quick-add for custom object targets: set quick_add_context
+        # directly on the widget (bypassing DynamicModelChoiceMixin.get_bound_field
+        # which uses get_action_url, a tag that can't resolve COT URLs).
+        if content_type.app_label == APP_LABEL:
+            form_field.widget.quick_add_context = {
+                'url': reverse(
+                    'plugins:netbox_custom_objects:customobject_add',
+                    kwargs={'custom_object_type': custom_object_type.slug},
+                ),
+                'params': {},
+            }
+        return form_field
 
     def get_filterform_field(self, field, **kwargs):
         if field.is_polymorphic:
@@ -1381,7 +1378,7 @@ class CustomManyToManyManager(Manager):
         # only solution is not possible.  Django's own ManyToManyDescriptor
         # uses the identical extra()-based JOIN pattern for the same reason
         # (see django/db/models/fields/related_descriptors.py, line ~1160).
-        queryset = queryset.extra(  # noqa: S610
+        queryset = queryset.extra(
             select={'_prefetch_source_id': f'"{through_table}"."source_id"'},
             tables=[through_table],
             where=[
@@ -1752,25 +1749,24 @@ class MultiObjectFieldType(FieldType):
                 required=field.required,
                 to_field_name=to_field_name,
             )
-        else:
-            field_class = DynamicModelMultipleChoiceField
-            form_field = field_class(
-                queryset=model.objects.all(),
-                required=field.required,
-                query_params=(field.related_object_filter if hasattr(field, 'related_object_filter') else None),
-                selector=model._meta.app_label != APP_LABEL,
-            )
-            if has_context:
-                form_field.widget.attrs['ts-parent-field'] = '_context'
-            if content_type.app_label == APP_LABEL:
-                form_field.widget.quick_add_context = {
-                    'url': reverse(
-                        'plugins:netbox_custom_objects:customobject_add',
-                        kwargs={'custom_object_type': custom_object_type.slug},
-                    ),
-                    'params': {},
-                }
-            return form_field
+        field_class = DynamicModelMultipleChoiceField
+        form_field = field_class(
+            queryset=model.objects.all(),
+            required=field.required,
+            query_params=(field.related_object_filter if hasattr(field, 'related_object_filter') else None),
+            selector=model._meta.app_label != APP_LABEL,
+        )
+        if has_context:
+            form_field.widget.attrs['ts-parent-field'] = '_context'
+        if content_type.app_label == APP_LABEL:
+            form_field.widget.quick_add_context = {
+                'url': reverse(
+                    'plugins:netbox_custom_objects:customobject_add',
+                    kwargs={'custom_object_type': custom_object_type.slug},
+                ),
+                'params': {},
+            }
+        return form_field
 
     def get_display_value(self, instance, field_name):
         field = getattr(instance, field_name)
@@ -1781,8 +1777,9 @@ class MultiObjectFieldType(FieldType):
 
     def get_serializer_field(self, field, **kwargs):
         if field.is_polymorphic:
-            from netbox_custom_objects.api.serializers import PolymorphicObjectSerializerField
             from rest_framework import serializers as drf_serializers
+
+            from netbox_custom_objects.api.serializers import PolymorphicObjectSerializerField
 
             allowed_ids = {ot.id for ot in field.related_object_types.all()}
             return drf_serializers.ListField(
@@ -2077,7 +2074,7 @@ class MultiObjectFieldType(FieldType):
         ``with connection.schema_editor()`` here would flush deferred SQL
         prematurely on PostgreSQL.
         """
-        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+        from netbox_custom_objects.models import CustomObjectType
 
         source_model_string = f'{APP_LABEL}.{model.__name__}'
 
@@ -2265,7 +2262,7 @@ class PolymorphicManyToManyManager:
             # its source_id, so prefetch grouping can match it to every owner —
             # the same extra()-based join CustomManyToManyManager uses, and for
             # the same reason (see its own get_prefetch_querysets above).
-            target_qs = base_qs.extra(  # noqa: S610
+            target_qs = base_qs.extra(
                 select={'_prefetch_source_id': f'"{through_table}"."source_id"'},
                 tables=[through_table],
                 where=[
@@ -2400,7 +2397,7 @@ class PolymorphicManyToManyManager:
                 raise ValueError(f'Cannot link "{obj!r}" through {self.field_name!r}: it has not been saved.')
             keys.add((ContentType.objects.get_for_model(obj).pk, obj.pk))
         if keys:
-            from netbox_custom_objects.models import CustomObjectTypeField  # noqa: PLC0415
+            from netbox_custom_objects.models import CustomObjectTypeField
 
             allowed = set(
                 CustomObjectTypeField.objects.filter(
@@ -2574,7 +2571,7 @@ class _PolymorphicReverseManager:
         descriptor sits on the shared target class, so the source field may not exist in this
         context (the branch deleted it); the caller then returns an empty queryset (#766).
         """
-        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+        from netbox_custom_objects.models import CustomObjectType
 
         try:
             return CustomObjectType.objects.get(pk=self._cot_pk).get_model()

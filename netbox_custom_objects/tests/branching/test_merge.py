@@ -8,8 +8,8 @@ import unittest
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection as main_conn
-from extras.models import CustomFieldChoiceSet
 
+from extras.models import CustomFieldChoiceSet
 from netbox_custom_objects.models import (
     CustomObjectType,
     CustomObjectTypeField,
@@ -17,16 +17,17 @@ from netbox_custom_objects.models import (
 
 from .base import (
     HAS_BRANCHING,
-    _make_request,
-    _TestBase,
-    _provision_branch,
     BranchingTestBase,
+    _make_request,
+    _provision_branch,
+    _TestBase,
 )
 
 if HAS_BRANCHING:
-    from netbox.context_managers import event_tracking
     from netbox_branching.choices import BranchStatusChoices
     from netbox_branching.utilities import activate_branch
+
+    from netbox.context_managers import event_tracking
 
 
 # ── Field attribute changes & COT update (iterative only) ─────────────────────

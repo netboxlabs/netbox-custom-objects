@@ -6,16 +6,16 @@ from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
-
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from netbox_custom_objects.models import CustomObjectType
-from ..base import CustomObjectsTestCase, create_token
 from core.models import ObjectType
 from dcim.models import Site
 from extras.models import ConfigContext, Tag
+from netbox_custom_objects.models import CustomObjectType
 from users.models import ObjectPermission
+
+from ..base import CustomObjectsTestCase, create_token
 
 
 class ConfigContextAPITestCase(CustomObjectsTestCase, TestCase):

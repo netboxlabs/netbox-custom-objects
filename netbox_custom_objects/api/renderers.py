@@ -1,5 +1,4 @@
 import yaml
-
 from rest_framework.renderers import BaseRenderer
 
 

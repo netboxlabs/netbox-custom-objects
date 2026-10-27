@@ -31,7 +31,6 @@ from netbox_custom_objects.models import (
 
 from ..base import CustomObjectsTestCase
 
-
 # ---------------------------------------------------------------------------
 # _can_auto_add()
 # ---------------------------------------------------------------------------
@@ -587,8 +586,9 @@ class UpgradeCustomObjectsCommandTestCase(CustomObjectsTestCase, TestCase):
     """Smoke tests for the upgrade_custom_objects management command."""
 
     def _call_command(self, *args, **kwargs):
-        from django.core.management import call_command
         from io import StringIO
+
+        from django.core.management import call_command
 
         out = StringIO()
         err = StringIO()

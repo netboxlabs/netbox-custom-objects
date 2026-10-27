@@ -13,9 +13,8 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from core.models import ObjectType
-from users.models import ObjectPermission
-
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
+from users.models import ObjectPermission
 
 from ..base import CustomObjectsTestCase, create_token
 
@@ -118,7 +117,7 @@ class CustomObjectPermissionTestCase(APIPermissionTestCase):
             **self.header,
         )
         self.assertTrue(self.model.objects.filter(pk=self.other.pk).exists())
-        if NETBOX_VERSION >= Version('4.7'):
+        if Version('4.7') <= NETBOX_VERSION:
             # Core rejects the batch when any object is outside the user's queryset.
             self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
             self.assertTrue(self.model.objects.filter(pk=self.ok.pk).exists())

@@ -7,12 +7,13 @@ import datetime
 import decimal
 import unittest
 
+from django.contrib.contenttypes.models import ContentType
+from django.db import IntegrityError, transaction
+from django.db import connection as main_conn
+
 from core.models import ObjectType
 from dcim.models import Site
-from django.contrib.contenttypes.models import ContentType
-from django.db import IntegrityError, connection as main_conn, transaction
 from extras.models import CustomFieldChoiceSet
-
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.models import (
     USER_TABLE_DATABASE_NAME_PREFIX,
@@ -23,16 +24,17 @@ from netbox_custom_objects.models import (
 
 from .base import (
     HAS_BRANCHING,
-    _make_request,
-    _TestBase,
-    _provision_branch,
     BranchingTestBase,
+    _make_request,
+    _provision_branch,
+    _TestBase,
 )
 
 if HAS_BRANCHING:
-    from netbox.context_managers import event_tracking
     from netbox_branching.choices import BranchStatusChoices
     from netbox_branching.utilities import activate_branch
+
+    from netbox.context_managers import event_tracking
 
 
 # ── Shared merge/revert tests (strategy-agnostic) ────────────────────────────
@@ -185,7 +187,7 @@ class BaseBranchingTestCase(BranchingTestBase):
         field_pks = {}
         co_pk = None
 
-        test_dt = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=datetime.timezone.utc)
+        test_dt = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=datetime.UTC)
         test_decimal = decimal.Decimal('3.14')
 
         # ── create inside branch ──────────────────────────────────────────

@@ -17,7 +17,6 @@ from django.urls import reverse
 from django.utils import timezone
 
 import netbox_custom_objects.models as nco_models
-
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange, ObjectType
 from dcim.models import Site
@@ -29,6 +28,7 @@ from netbox_custom_objects.field_types import LazyForeignKey, TextFieldType
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from utilities.querysets import RestrictedQuerySet
+
 from ..base import CustomObjectsTestCase
 
 

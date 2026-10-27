@@ -12,13 +12,12 @@ import re
 from django.test import TestCase, override_settings
 from django.urls import clear_url_caches, reverse
 
+import netbox_custom_objects.urls as co_urls
 from core.models import ObjectType
 from dcim.models import Site
 from extras.models import Tag
-from users.models import ObjectPermission
-
-import netbox_custom_objects.urls as co_urls
 from netbox_custom_objects.related_tabs.registry import CO_COMBINED_URL_NAME, _inject_co_urls
+from users.models import ObjectPermission
 
 from .base import CustomObjectsTestCase
 

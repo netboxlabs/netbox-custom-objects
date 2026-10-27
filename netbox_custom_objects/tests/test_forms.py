@@ -6,7 +6,6 @@ from django.test import TestCase
 
 from core.models import ObjectType
 from extras.choices import CustomFieldTypeChoices
-
 from netbox_custom_objects.forms import CustomObjectTypeFieldForm
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 

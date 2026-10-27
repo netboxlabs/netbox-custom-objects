@@ -3,11 +3,12 @@ Tests for all the different field types supported by Custom Object Type Fields.
 """
 
 import json
+from datetime import date, datetime
+from decimal import Decimal
 from importlib import import_module
 from unittest import skipUnless
 from unittest.mock import Mock
-from datetime import date, datetime
-from decimal import Decimal
+
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import connection, models
@@ -18,22 +19,23 @@ from django.test.utils import CaptureQueriesContext
 from core.models import ObjectType
 from dcim.models import Device, DeviceType, ModuleType
 from extras.models import CustomFieldChoiceSet
+from netbox.search import get_indexer
 from netbox.tables.columns import ColorColumn
 from netbox_custom_objects.field_types import (
     FIELD_TYPE_CLASS,
     ArrayFieldType,
     ColorFieldType,
-    MACAddressFieldType,
     CoordinatesFieldType,
     DecimalFieldType,
+    MACAddressFieldType,
     MultiObjectFieldType,
     MultiSelectFieldType,
     ObjectFieldType,
     SelectFieldType,
     _csv_import_to_field_name,
 )
-from netbox.search import get_indexer
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, _deferred_co_field_data
+
 from .base import CustomObjectsTestCase
 
 
@@ -898,9 +900,8 @@ class ArrayFieldTypeTestCase(FieldTypeTestCase):
             'a list on text': {**valid, 'labels': [[1]]},
         }
         for label, values in cases.items():
-            with self.subTest(label):
-                with self.assertRaises(ValidationError):
-                    self._clean(model, **values)
+            with self.subTest(label), self.assertRaises(ValidationError):
+                self._clean(model, **values)
 
         # Errors name the item, and the value within a tuple.
         messages = {

@@ -11,13 +11,13 @@ from django.db.utils import ProgrammingError
 from django.test import TestCase
 from django.urls import reverse
 
-
 from core.models import ObjectType
 from dcim.models import Site
 from netbox.search import registry
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import ObjectFieldType, TextFieldType
 from netbox_custom_objects.models import CustomObjectType
+
 from ..base import CustomObjectsTestCase
 
 
@@ -551,7 +551,6 @@ class CustomObjectTypeConfigContextTestCase(CustomObjectsTestCase, TestCase):
     def test_renderer_shares_source_data_without_leaking_local_overrides(self):
         """Objects sharing source contexts don't see each other's nested local overrides."""
         from extras.models import ConfigContext
-
         from netbox_custom_objects.models import ConfigContextRenderer
 
         site = Site.objects.create(name='CC Shared', slug='cc-shared')

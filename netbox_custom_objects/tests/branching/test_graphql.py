@@ -20,16 +20,17 @@ from netbox_custom_objects.tests.base import (
 
 from .base import (
     HAS_BRANCHING,
+    BranchingTestBase,
     User,
     _make_request,
-    _TestBase,
     _provision_branch,
-    BranchingTestBase,
+    _TestBase,
 )
 
 if HAS_BRANCHING:
-    from netbox.context_managers import event_tracking
     from netbox_branching.utilities import activate_branch
+
+    from netbox.context_managers import event_tracking
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')

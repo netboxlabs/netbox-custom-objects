@@ -14,10 +14,8 @@ from rest_framework import status
 from core.models import ObjectType
 from dcim.models import Site
 from extras.validators import CustomValidator
-from ipam.models import Prefix, IPAddress
 from ipam.choices import PrefixStatusChoices
-from utilities.testing import create_test_user
-
+from ipam.models import IPAddress, Prefix
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.tests.base import (
@@ -25,6 +23,7 @@ from netbox_custom_objects.tests.base import (
     _grant_perm,
     create_token,
 )
+from utilities.testing import create_test_user
 
 
 class PolymorphicFieldAPITestCase(CustomObjectsTestCase, TestCase):

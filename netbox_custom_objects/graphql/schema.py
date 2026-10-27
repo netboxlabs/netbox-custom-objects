@@ -17,7 +17,6 @@ query here would be immediately shadowed by that live rebuild.  ``live`` reuses
 """
 
 import logging
-from typing import List
 
 import strawberry
 import strawberry_django
@@ -136,7 +135,7 @@ def build_query_classes(visible_cot_ids=None):
             'related_object_types'
         )
         custom_object_types = list(CustomObjectType.objects.prefetch_related(Prefetch('fields', queryset=fields_qs)))
-    except Exception:  # noqa: BLE001 - DB may be unavailable at import time
+    except Exception:
         logger.debug('Could not load custom object types for GraphQL schema', exc_info=True)
         return []
 
@@ -155,7 +154,7 @@ def build_query_classes(visible_cot_ids=None):
     for cot in custom_object_types:
         try:
             gql_type = build_object_type(cot)
-        except Exception:  # noqa: BLE001 - never break the whole schema for one type
+        except Exception:
             logger.warning(
                 'Failed to build GraphQL type for custom object type %r (id=%s); skipping',
                 cot.name,
@@ -171,7 +170,7 @@ def build_query_classes(visible_cot_ids=None):
 
         annotations[field_name] = gql_type
         attrs[field_name] = strawberry_django.field()
-        annotations[list_name] = List[gql_type]
+        annotations[list_name] = list[gql_type]
         attrs[list_name] = strawberry_django.field()
 
     if not attrs:

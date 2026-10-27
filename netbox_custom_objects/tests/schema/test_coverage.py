@@ -21,7 +21,6 @@ from django.test import SimpleTestCase
 from netbox_custom_objects.models import CustomObjectTypeField
 from netbox_custom_objects.schema.format import FIELD_BASE_ATTRS, FIELD_TYPE_ATTRS
 
-
 # Fields that are intentionally NOT part of the portable schema format.
 # Each comment explains why.
 _SCHEMA_EXCLUDED_ATTRS = frozenset(

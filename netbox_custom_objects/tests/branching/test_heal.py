@@ -5,7 +5,8 @@ Healing branch schemas after a plugin upgrade (``mixin_migration.heal_branch``).
 import unittest
 from unittest import mock
 
-from django.db import connection as main_conn, connections
+from django.db import connection as main_conn
+from django.db import connections
 
 from netbox_custom_objects.models import (
     CustomObjectType,
@@ -14,16 +15,17 @@ from netbox_custom_objects.models import (
 
 from .base import (
     HAS_BRANCHING,
-    _make_request,
-    _TestBase,
-    _provision_branch,
     BranchingTestBase,
+    _make_request,
+    _provision_branch,
+    _TestBase,
 )
 
 if HAS_BRANCHING:
-    from netbox.context_managers import event_tracking
     from netbox_branching.choices import BranchStatusChoices
     from netbox_branching.models import Branch
+
+    from netbox.context_managers import event_tracking
 
 
 # ── Branch upgrade heal (mixin_migration.heal_branch) ──────────────────────────

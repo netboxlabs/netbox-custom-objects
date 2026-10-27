@@ -1,8 +1,5 @@
 import logging
 
-from core.models import ObjectChange
-from core.signals import clear_events
-from core.tables import ObjectChangeTable
 from django.apps import apps as django_apps
 from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
@@ -14,9 +11,12 @@ from django.urls import resolve, reverse
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
-from utilities.exceptions import AbortRequest, PermissionsViolation
 from django.views.generic import View
-from extras.choices import CustomFieldUIEditableChoices, CustomFieldUIVisibleChoices
+
+from core.models import ObjectChange
+from core.signals import clear_events
+from core.tables import ObjectChangeTable
+from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices, CustomFieldUIVisibleChoices
 from extras.forms import JournalEntryForm
 from extras.models import ConfigContext, JournalEntry
 from extras.tables import JournalEntryTable
@@ -29,27 +29,27 @@ from netbox.forms.mixins import OwnerMixin as OwnerFormMixin
 from netbox.object_actions import BulkDelete, DeleteObject, EditObject
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
+from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
+from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.dynamic_forms import build_filterset_form_class
+from netbox_custom_objects.filtersets import get_filterset_class
+from netbox_custom_objects.tables import CustomObjectTable, CustomObjectTypeConstraintTable, CustomObjectTypeFieldTable
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name
+from utilities.exceptions import AbortRequest, PermissionsViolation
 from utilities.forms import DeleteForm, restrict_form_fields
-from utilities.querydict import normalize_querydict
-from utilities.request import safe_for_redirect
 from utilities.forms.fields import ContentTypeChoiceField, DynamicModelChoiceField, DynamicModelMultipleChoiceField
 from utilities.forms.utils import get_field_value as _get_field_value
 from utilities.forms.widgets import HTMXSelect
 from utilities.htmx import htmx_partial
 from utilities.object_types import object_type_name
-from utilities.templatetags.builtins.filters import bettertitle
 from utilities.permissions import get_permission_for_model
+from utilities.querydict import normalize_querydict
+from utilities.request import safe_for_redirect
+from utilities.templatetags.builtins.filters import bettertitle
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
-from netbox_custom_objects.filtersets import get_filterset_class
-from netbox_custom_objects.tables import CustomObjectTable, CustomObjectTypeConstraintTable, CustomObjectTypeFieldTable
 from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
-from extras.choices import CustomFieldTypeChoices
-from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
-from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.dynamic_forms import build_filterset_form_class
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 
 logger = logging.getLogger('netbox_custom_objects.views')
 
@@ -987,7 +987,7 @@ class CustomObjectEditView(RestrictedObjectMixin, generic.ObjectEditView):
             # applies these directly on create instead. See the note in the loop above.
             self._hidden_multiobject_defaults = {}
 
-            instance = kwargs.get('instance', None)
+            instance = kwargs.get('instance')
 
             if 'initial' not in kwargs:
                 kwargs['initial'] = {}

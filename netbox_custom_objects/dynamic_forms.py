@@ -1,13 +1,14 @@
 import logging
 
 from django.utils.translation import gettext_lazy as _
+
 from extras.choices import CustomFieldFilterLogicChoices, CustomFieldUIEditableChoices
 from netbox.forms import NetBoxModelFilterSetForm
 from netbox.forms.mixins import OwnerFilterMixin as OwnerFilterFormMixin
 from utilities.forms.fields import TagFilterField
 from utilities.forms.rendering import FieldSet
-from . import field_types
 
+from . import field_types
 
 logger = logging.getLogger('netbox_custom_objects.dynamic_forms')
 

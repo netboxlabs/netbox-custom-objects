@@ -6,15 +6,15 @@ import json
 
 from django.test import TestCase, tag
 from django.urls import reverse
-
-from utilities.testing import create_test_user
 from rest_framework import status
 
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
-from ..base import CustomObjectsTestCase, create_token
 from core.models import ObjectType
 from dcim.models import Site
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from users.models import ObjectPermission
+from utilities.testing import create_test_user
+
+from ..base import CustomObjectsTestCase, create_token
 
 
 class CustomObjectTypeFieldObjectResolutionTestCase(CustomObjectsTestCase, TestCase):

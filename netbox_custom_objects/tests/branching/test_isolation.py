@@ -4,12 +4,12 @@ Changes in a branch, and deleting it, leave main alone.
 
 import unittest
 
-from core.models import ObjectType
-from dcim.models import Site
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection as main_conn
 
+from core.models import ObjectType
+from dcim.models import Site
 from netbox_custom_objects.models import (
     CustomObjectType,
     CustomObjectTypeField,
@@ -17,16 +17,17 @@ from netbox_custom_objects.models import (
 
 from .base import (
     HAS_BRANCHING,
-    _make_request,
-    _TestBase,
-    _provision_branch,
     BranchingTestBase,
+    _make_request,
+    _provision_branch,
+    _TestBase,
 )
 
 if HAS_BRANCHING:
-    from netbox.context_managers import event_tracking
     from netbox_branching.models import Branch
     from netbox_branching.utilities import activate_branch
+
+    from netbox.context_managers import event_tracking
 
 
 # ── Branch deletion (abandon without merge) ───────────────────────────────────

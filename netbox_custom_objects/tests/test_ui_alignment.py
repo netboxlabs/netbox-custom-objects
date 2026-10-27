@@ -12,17 +12,15 @@ from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils.safestring import mark_safe
 from django_htmx.middleware import HtmxDetails
+from packaging.version import Version
+
+from core.models import ObjectType
+from dcim.models import Site
 from extras.choices import (
     CustomFieldFilterLogicChoices,
     CustomFieldUIEditableChoices,
     CustomFieldUIVisibleChoices,
 )
-from packaging.version import Version
-
-from core.models import ObjectType
-from dcim.models import Site
-from users.models import ObjectPermission, Owner
-
 from netbox_custom_objects.dynamic_forms import build_filterset_form_class
 from netbox_custom_objects.forms import CustomObjectTypeFilterForm, CustomObjectTypeForm
 from netbox_custom_objects.models import CustomObjectTypeConstraint
@@ -30,6 +28,7 @@ from netbox_custom_objects.related_tabs.views.combined import _make_tab_view
 from netbox_custom_objects.templatetags.custom_object_buttons import custom_object_clone_button
 from netbox_custom_objects.templatetags.custom_object_utils import sticky_actions_supported
 from netbox_custom_objects.views import CustomObjectDeleteView, CustomObjectListView
+from users.models import ObjectPermission, Owner
 
 from .base import CustomObjectsTestCase
 
@@ -217,7 +216,7 @@ class BulkImportPaneTestCase(CustomObjectPageTestCase):
         self.assertContains(response, 'class="tab-pane show active" id="import-form"')
         self.assertContains(response, 'class="tab-pane show" id="upload-form"')
 
-    @skipUnless(NETBOX_VERSION >= Version('4.7'), 'NetBox passes import_method from 4.7')
+    @skipUnless(Version('4.7') <= NETBOX_VERSION, 'NetBox passes import_method from 4.7')
     def test_failed_upload_shows_upload_pane(self):
         response = self.client.post(
             self._url('bulk_import'),
@@ -294,7 +293,7 @@ class EditFormTestCase(CustomObjectPageTestCase):
                 self.assertEqual(' '.join(page_title.group(1).split()), title)
                 self.assertContains(response, '<h2 class="col-9 offset-3">Zone</h2>')
                 self.assertContains(response, '<h2 class="col-9 offset-3">Details</h2>')
-                if NETBOX_VERSION >= Version('4.6'):
+                if Version('4.6') <= NETBOX_VERSION:
                     # Before 4.6, core's own edit buttons use btn-float.
                     self.assertNotContains(response, 'btn-float')
 

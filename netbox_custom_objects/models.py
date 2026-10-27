@@ -7,11 +7,6 @@ import threading
 from contextlib import contextmanager
 from datetime import date, datetime
 
-from packaging.version import Version, InvalidVersion
-
-from core.choices import ObjectChangeActionChoices
-from core.models import ObjectType, ObjectChange
-from core.models.object_types import ObjectTypeManager
 from django.apps import apps
 from django.conf import settings
 
@@ -21,17 +16,27 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.core.validators import MinValueValidator, RegexValidator, ValidationError
-from django.db import DEFAULT_DB_ALIAS, connection, connections, IntegrityError, models, transaction
-from django.db.utils import OperationalError, ProgrammingError
+from django.db import DEFAULT_DB_ALIAS, IntegrityError, connection, connections, models, transaction
 from django.db.models import F, ProtectedError, Q
 from django.db.models.fields.related import ForeignKey, ManyToManyField
 from django.db.models.fields.related_descriptors import ReverseManyToOneDescriptor
 from django.db.models.functions import Lower
-from django.db.models.signals import m2m_changed, pre_delete, post_save
+from django.db.models.signals import m2m_changed, post_save, pre_delete
+from django.db.utils import OperationalError, ProgrammingError
 from django.dispatch import receiver
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+from jinja2 import TemplateError as _JinjaTemplateError
+from jinja2 import Undefined as _JinjaUndefined
+from jinja2 import meta as _jinja_meta
+from jinja2.sandbox import SandboxedEnvironment as _JinjaSandbox
+from packaging.version import InvalidVersion, Version
+
+from core.choices import ObjectChangeActionChoices
+from core.models import ObjectChange, ObjectType
+from core.models.object_types import ObjectTypeManager
 from core.signals import _signals_received, handle_deleted_object
+from dcim.fields import MACAddressField
 from extras.choices import (
     CustomFieldFilterLogicChoices,
     CustomFieldTypeChoices,
@@ -44,7 +49,6 @@ from extras.models.customfields import SEARCH_TYPES
 from extras.utils import is_taggable, run_validators
 from netbox.config import get_config
 from netbox.models import BaseModel, ChangeLoggedModel, NetBoxModel
-from netbox.models.mixins import OwnerMixin
 from netbox.models.features import (
     BookmarksMixin,
     ChangeLoggingMixin,
@@ -59,21 +63,10 @@ from netbox.models.features import (
     TagsMixin,
     get_model_features,
 )
+from netbox.models.mixins import OwnerMixin
 from netbox.plugins import get_plugin_config
 from netbox.registry import registry
 from netbox.search import FieldTypes, SearchIndex
-from utilities.data import deepmerge, get_config_value_ci
-from utilities.datetime import datetime_from_timestamp
-from jinja2 import TemplateError as _JinjaTemplateError
-from jinja2 import Undefined as _JinjaUndefined
-from jinja2 import meta as _jinja_meta
-from jinja2.sandbox import SandboxedEnvironment as _JinjaSandbox
-from utilities.object_types import object_type_name
-from utilities.serialization import deserialize_object as _deserialize_object
-from utilities.string import title
-from dcim.fields import MACAddressField
-from utilities.validators import ColorValidator, validate_regex
-
 from netbox_custom_objects.choices import (
     ArrayElementTypeChoices,
     ConstraintLookupChoices,
@@ -89,12 +82,12 @@ from netbox_custom_objects.constants import (
 )
 from netbox_custom_objects.field_types import (
     FIELD_TYPE_CLASS,
+    PolymorphicMultiObjectReverseDescriptor,
+    PolymorphicObjectReverseDescriptor,
     _safe_pg_identifier,
     bind_for_ddl,
     format_array_value,
     safe_table_name,
-    PolymorphicObjectReverseDescriptor,
-    PolymorphicMultiObjectReverseDescriptor,
 )
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.mixin_migration import heal_unmasked_fields
@@ -106,6 +99,12 @@ from netbox_custom_objects.utilities import (
     is_branching_enabled,
     predicate_field_ref,
 )
+from utilities.data import deepmerge, get_config_value_ci
+from utilities.datetime import datetime_from_timestamp
+from utilities.object_types import object_type_name
+from utilities.serialization import deserialize_object as _deserialize_object
+from utilities.string import title
+from utilities.validators import ColorValidator, validate_regex
 
 logger = logging.getLogger(__name__)
 
@@ -1512,7 +1511,7 @@ class CustomObjectConfigContextMixin(ConfigContextModel):
             dimension_fields = self._config_context_dimension_fields()
         if not dimension_fields:
             return None
-        dims = {name: None for name in CONFIG_CONTEXT_DIMENSION_FIELDS}
+        dims = dict.fromkeys(CONFIG_CONTEXT_DIMENSION_FIELDS)
         for name in dimension_fields:
             dims[name] = getattr(self, name, None)
         proxy = SimpleNamespace(**dims)
@@ -2272,13 +2271,12 @@ class CustomObjectType(NetBoxModel):
                     # post_save's search-cache handler sees this context's fields.
                     self.register_custom_object_search_index(model)
                     return model
-                else:
-                    # Only clear the current (cot_id, branch_id) entry.  Lazy
-                    # invalidation: each branch context detects its own stale
-                    # timestamp on next access — main's COT save propagates the
-                    # bumped cache_timestamp to branches via change-capture, so
-                    # they'll re-evaluate against their own row independently.
-                    self.clear_model_cache(self.id)
+                # Only clear the current (cot_id, branch_id) entry.  Lazy
+                # invalidation: each branch context detects its own stale
+                # timestamp on next access — main's COT save propagates the
+                # bumped cache_timestamp to branches via change-capture, so
+                # they'll re-evaluate against their own row independently.
+                self.clear_model_cache(self.id)
 
         # Avoid a dangling cross-COT FK reference when get_model() runs outside
         # ready()'s two-pass resolution, e.g. a plugin importing it at migrate
@@ -2915,13 +2913,12 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
     # Savepoint contains the failure cleanly, then we re-raise so the outer
     # field save aborts — silently logging would leave audit data inconsistent.
     try:
-        with transaction.atomic(using=conn.alias):
-            with conn.cursor() as cursor:
-                for json_col in ('prechange_data', 'postchange_data'):
-                    cursor.execute(
-                        oc_sql.format(col=json_col),
-                        [old_name, new_name, old_name, ct.id, old_name],
-                    )
+        with transaction.atomic(using=conn.alias), conn.cursor() as cursor:
+            for json_col in ('prechange_data', 'postchange_data'):
+                cursor.execute(
+                    oc_sql.format(col=json_col),
+                    [old_name, new_name, old_name, ct.id, old_name],
+                )
     except ProgrammingError:
         logger.error(
             '_rename_objectchange_field_key: ObjectChange schema mismatch rewriting %r -> %r; aborting rename',
@@ -2947,13 +2944,12 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
     # instead introduced a second connection into sync()'s open transaction,
     # causing a same-process cross-connection deadlock (issue #653).
     try:
-        with transaction.atomic(using=DEFAULT_DB_ALIAS):
-            with connections[DEFAULT_DB_ALIAS].cursor() as cursor:
-                for json_col in ('original', 'modified', 'current'):
-                    cursor.execute(
-                        cd_sql.format(col=json_col),
-                        [old_name, new_name, old_name, ct.id, old_name],
-                    )
+        with transaction.atomic(using=DEFAULT_DB_ALIAS), connections[DEFAULT_DB_ALIAS].cursor() as cursor:
+            for json_col in ('original', 'modified', 'current'):
+                cursor.execute(
+                    cd_sql.format(col=json_col),
+                    [old_name, new_name, old_name, ct.id, old_name],
+                )
     except ProgrammingError:
         logger.error(
             '_rename_objectchange_field_key: ChangeDiff schema mismatch rewriting %r -> %r; aborting rename',
@@ -5149,11 +5145,10 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
         # Route through the branch's connection so the probe runs in the active schema.
         probe_conn = _get_schema_connection()
         try:
-            with transaction.atomic(using=probe_conn.alias):
-                with probe_conn.schema_editor() as schema_editor:
-                    _drop_db_constraint(schema_editor, model, constraint.name)
-                    schema_editor.add_constraint(model, constraint)
-                    raise UniquenessConstraintTestError()
+            with transaction.atomic(using=probe_conn.alias), probe_conn.schema_editor() as schema_editor:
+                _drop_db_constraint(schema_editor, model, constraint.name)
+                schema_editor.add_constraint(model, constraint)
+                raise UniquenessConstraintTestError()
         except UniquenessConstraintTestError:
             pass
         except IntegrityError:

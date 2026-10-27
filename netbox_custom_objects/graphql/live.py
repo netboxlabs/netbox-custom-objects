@@ -144,7 +144,7 @@ def cached_schema_signature(branch_key=None):
     _signature_keys_seen.add(key)
     try:
         cached = cache.get(key)
-    except Exception:  # noqa: BLE001 - cache down: fall back to the DB
+    except Exception:
         cached = None
     if cached is not None:
         # Cache backends may round-trip the tuple as a list; normalise so the
@@ -154,7 +154,7 @@ def cached_schema_signature(branch_key=None):
     signature = schema_signature()
     try:
         cache.set(key, signature, _SIGNATURE_CACHE_TIMEOUT)
-    except Exception:  # noqa: BLE001 - cache down: just skip memoisation
+    except Exception:
         pass
     return signature
 
@@ -170,7 +170,7 @@ def _invalidate_signature_cache(**kwargs):
 
     try:
         cache.delete(_signature_cache_key(_active_branch_key()))
-    except Exception:  # noqa: BLE001 - cache down: the TTL backstop still bounds staleness
+    except Exception:
         logger.debug('Could not invalidate GraphQL schema signature cache', exc_info=True)
 
 
@@ -191,7 +191,7 @@ def _evict_branch_schema(sender, instance, **kwargs):
     _signature_keys_seen.discard(key)
     try:
         cache.delete(key)
-    except Exception:  # noqa: BLE001 - cache down: the TTL backstop still bounds it
+    except Exception:
         logger.debug("Could not evict deleted branch's schema signature", exc_info=True)
 
 
@@ -353,14 +353,14 @@ def get_live_schema(user):
     branch_key = _active_branch_key()
     try:
         visible_key = visible_custom_object_type_ids(user)
-    except Exception:  # noqa: BLE001 - DB hiccup: expose no custom object types
+    except Exception:
         logger.warning("Could not determine the user's visible custom object types", exc_info=True)
         visible_key = frozenset()
     branch_schemas = _schema_cache.setdefault(branch_key, {})
 
     try:
         signature = cached_schema_signature(branch_key)
-    except Exception:  # noqa: BLE001 - DB hiccup
+    except Exception:
         logger.warning('Could not compute GraphQL schema signature', exc_info=True)
         cached = branch_schemas.get(visible_key)
         if cached is not None and cached[1] is not None:
@@ -401,7 +401,7 @@ def get_live_schema(user):
             return schema
         try:
             new_schema = build_full_schema(visible_key)
-        except Exception:  # noqa: BLE001 - never break the endpoint
+        except Exception:
             logger.exception('Failed to rebuild live GraphQL schema')
             return schema
         branch_schemas[visible_key] = (signature, new_schema)
@@ -426,7 +426,7 @@ def reset_cache():
     for key in list(_signature_keys_seen):
         try:
             cache.delete(key)
-        except Exception:  # noqa: BLE001 - cache down: nothing to clear
+        except Exception:
             pass
     _signature_keys_seen.clear()
 

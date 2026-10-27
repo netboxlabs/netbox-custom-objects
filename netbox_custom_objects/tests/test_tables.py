@@ -13,6 +13,7 @@ from dcim.models import Site
 from extras.choices import CustomFieldUIVisibleChoices
 from netbox.tables import NetBoxTable
 from netbox_custom_objects.models import CustomObjectTypeField
+
 from .base import CustomObjectsTestCase
 
 

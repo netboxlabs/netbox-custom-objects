@@ -13,26 +13,23 @@ Covers:
 - YAML request/response support
 """
 
-import yaml
-
 from unittest import mock
 
+import yaml
 from django.apps import apps as django_apps
-from django.urls import reverse
 from django.test import TestCase
+from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
+import netbox_custom_objects as nco_pkg
 from core.models import ObjectType
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
+from netbox_custom_objects.schema.exporter import export_cot
 from users.models import ObjectPermission
 from utilities.testing import create_test_user
 
-import netbox_custom_objects as nco_pkg
-from netbox_custom_objects.schema.exporter import export_cot
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
-
 from ..base import CustomObjectsTestCase, create_api_token
-
 
 # ---------------------------------------------------------------------------
 # Base for schema API tests

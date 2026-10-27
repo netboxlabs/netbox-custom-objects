@@ -2,33 +2,30 @@ import logging
 import re
 import sys
 
-from core.models import ObjectType
-from dcim.fields import MACAddressField
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.urls import NoReverseMatch
 from django.utils.translation import gettext_lazy as _
 from drf_spectacular.extensions import OpenApiSerializerExtension
 from drf_spectacular.utils import extend_schema_field
-from extras.choices import CustomFieldTypeChoices
-from extras.models import ConfigContextModel
-from netbox.api.fields import ChoiceField as NetBoxChoiceField
-from netbox.api.serializers import NetBoxModelSerializer
-from netbox.api.serializers.nested import NestedTagSerializer
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework.reverse import reverse
 from rest_framework.utils import model_meta
 
-from users.api.serializers_.owners import OwnerSerializer
-
+from core.models import ObjectType
+from dcim.fields import MACAddressField
+from extras.choices import CustomFieldTypeChoices
+from extras.models import ConfigContextModel
+from netbox.api.fields import ChoiceField as NetBoxChoiceField
+from netbox.api.serializers import NetBoxModelSerializer
+from netbox.api.serializers.nested import NestedTagSerializer
 from netbox_custom_objects import constants, field_types
 from netbox_custom_objects.choices import (
     ConstraintLookupChoices,
     ConstraintTypeChoices,
     CustomObjectFieldTypeChoices,
 )
-from netbox_custom_objects.utilities import predicate_field_ref
 from netbox_custom_objects.models import (
     ConfigContextRenderer,
     CustomObject,
@@ -36,6 +33,8 @@ from netbox_custom_objects.models import (
     CustomObjectTypeConstraint,
     CustomObjectTypeField,
 )
+from netbox_custom_objects.utilities import predicate_field_ref
+from users.api.serializers_.owners import OwnerSerializer
 
 # Public URL slug used in API paths (e.g. /api/plugins/custom-objects/)
 _PUBLIC_APP_LABEL = 'custom-objects'
@@ -46,8 +45,8 @@ logger = logging.getLogger('netbox_custom_objects.api.serializers')
 
 
 __all__ = (
-    'CustomObjectTypeSerializer',
     'CustomObjectSerializer',
+    'CustomObjectTypeSerializer',
 )
 
 

@@ -5,13 +5,13 @@ Applying a schema document enforces object-level permissions, as the UI and REST
 import unittest
 from unittest import mock
 
-from core.models import ObjectType
 from django.test import TransactionTestCase
 from rest_framework import status
-from users.models import ObjectPermission
 
+from core.models import ObjectType
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.schema.exporter import export_cot
+from users.models import ObjectPermission
 
 from ..base import TransactionCleanupMixin
 from ..branching.base import HAS_BRANCHING, _close_branch_connections, _provision_branch

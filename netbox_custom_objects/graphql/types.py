@@ -26,21 +26,20 @@ no registered GraphQL type, the field falls back to a lightweight, uniform
 import logging
 import re
 import threading
-from typing import Annotated, List, Optional, Union
+from typing import Annotated, Optional
 
 import strawberry
 import strawberry_django
+from strawberry.types import Info
+
 from core.graphql.mixins import ChangelogMixin
 from extras.choices import CustomFieldFilterLogicChoices, CustomFieldTypeChoices
 from extras.graphql.mixins import JournalEntriesMixin, TagsMixin
 from extras.models import ConfigContextModel
 from netbox.graphql.scalars import BigInt
 from netbox.graphql.types import BaseObjectType
-from strawberry.types import Info
-from users.graphql.mixins import OwnerMixin
-
-from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
+from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.graphql.filters import (
     build_filter_class,
     coordinates_filter_annotations,
@@ -49,6 +48,7 @@ from netbox_custom_objects.graphql.filters import (
     scalar_filter_annotation,
 )
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name, restrict_to_viewable
+from users.graphql.mixins import OwnerMixin
 
 logger = logging.getLogger('netbox_custom_objects.graphql')
 
@@ -180,7 +180,7 @@ class CustomObjectRelatedObjectType:
     id: BigInt
     object_type: str
     display: str
-    url: Optional[str]
+    url: str | None
 
 
 @strawberry.type
@@ -240,11 +240,11 @@ def _related_repr(obj):
         return None
     try:
         url = obj.get_absolute_url()
-    except Exception:  # noqa: BLE001 - URL resolution is best-effort
+    except Exception:
         url = None
     try:
         display = str(obj)
-    except Exception:  # noqa: BLE001 - a broken __str__ must not fail the whole field
+    except Exception:
         # Degrade to a stable identifier so one unrenderable object becomes a
         # placeholder rather than erroring the entire (possibly multi-object) field;
         # pk and _meta are safe even when __str__ raises.
@@ -282,7 +282,7 @@ def _build_model_type_registry():
             module = import_module(module_name)
         except ModuleNotFoundError:
             continue
-        except Exception:  # noqa: BLE001 - a broken app module must not break the schema
+        except Exception:
             logger.debug('Could not import %s for the GraphQL type registry', module_name, exc_info=True)
             continue
         for value in vars(module).values():
@@ -346,7 +346,7 @@ def _custom_object_graphql_type(model_name):
         return None
     try:
         return build_object_type(cot)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning('Failed to build related custom-object GraphQL type for %r', model_name, exc_info=True)
         return None
 
@@ -409,8 +409,8 @@ def _relationship_annotation(members, is_list, union_name):
     if len(members) == 1:
         inner = members[0]
     else:
-        inner = Annotated[Union[tuple(members)], strawberry.union(union_name)]
-    return List[inner] if is_list else Optional[inner]
+        inner = Annotated[tuple(members), strawberry.union(union_name)]
+    return list[inner] if is_list else Optional[inner]
 
 
 def _coerce_related(obj, native_models):
@@ -491,7 +491,7 @@ def _make_relationship_resolver(field, members, native_models):
                 return []
             try:
                 related = list(value.all())
-            except Exception:  # noqa: BLE001 - never let one field break the query
+            except Exception:
                 logger.warning('Failed to resolve multi-object GraphQL field %r', field_name, exc_info=True)
                 return []
             return [_coerce_related(obj, native_models) for obj in _filter_viewable(user, related)]
@@ -516,7 +516,7 @@ def _make_declarative_multiobject_field(field, gql_type):
         prefetch_related=[field_name],
         description=f"Related objects referenced by '{field_name}'",
     )
-    return value, List[gql_type]
+    return value, list[gql_type]
 
 
 def _make_config_context_field(cot_fields):
@@ -584,7 +584,7 @@ def _make_choice_resolver(field):
             return None
         return CustomObjectChoiceType(value=value, label=field.get_choice_label(value))
 
-    annotation = List[CustomObjectChoiceType] if is_list else Optional[CustomObjectChoiceType]
+    annotation = list[CustomObjectChoiceType] if is_list else Optional[CustomObjectChoiceType]
     resolver.__annotations__ = {'return': annotation}
     return strawberry_django.field(description=f"Choice value for '{field_name}'")(resolver)
 

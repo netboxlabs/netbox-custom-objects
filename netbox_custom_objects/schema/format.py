@@ -12,7 +12,6 @@ Format version history
 """
 
 from extras.choices import CustomFieldTypeChoices
-
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 
 # ── Format version ──────────────────────────────────────────────────────────

@@ -7,26 +7,27 @@ from datetime import date
 from decimal import Decimal
 from unittest import skipUnless
 
-from core.choices import ObjectChangeActionChoices
-from core.models import Job, ObjectChange
-from dcim.models import Site
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection
 from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
+
+from core.choices import ObjectChangeActionChoices
+from core.models import Job, ObjectChange
+from core.models.object_types import ObjectType
+from dcim.models import Site
 from extras.models import CustomFieldChoiceSet, JournalEntry
 from netbox.context import current_request, events_queue, query_cache
 from netbox.jobs import AsyncViewJob
-from users.models import ObjectPermission
-from utilities.request import copy_safe_request
-from utilities.testing import ViewTestCases, create_test_user, post_data
-
 from netbox_custom_objects import views
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.utilities import is_branching_enabled
+from users.models import ObjectPermission
+from utilities.request import copy_safe_request
+from utilities.testing import ViewTestCases, create_test_user, post_data
+
 from .base import CustomObjectsTestCase
-from core.models.object_types import ObjectType
 
 _HAS_BRANCHING = is_branching_enabled()
 
@@ -1559,7 +1560,7 @@ class ObjectFieldViewTestCase(
 
         # Create test instances (if DCIM models are available)
         try:
-            from dcim.models import Device, Site, DeviceRole, DeviceType, Manufacturer
+            from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 
             # Create test site
             cls.site = Site.objects.create(name='Test Site', slug='test-site')

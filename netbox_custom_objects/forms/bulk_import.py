@@ -1,5 +1,4 @@
 from netbox.forms import NetBoxModelImportForm
-
 from netbox_custom_objects.models import CustomObjectType
 
 __all__ = ('CustomObjectTypeImportForm',)

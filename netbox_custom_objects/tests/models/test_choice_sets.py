@@ -11,8 +11,8 @@ from rest_framework.test import APIClient
 
 import netbox_custom_objects as nco
 import netbox_custom_objects.models as nco_models
-
 from extras.models import CustomFieldChoiceSet
+
 from ..base import CustomObjectsTestCase, create_token
 
 

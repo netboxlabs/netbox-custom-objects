@@ -55,7 +55,7 @@ class Command(BaseCommand):
         cot_filter = options.get('cot')
         verbosity = options['verbosity']
 
-        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+        from netbox_custom_objects.models import CustomObjectType
 
         if dry_run:
             self.stdout.write(self.style.WARNING('DRY RUN — no changes will be made.\n'))
@@ -95,7 +95,7 @@ class Command(BaseCommand):
         no-ops (returns an all-zero summary) when netbox-branching isn't
         installed, so nothing extra is printed in that case.
         """
-        from netbox_custom_objects.mixin_migration import heal_all_branches  # noqa: PLC0415
+        from netbox_custom_objects.mixin_migration import heal_all_branches
 
         result = heal_all_branches(verbosity=verbosity, dry_run=dry_run)
 

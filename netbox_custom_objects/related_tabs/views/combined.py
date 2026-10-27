@@ -11,6 +11,7 @@ from django.db.models import Q, prefetch_related_objects
 from django.shortcuts import get_object_or_404, render
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import View
+
 from extras.choices import CustomFieldTypeChoices
 from netbox.context import current_request
 from netbox.plugins import get_plugin_config
