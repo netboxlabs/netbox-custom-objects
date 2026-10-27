@@ -14,7 +14,7 @@ from netbox_custom_objects.models import CustomObjectTypeConstraint
 from ..base import CustomObjectsTestCase, create_token
 
 
-class CustomObjectTypeConstraintAPITest(CustomObjectsTestCase, TestCase):
+class CustomObjectTypeConstraintAPITestCase(CustomObjectsTestCase, TestCase):
     """Constraints are managed through their own endpoint and enforced on custom object writes."""
 
     constraint_list_url = 'plugins-api:netbox_custom_objects-api:customobjecttypeconstraint-list'

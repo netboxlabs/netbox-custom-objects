@@ -1,5 +1,5 @@
 """
-Tests for the COT upgrade executor (issue #389).
+Tests for the COT upgrade executor.
 
 Covers:
 - _build_dep_order: topological sort and circular-dependency detection

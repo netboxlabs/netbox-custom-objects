@@ -1,6 +1,6 @@
 """
 Unit tests for the YAML parser/renderer used by the schema preview/apply
-endpoints (#665).
+endpoints.
 """
 
 import io

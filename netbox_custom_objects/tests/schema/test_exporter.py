@@ -1,5 +1,5 @@
 """
-Tests for the COT schema exporter (issue #388).
+Tests for the COT schema exporter.
 
 Covers:
 - Minimal and full COT serialisation

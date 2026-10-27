@@ -1,5 +1,5 @@
 """
-Tests for the base-column snapshot feature (issue #391, Phase 1).
+Tests for the base-column snapshot feature.
 
 Covers:
 - _collect_base_columns() correctly identifies base vs user-defined columns
@@ -146,6 +146,21 @@ class StoreBaseColumnSnapshotTestCase(CustomObjectsTestCase, TestCase):
         self.assertNotIn("my_field", names)
         self.assertIn("id", names)
 
+    def test_resnapshot_excludes_field_added_after_creation(self):
+        """Re-taking the snapshot after a user field is added must still leave that field out."""
+        cot = self.create_custom_object_type(name="user_excl", slug="user-excl")
+        self.create_custom_object_type_field(cot, name="extra_col", type="text")
+        # Force a fresh snapshot by calling _store_base_column_snapshot again,
+        # simulating what create_model does at COT birth (user field didn't exist yet)
+        CustomObjectType.objects.filter(pk=cot.pk).update(schema_document=None)
+        cot.refresh_from_db()
+        model = cot.get_model()
+        cot._store_base_column_snapshot(model)
+        cot.refresh_from_db()
+
+        names = {c["name"] for c in cot.schema_document["base_columns"]}
+        self.assertNotIn("extra_col", names)
+
 
 # ---------------------------------------------------------------------------
 # create_model() automatic snapshot
@@ -169,18 +184,3 @@ class CreateModelSnapshotTestCase(CustomObjectsTestCase, TestCase):
         self.assertIn("id", names)
         self.assertIn("created", names)
         self.assertIn("last_updated", names)
-
-    def test_user_field_not_in_base_columns(self):
-        """A user field added after COT creation must not appear in base_columns."""
-        cot = self.create_custom_object_type(name="user_excl", slug="user-excl")
-        self.create_custom_object_type_field(cot, name="extra_col", type="text")
-        # Force a fresh snapshot by calling _store_base_column_snapshot again,
-        # simulating what create_model does at COT birth (user field didn't exist yet)
-        CustomObjectType.objects.filter(pk=cot.pk).update(schema_document=None)
-        cot.refresh_from_db()
-        model = cot.get_model()
-        cot._store_base_column_snapshot(model)
-        cot.refresh_from_db()
-
-        names = {c["name"] for c in cot.schema_document["base_columns"]}
-        self.assertNotIn("extra_col", names)

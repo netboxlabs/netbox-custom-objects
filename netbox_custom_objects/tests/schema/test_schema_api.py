@@ -1,5 +1,5 @@
 """
-Tests for the schema preview and apply API endpoints (issue #390).
+Tests for the schema preview and apply API endpoints.
 
 Covers:
 - POST /schema/preview/: returns diffs without modifying the DB
@@ -10,7 +10,7 @@ Covers:
 - Unresolvable FK reference error (400)
 - Missing / malformed 'schema' key (400)
 - Authentication enforced (401 for unauthenticated requests)
-- YAML request/response support (issue #665)
+- YAML request/response support
 """
 
 import yaml
@@ -451,7 +451,7 @@ class SchemaApplyTestCase(_SchemaAPIBase):
 
 
 # ---------------------------------------------------------------------------
-# YAML request/response support (issue #665)
+# YAML request/response support
 # ---------------------------------------------------------------------------
 
 class SchemaYAMLFormatTestCase(_SchemaAPIBase):
@@ -558,11 +558,11 @@ class SchemaYAMLFormatTestCase(_SchemaAPIBase):
 
 
 # ---------------------------------------------------------------------------
-# get_models() re-entrancy (issue #685)
+# get_models() re-entrancy
 # ---------------------------------------------------------------------------
 
 class SchemaApplyMultiCOTRecursionTestCase(_SchemaAPIBase):
-    """Regression test for issue #685: applying a document that creates
+    """Regression test: applying a document that creates
     multiple new, cross-referencing Custom Object Types in one request
     raised RecursionError."""
 
@@ -719,7 +719,7 @@ class SchemaApplyMultiCOTRecursionTestCase(_SchemaAPIBase):
             if call_counts[self.pk] > 10:
                 test_case.fail(
                     f"get_model() called {call_counts[self.pk]} times for COT "
-                    f"{self.pk} -- unbounded re-entrant generation (issue #685/#686)"
+                    f"{self.pk} -- unbounded re-entrant generation"
                 )
             result = real_get_model(self, *args, **kwargs)
             if call_counts[self.pk] == 1:

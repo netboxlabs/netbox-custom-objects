@@ -3,13 +3,16 @@ Polymorphic object and multi-object fields in the UI: the edit, bulk edit, detai
 delete pages and their forms.
 """
 
+from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase
 from django.urls import reverse
 
-from core.models import ObjectType
+from core.models import ObjectChange, ObjectType
 from dcim.models import Site
+from extras.validators import CustomValidator
 from ipam.models import Prefix
 from ipam.choices import PrefixStatusChoices
+from utilities.testing import create_test_user
 
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
@@ -19,14 +22,13 @@ from netbox_custom_objects.tests.base import (
 )
 
 
-class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
+class PolymorphicFieldUITestCase(CustomObjectsTestCase, TestCase):
     """
     UI tests for polymorphic fields on the custom object edit form.
     """
 
     def setUp(self):
         super().setUp()
-        from utilities.testing import create_test_user
         self.user = create_test_user("poly-ui-user")
         self.client.force_login(self.user)
 
@@ -216,7 +218,6 @@ class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
 
     def test_edit_form_preselects_existing_gfk_value(self):
         """For an existing object, the ct and obj sub-fields are pre-populated."""
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         obj = self.model.objects.create(name="prefill-test")
         obj.poly_obj = self.site1
@@ -231,7 +232,6 @@ class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
 
     def test_submit_edit_form_sets_gfk_to_site(self):
         """POST the edit form with a type+object selection saves the GFK to that Site."""
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         obj = self.model.objects.create(name="submit-gfk-obj")
         data = {
@@ -258,7 +258,7 @@ class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
         self.assertIsNone(obj.poly_obj)
 
     def test_submit_edit_form_hidden_poly_obj_with_stale_target(self):
-        """A hidden polymorphic field pointing at a deleted object must not block editing (#771).
+        """A hidden polymorphic field pointing at a deleted object must not block editing.
 
         The form has no field for the GFK backing columns, so a validation error keyed
         to them would raise ValueError in add_error() and the edit page would 500.
@@ -282,7 +282,7 @@ class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
         self.assertEqual(obj.poly_obj_object_id, site2_pk)
 
     def test_submit_edit_form_hidden_poly_obj_with_null_content_type(self):
-        """As above when the target type was deleted: content type NULL, object ID still set (#771)."""
+        """As above when the target type was deleted: content type NULL, object ID still set."""
         self.gfk_field.ui_editable = "hidden"
         self.gfk_field.save()
         model = self.cot.get_model()
@@ -320,9 +320,6 @@ class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
         twice — once to get a PK and again to write the GFK attrs — producing a
         spurious UPDATE record immediately after the CREATE.
         """
-        from django.contrib.contenttypes.models import ContentType
-        from core.models import ObjectChange
-
         site_ct = ContentType.objects.get_for_model(Site)
         data = {
             "name": "single-change-obj",
@@ -381,7 +378,6 @@ class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
 
     def test_bulk_edit_applies_gfk_to_all_selected_objects(self):
         """Bulk edit sets the GFK field on all selected objects."""
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         obj1 = self.model.objects.create(name="bulk-gfk-1")
         obj2 = self.model.objects.create(name="bulk-gfk-2")
@@ -415,7 +411,7 @@ class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
         self.assertIn(self.site1, obj2.poly_multi.all())
 
     def test_bulk_edit_leaves_stale_gfk_alone(self):
-        """Bulk editing an unrelated field must not fail on a GFK whose target is gone (#771).
+        """Bulk editing an unrelated field must not fail on a GFK whose target is gone.
 
         BulkEditView._update_objects() calls full_clean() with no exclude, so a stale
         reference would abort the whole operation.
@@ -492,14 +488,11 @@ class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
         response = self.client.get(self._field_delete_url(self.gfk_field.pk))
         self.assertEqual(response.status_code, 200)
 
-    # --- CUSTOM_VALIDATORS visibility of polymorphic GFK values (#677) ---
+    # --- CUSTOM_VALIDATORS visibility of polymorphic GFK values ---
 
     def test_custom_validator_sees_gfk_value_on_create(self):
         """CUSTOM_VALIDATORS must see the submitted GFK value during form-based
-        create, not None (#677)."""
-        from django.contrib.contenttypes.models import ContentType
-        from extras.validators import CustomValidator
-
+        create, not None."""
         seen = {}
 
         class _CaptureValidator(CustomValidator):
@@ -521,9 +514,6 @@ class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
     def test_custom_validator_sees_updated_gfk_value_on_edit(self):
         """Editing an object and changing its polymorphic GFK value must be visible
         to CUSTOM_VALIDATORS during that same request, not the pre-edit value."""
-        from django.contrib.contenttypes.models import ContentType
-        from extras.validators import CustomValidator
-
         obj = self.model.objects.create(name="validator-edit-obj")
         obj.poly_obj = self.site1
         obj.save()

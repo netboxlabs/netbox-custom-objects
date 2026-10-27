@@ -18,7 +18,7 @@ from extras.models import ConfigContext, Tag
 from users.models import ObjectPermission
 
 
-class ConfigContextAPITest(CustomObjectsTestCase, TestCase):
+class ConfigContextAPITestCase(CustomObjectsTestCase, TestCase):
     """REST API exposure of local_context_data and config_context for config-context-enabled types."""
 
     def setUp(self):

@@ -527,7 +527,7 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
         )
         field.full_clean()  # blank related_name is excluded from the uniqueness constraint.
 
-    @tag('regression')  # #761
+    @tag('regression')
     def test_related_name_colliding_with_target_model_attribute_rejected(self):
         """related_name must not overwrite an existing attribute on a core target model."""
         site_ct = self.get_site_object_type()
@@ -548,7 +548,7 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
                     self.assertIn("related_name", cm.exception.message_dict)
         self.assertIs(Site.save, original_save)
 
-    @tag('regression')  # #761
+    @tag('regression')
     def test_related_name_colliding_with_static_plugin_reverse_accessor_rejected(self):
         """Reverse accessors from the plugin's own static models share APP_LABEL but must not be overwritten."""
         choice_set_ot = ObjectType.objects.get_for_model(CustomFieldChoiceSet)
@@ -567,7 +567,7 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
                 self.assertIn("related_name", cm.exception.message_dict)
         self.assertIs(CustomFieldChoiceSet.choices_for_object_type, original)
 
-    @tag('regression')  # #761
+    @tag('regression')
     def test_polymorphic_related_name_rejects_stale_non_polymorphic_accessor(self):
         """A polymorphic field must not claim a name held by a stale non-polymorphic accessor.
 
@@ -604,7 +604,7 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
             poly_field.full_clean()
         self.assertIn("related_name", cm.exception.message_dict)
 
-    @tag('regression')  # #761
+    @tag('regression')
     def test_related_name_collision_rejected_when_making_existing_field_unique(self):
         """The clobber guard must run before the uniqueness probe installs the reverse accessor."""
         site_ct = self.get_site_object_type()
@@ -626,7 +626,7 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
         self.assertIn("related_name", cm.exception.message_dict)
         self.assertIs(Site.save, original_save)
 
-    @tag('regression')  # #761
+    @tag('regression')
     def test_related_name_colliding_with_custom_object_target_field_rejected(self):
         """related_name must not overwrite a field on a custom object target model."""
         self.slb_cot.get_model()
@@ -643,7 +643,7 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
                     field.full_clean()
                 self.assertIn("related_name", cm.exception.message_dict)
 
-    @tag('regression')  # #761
+    @tag('regression')
     def test_existing_field_owning_reverse_accessor_revalidates(self):
         """Re-cleaning a field whose own reverse accessor is already installed must succeed."""
         for field_type, name in (("object", "certificates"), ("multiobject", "certificate_set")):
@@ -797,14 +797,14 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
             "MultiObject field without related_name should not create an auto-generated reverse accessor.",
         )
 
-    @tag('regression')  # #535
+    @tag('regression')
     def test_deleting_multiobject_field_deregisters_through_model(self):
         """
         After a multiobject field is deleted its through model must be removed
         from Django's app registry. Without the fix the cascade-delete collector
         still finds the model, queries the dropped table, and raises
         ProgrammingError when deleting any object that was a relation target
-        of the field (issue #535).
+        of the field.
         """
         field = self.create_custom_object_type_field(
             self.cert_cot,
@@ -834,7 +834,7 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
 
 
 class TargetsCustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
-    """Unit tests for CustomObjectTypeField.targets_custom_object_type (#664 review)."""
+    """Unit tests for CustomObjectTypeField.targets_custom_object_type."""
 
     def test_true_for_field_targeting_another_cot(self):
         target_type = self.create_custom_object_type(name="TargetsCOTTarget", slug="targets-cot-target")

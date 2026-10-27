@@ -48,7 +48,7 @@ def _ids(errors):
     return {e.id for e in errors}
 
 
-class CheckBranchingCompatibilityTest(SimpleTestCase):
+class CheckBranchingCompatibilityTestCase(SimpleTestCase):
     def test_no_branching_is_noop(self):
         """Without netbox-branching installed, the check returns no messages."""
         self.assertEqual(_run(branching_installed=False), [])
@@ -87,7 +87,7 @@ class CheckBranchingCompatibilityTest(SimpleTestCase):
         self.assertEqual(_ids(errors), {'netbox_custom_objects.W001'})
 
 
-class CheckRelatedTabsRegistrationTest(SimpleTestCase):
+class CheckRelatedTabsRegistrationTestCase(SimpleTestCase):
     """The check reads ``_register_tabs_error`` off the plugin's app config."""
 
     def _run(self, error):

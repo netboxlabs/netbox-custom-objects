@@ -17,8 +17,8 @@ from core.models import ObjectType
 from users.models import ObjectPermission
 
 
-class ValidationRegexAPITest(CustomObjectsTestCase, TestCase):
-    """Regression #763: validation_regex must be enforced on REST API writes, not just in the UI form."""
+class ValidationRegexAPITestCase(CustomObjectsTestCase, TestCase):
+    """validation_regex must be enforced on REST API writes, not just in the UI form."""
 
     def setUp(self):
         self.user = create_test_user('regexapiuser')
@@ -75,7 +75,7 @@ class ValidationRegexAPITest(CustomObjectsTestCase, TestCase):
         self.assertEqual(instance.code, 'ABC')
 
 
-class CoordinatesFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
+class CoordinatesFieldAPITestCase(CustomObjectsTestCase, NetBoxTestCase):
     """REST API behaviour for the coordinates field type."""
 
     @classmethod
@@ -200,7 +200,7 @@ class CoordinatesFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
         self.assertIsNone(obj.location_longitude)
 
 
-class ArrayFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
+class ArrayFieldAPITestCase(CustomObjectsTestCase, NetBoxTestCase):
     """REST API behaviour for the array field type."""
 
     @classmethod
@@ -285,7 +285,7 @@ class ArrayFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
         self.assertIn("array_element_type", response.data)
 
 
-class ColorFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
+class ColorFieldAPITestCase(CustomObjectsTestCase, NetBoxTestCase):
     """REST API behaviour for the color field type."""
 
     @classmethod
@@ -332,7 +332,7 @@ class ColorFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
                 self.assertIn("shade", response.data)
 
 
-class MACAddressFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
+class MACAddressFieldAPITestCase(CustomObjectsTestCase, NetBoxTestCase):
     """REST API behaviour for the MAC address field type."""
 
     @classmethod
@@ -411,8 +411,8 @@ class MACAddressFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
         self.assertEqual(field.default, "AA:BB:CC:DD:EE:FF")
 
 
-class URLFieldLinkTitleAPITest(CustomObjectsTestCase, NetBoxTestCase):
-    """REST API behaviour for the url field type's link-title support (issue #496)."""
+class URLFieldLinkTitleAPITestCase(CustomObjectsTestCase, NetBoxTestCase):
+    """REST API behaviour for the url field type's link-title support."""
 
     @classmethod
     def setUpTestData(cls):
@@ -485,7 +485,7 @@ class URLFieldLinkTitleAPITest(CustomObjectsTestCase, NetBoxTestCase):
         self.assertEqual(obj.website_title, "")
 
 
-class RequiredScalarFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
+class RequiredScalarFieldAPITestCase(CustomObjectsTestCase, NetBoxTestCase):
     """A scalar field marked "Required" must be enforced by the REST API, not just the UI form."""
 
     @classmethod
@@ -579,7 +579,7 @@ class RequiredScalarFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
             self.assertFalse(post_actions[field_name]["required"], field_name)
 
 
-class IntegerDecimalMinMaxAPITest(CustomObjectsTestCase, NetBoxTestCase):
+class IntegerDecimalMinMaxAPITestCase(CustomObjectsTestCase, NetBoxTestCase):
     """validation_minimum/maximum must be enforced by the REST API, not just the UI form."""
 
     @classmethod
@@ -646,7 +646,7 @@ class IntegerDecimalMinMaxAPITest(CustomObjectsTestCase, NetBoxTestCase):
                 self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
 
 
-class SelectMultiSelectValueLabelAPITest(CustomObjectsTestCase, NetBoxTestCase):
+class SelectMultiSelectValueLabelAPITestCase(CustomObjectsTestCase, NetBoxTestCase):
     """select/multiselect fields must read as {value, label}, matching core ChoiceField."""
 
     @classmethod
@@ -726,7 +726,7 @@ class SelectMultiSelectValueLabelAPITest(CustomObjectsTestCase, NetBoxTestCase):
         self.assertEqual(instance.tags_field, ["choice2"])
 
 
-class SelectMultiSelectNumericChoiceValueAPITest(CustomObjectsTestCase, NetBoxTestCase):
+class SelectMultiSelectNumericChoiceValueAPITestCase(CustomObjectsTestCase, NetBoxTestCase):
     """
     Choice values are always raw admin-typed strings, so a value like "1" or "true"
     must round-trip through the API even though core's ChoiceField would otherwise

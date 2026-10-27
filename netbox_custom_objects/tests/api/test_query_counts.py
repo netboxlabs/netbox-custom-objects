@@ -26,7 +26,7 @@ except ImportError:
 _HAS_BRANCHING = is_branching_enabled()
 
 
-class CustomObjectAPIQueryCountTest(CustomObjectsTestCase, TestCase):
+class CustomObjectAPIQueryCountTestCase(CustomObjectsTestCase, TestCase):
     """Query counts of the custom object list and detail endpoints, for a type with every relation kind."""
 
     query_count_model_label = 'customobject-api-relational'

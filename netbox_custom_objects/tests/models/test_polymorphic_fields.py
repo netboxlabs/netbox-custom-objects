@@ -3,13 +3,28 @@ Polymorphic object and multi-object fields at the model layer: deleting referenc
 objects, cycle detection and reverse descriptors.
 """
 
+from django.apps import apps
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
+from django.db import connection, transaction
 from django.test import TestCase
 
 from core.models import ObjectType
-from dcim.models import Site
+from dcim.models import Device, Site
+from ipam.choices import PrefixStatusChoices
+from ipam.models import Prefix
 
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.field_types import (
+    FIELD_TYPE_CLASS,
+    PolymorphicMultiObjectReverseManager,
+    PolymorphicObjectReverseManager,
+)
+from netbox_custom_objects.models import (
+    CustomObjectType,
+    CustomObjectTypeField,
+    _unwire_polymorphic_reverse_descriptors,
+)
 from netbox_custom_objects.tests.base import CustomObjectsTestCase
 
 
@@ -17,7 +32,7 @@ from netbox_custom_objects.tests.base import CustomObjectsTestCase
 # Referenced-object deletion
 # ---------------------------------------------------------------------------
 
-class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
+class ReferencedObjectDeletionTestCase(CustomObjectsTestCase, TestCase):
     """
     Tests for the on_delete behaviour when a referenced object (e.g. a Site) or
     the CustomObjectType itself is deleted.
@@ -83,7 +98,7 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
         self.assertIsNone(obj.poly_obj)
 
     def test_full_clean_flags_newly_assigned_gfk_pointing_at_deleted_object(self):
-        """A reference being set to an object that no longer exists is rejected (#771)."""
+        """A reference being set to an object that no longer exists is rejected."""
         site_pk = self.site.pk
         self.site.delete()
         obj = self.model(name="stale-gfk", poly_obj_content_type=self.site_ot, poly_obj_object_id=site_pk)
@@ -96,7 +111,7 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
         obj.full_clean()
 
     def test_full_clean_leaves_stored_stale_gfk_alone(self):
-        """A saved reference whose target was deleted later is only re-validated once it changes (#771)."""
+        """A saved reference whose target was deleted later is only re-validated once it changes."""
         obj = self.model.objects.create(name="stored-stale")
         site_pk = self.site.pk
         self.site.delete()
@@ -113,7 +128,7 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
         self.assertIn("poly_obj_object_id", cm.exception.error_dict)
 
     def test_full_clean_leaves_stored_half_set_gfk_alone(self):
-        """As above when the target type was deleted: content type NULL, object ID still set (#771)."""
+        """As above when the target type was deleted: content type NULL, object ID still set."""
         obj = self.model.objects.create(name="stored-half")
         self.model.objects.filter(pk=obj.pk).update(poly_obj_content_type=None, poly_obj_object_id=42)
         obj = self.model.objects.get(pk=obj.pk)
@@ -121,7 +136,7 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
         obj.full_clean()
 
     def test_full_clean_rejects_half_set_gfk(self):
-        """A content type without an object ID (or vice versa) fails validation (#771)."""
+        """A content type without an object ID (or vice versa) fails validation."""
         obj = self.model(name="half-gfk")
         obj.poly_obj_content_type = self.site_ot
         with self.assertRaises(ValidationError) as cm:
@@ -135,7 +150,7 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
         self.assertIn("poly_obj_content_type", cm.exception.error_dict)
 
     def test_full_clean_skips_gfk_columns_it_was_told_to_exclude(self):
-        """A bad reference is ignored when its backing columns are excluded, as a ModelForm does (#771)."""
+        """A bad reference is ignored when its backing columns are excluded, as a ModelForm does."""
         site_pk = self.site.pk
         self.site.delete()
         obj = self.model(name="stale-gfk-excluded", poly_obj_content_type=self.site_ot, poly_obj_object_id=site_pk)
@@ -144,8 +159,7 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
         obj.full_clean(exclude=["poly_obj_content_type", "poly_obj_object_id"])
 
     def test_full_clean_flags_gfk_whose_model_is_not_installed(self):
-        """A content type with no installed model is reported on its column, not raised as AttributeError (#771)."""
-        from django.contrib.contenttypes.models import ContentType
+        """A content type with no installed model is reported on its column, not raised as AttributeError."""
         gone = ContentType.objects.create(app_label="gone_plugin", model="widget")
         # get_for_id() caches the row process-wide; don't let it outlive the test.
         self.addCleanup(ContentType.objects.clear_cache)
@@ -195,10 +209,6 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
         Deleting a CustomObjectType drops its DB table, drops polymorphic through
         tables, and removes the model from Django's app registry.
         """
-        from django.apps import apps as django_apps
-        from django.db import connection
-        from netbox_custom_objects.constants import APP_LABEL
-
         main_table = self.cot.get_database_table_name()
         through_table = self.m2m_field.through_table_name
         through_model_name = self.m2m_field.through_model_name
@@ -217,16 +227,16 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
         self.assertNotIn(through_table, existing_tables, "Through table should be dropped.")
 
         # Model and through model must be de-registered from the app registry.
-        self.assertNotIn(model_name, django_apps.all_models.get(APP_LABEL, {}))
+        self.assertNotIn(model_name, apps.all_models.get(APP_LABEL, {}))
         self.assertNotIn(
-            through_model_name.lower(), django_apps.all_models.get(APP_LABEL, {})
+            through_model_name.lower(), apps.all_models.get(APP_LABEL, {})
         )
 
     def test_remove_poly_obj_columns_succeeds_with_pending_deferred_triggers(self):
         """
         remove_polymorphic_object_columns() must not raise
         "cannot ALTER TABLE because it has pending trigger events" when the
-        source row was deleted inside the same transaction (issue #595 regression).
+        source row was deleted inside the same transaction.
 
         The through-table created by the MULTIOBJECT field has a source_id FK:
             custom_objects_<id>_poly_multi.source_id → custom_objects_<id>.id
@@ -246,9 +256,6 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
         finds no FK violation and clears the pending event, allowing the ALTER
         TABLE to proceed.
         """
-        from django.db import connection, transaction as db_transaction
-        from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
-
         # Create an instance with the MULTIOBJECT populated so the through-table
         # has a row referencing the source.
         obj = self.model.objects.create(name="revert-repro")
@@ -257,7 +264,7 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
         main_table = self.model._meta.db_table
         through_table = self.m2m_field.through_table_name
 
-        with db_transaction.atomic():
+        with transaction.atomic():
             with connection.cursor() as cursor:
                 # Step 1: delete through-table rows first (mirrors the branching
                 # revert path, which cascades child rows before removing the COT
@@ -286,7 +293,7 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
 # Cycle-detection: multi-hop polymorphic cycles
 # ---------------------------------------------------------------------------
 
-class PolymorphicCycleDetectionTest(CustomObjectsTestCase, TestCase):
+class PolymorphicCycleDetectionTestCase(CustomObjectsTestCase, TestCase):
     """
     Verifies that _has_circular_reference detects cycles that pass entirely
     through polymorphic legs.
@@ -399,10 +406,10 @@ class PolymorphicCycleDetectionTest(CustomObjectsTestCase, TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Polymorphic reverse descriptor tests (issue #385 / PR #548)
+# Polymorphic reverse descriptor tests
 # ---------------------------------------------------------------------------
 
-class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
+class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
     """Verify that polymorphic GFK and M2M fields with a related_name expose a working
     reverse accessor on target model instances."""
 
@@ -443,9 +450,6 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
 
     def test_gfk_reverse_descriptor_returns_matching_instances(self):
         """site.related_name.all() returns CO instances whose GFK points at that site."""
-        from ipam.models import Prefix
-        from ipam.choices import PrefixStatusChoices
-
         self._create_gfk_field(related_name="co_gfk_rev")
         model = self.cot.get_model()
 
@@ -500,7 +504,6 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
 
     def test_gfk_reverse_descriptor_wired_when_type_added(self):
         """Adding a type to related_object_types after initial wiring injects the descriptor via m2m_changed."""
-        from dcim.models import Device
         device_ot = ObjectType.objects.get(app_label="dcim", model="device")
 
         field = CustomObjectTypeField.objects.create(
@@ -569,9 +572,6 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
 
     def test_m2m_reverse_descriptor_returns_matching_instances(self):
         """site.related_name.all() returns CO instances whose M2M includes that site."""
-        from ipam.models import Prefix
-        from ipam.choices import PrefixStatusChoices
-
         self._create_m2m_field(related_name="co_m2m_rev")
         model = self.cot.get_model()
 
@@ -625,7 +625,6 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
 
     def test_m2m_reverse_descriptor_wired_when_type_added(self):
         """Adding a type via m2m_changed post_add wires the M2M reverse descriptor."""
-        from dcim.models import Device
         device_ot = ObjectType.objects.get(app_label="dcim", model="device")
 
         field = CustomObjectTypeField.objects.create(
@@ -697,8 +696,7 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
         duplicate.save()
         duplicate.related_object_types.set([self.site_ot])
 
-        from django.core.exceptions import ValidationError as DjangoValidationError
-        with self.assertRaises(DjangoValidationError):
+        with self.assertRaises(ValidationError):
             duplicate.full_clean()
 
     def test_gfk_reverse_descriptor_cleaned_up_on_related_name_rename(self):
@@ -746,8 +744,6 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
     def test_related_name_colliding_with_target_model_attribute_raises(self):
         """full_clean() must reject a related_name that clashes with a pre-existing attribute
         on the target model class, to prevent silently clobbering it."""
-        from django.core.exceptions import ValidationError as DjangoValidationError
-
         # Use a controlled sentinel so the test is self-contained regardless of prior
         # test state (Site.__dict__ can be dirty after earlier tests run _wire).
         attr_name = "_co_collision_test_attr"
@@ -764,7 +760,7 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
             field.save()
             field.related_object_types.set([self.site_ot])
 
-            with self.assertRaises(DjangoValidationError) as cm:
+            with self.assertRaises(ValidationError) as cm:
                 field.full_clean()
             self.assertIn("related_name", cm.exception.message_dict)
         finally:
@@ -802,8 +798,6 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
         """full_clean() must reject a related_name that shadows an inherited method on the
         target model (e.g. 'save'), not just directly-defined attributes.
         Regression for the __dict__.get vs getattr gap reported by Arthur."""
-        from django.core.exceptions import ValidationError as DjangoValidationError
-
         field = CustomObjectTypeField(
             custom_object_type=self.cot,
             name="save_collision_obj",
@@ -814,7 +808,7 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
         field.save()
         field.related_object_types.set([self.site_ot])
 
-        with self.assertRaises(DjangoValidationError) as cm:
+        with self.assertRaises(ValidationError) as cm:
             field.full_clean()
         self.assertIn("related_name", cm.exception.message_dict)
 
@@ -885,8 +879,6 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
     def test_source_model_deleted_returns_empty_queryset(self):
         """Accessing .all() on a stale reverse descriptor returns an empty queryset
         rather than raising DoesNotExist when the source COT has been deleted."""
-        from netbox_custom_objects.field_types import PolymorphicObjectReverseManager
-
         site = Site.objects.create(name="Stale Test Site", slug="stale-test-site")
         nonexistent_cot_pk = 999999
         field = self._create_gfk_field(related_name="co_stale_ref")
@@ -898,8 +890,6 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
 
     def test_source_model_deleted_multiobject_returns_empty_queryset(self):
         """Same as above for the M2M (MultiObject) reverse manager."""
-        from netbox_custom_objects.field_types import PolymorphicMultiObjectReverseManager
-
         site = Site.objects.create(name="Stale M2M Site", slug="stale-m2m-site")
         nonexistent_cot_pk = 999999
         manager = PolymorphicMultiObjectReverseManager(site, nonexistent_cot_pk, "NonExistentThrough")
@@ -919,7 +909,7 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
 
     def test_gfk_accessor_regenerates_stale_cached_model(self):
         """A field change on another worker bumps cache_timestamp but leaves this
-        worker's cached model untouched; the accessor must regenerate it (#766)."""
+        worker's cached model untouched; the accessor must regenerate it."""
         self._create_gfk_field(related_name="co_gfk_stale")
         stale_model = self.cot.get_model()
         stale_entry = CustomObjectType._model_cache[(self.cot.pk, None)]
@@ -1003,8 +993,6 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
     def test_cross_type_related_name_collision_poly_vs_nonpoly_raises(self):
         """full_clean() must reject a polymorphic field whose related_name collides
         with a non-polymorphic field on the same target type."""
-        from django.core.exceptions import ValidationError as DjangoValidationError
-
         # Create a non-polymorphic Object field with related_name on Site.
         CustomObjectTypeField.objects.create(
             custom_object_type=self.cot,
@@ -1033,15 +1021,13 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
         poly_field.save()
         poly_field.related_object_types.set([self.site_ot])
 
-        with self.assertRaises(DjangoValidationError) as cm:
+        with self.assertRaises(ValidationError) as cm:
             poly_field.full_clean()
         self.assertIn("related_name", cm.exception.message_dict)
 
     def test_cross_type_related_name_collision_nonpoly_vs_poly_raises(self):
         """full_clean() must reject a non-polymorphic field whose related_name collides
         with a polymorphic field on the same target type."""
-        from django.core.exceptions import ValidationError as DjangoValidationError
-
         # Create a polymorphic field on a second COT first.
         cot2 = CustomObjectType.objects.create(
             name="CrossTypeTest2", slug="cross-type-test-2",
@@ -1069,15 +1055,13 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
             related_name="co_cross_type_name2",
         )
 
-        with self.assertRaises(DjangoValidationError) as cm:
+        with self.assertRaises(ValidationError) as cm:
             np_field.full_clean()
         self.assertIn("related_name", cm.exception.message_dict)
 
     def test_unwire_does_not_remove_descriptor_owned_by_different_field(self):
         """Deleting a field that was blocked from wiring must not remove the descriptor
         that a different, still-active field owns at the same related_name."""
-        from netbox_custom_objects.models import _unwire_polymorphic_reverse_descriptors
-
         # COT B wires co_shared_ref onto Site first.
         cot_b = CustomObjectType.objects.create(
             name="UnwireTestB", slug="unwire-test-b",

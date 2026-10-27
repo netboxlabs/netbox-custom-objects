@@ -485,7 +485,7 @@ class CustomObjectViewTestCase(
 
     @override_settings(EXEMPT_VIEW_PERMISSIONS=['*'])
     def test_get_object_changelog(self):
-        """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
+        """Changelog tab must return 200, not 500 from deprecated user kwarg."""
         url = self._get_url('changelog', self.instance1)
         self.assertHttpStatus(self.client.get(url), 200)
 
@@ -501,7 +501,7 @@ class CustomObjectViewTestCase(
                 self.assertHttpStatus(self.client.get(self._get_url(tab, self.instance2)), 404)
 
     def _assert_get_queryset_does_not_full_scan(self, view_class):
-        """Regression #620 helper.
+        """Helper for the get_queryset() regression tests.
 
         All three bulk views (import/edit/delete) previously did
         ``if self.queryset:`` in ``get_queryset()``, whose ``QuerySet.__bool__``
@@ -547,15 +547,15 @@ class CustomObjectViewTestCase(
         )
 
     def test_bulk_import_get_queryset_does_not_full_scan(self):
-        """Regression #620: CustomObjectBulkImportView.get_queryset()."""
+        """CustomObjectBulkImportView.get_queryset()."""
         self._assert_get_queryset_does_not_full_scan(views.CustomObjectBulkImportView)
 
     def test_bulk_edit_get_queryset_does_not_full_scan(self):
-        """Regression #620: CustomObjectBulkEditView.get_queryset()."""
+        """CustomObjectBulkEditView.get_queryset()."""
         self._assert_get_queryset_does_not_full_scan(views.CustomObjectBulkEditView)
 
     def test_bulk_edit_form_nullable_fields_includes_scalar_fields(self):
-        """Regression #621: bulk edit must offer 'Set null' for real, nullable fields."""
+        """Bulk edit must offer 'Set null' for real, nullable fields."""
         request = RequestFactory().get('/')
         request.user = self.user
 
@@ -570,7 +570,7 @@ class CustomObjectViewTestCase(
         self.assertNotIn('name', view.form.nullable_fields)
 
     def test_bulk_edit_set_null_clears_field(self):
-        """Regression #621: checking 'Set null' for a field must clear it across selected objects."""
+        """Checking 'Set null' for a field must clear it across selected objects."""
         content_type = ContentType.objects.get_for_model(self.model)
         obj_perm = ObjectPermission(name='bulk-edit-set-null', actions=['view', 'change'])
         obj_perm.save()
@@ -644,7 +644,7 @@ class CustomObjectViewTestCase(
 
     def test_bulk_edit_set_null_clears_object_and_multiobject_fields(self):
         """
-        Regression #621: non-polymorphic object/multiobject fields must also support
+        Non-polymorphic object/multiobject fields must also support
         'Set null' in bulk edit -- they map to a real, nullable FK column / M2M relation
         (like core's Site.asns), unlike polymorphic fields which are excluded.
         """
@@ -695,12 +695,12 @@ class CustomObjectViewTestCase(
         self.assertEqual(obj2.sites.count(), 0)
 
     def test_bulk_delete_get_queryset_does_not_full_scan(self):
-        """Regression #620: CustomObjectBulkDeleteView.get_queryset()."""
+        """CustomObjectBulkDeleteView.get_queryset()."""
         self._assert_get_queryset_does_not_full_scan(views.CustomObjectBulkDeleteView)
 
     def test_bulk_import_omits_hidden_required_field_from_form(self):
         """
-        Regression #626: a Required+Hidden field must be omitted from the bulk import
+        A Required+Hidden field must be omitted from the bulk import
         form (not disabled, which ignores submitted data and always fails "This field
         is required"). Own COT used to avoid leaking model-cache state into other tests.
         """
@@ -733,7 +733,7 @@ class CustomObjectViewTestCase(
 
     def test_bulk_import_silently_ignores_value_for_hidden_field(self):
         """
-        Regression #626: matches the original bug report's payload (a value supplied
+        Matches the original bug report's payload (a value supplied
         for the hidden field). It must not error, and the value must be silently
         dropped rather than written, matching core NetBox's own CSV import behavior.
         """
@@ -766,7 +766,7 @@ class CustomObjectViewTestCase(
         self.assertIsNone(instance.identifier)
 
     def test_bulk_import_enforces_validation_regex(self):
-        """Regression #763: CSV/bulk import must reject values that don't match validation_regex."""
+        """CSV/bulk import must reject values that don't match validation_regex."""
         cot = self.create_custom_object_type(name='RegexImportTest', slug='regex-import-test')
         self.create_custom_object_type_field(
             cot, name='code', label='Code', type='text', validation_regex=r'^[A-Z]{3}$',
@@ -791,7 +791,7 @@ class CustomObjectViewTestCase(
         self.assertTrue(form.is_valid(), form.errors)
 
     def test_edit_form_omits_hidden_field(self):
-        """Regression #645: a hidden field must be omitted from the edit form, not just disabled."""
+        """A hidden field must be omitted from the edit form, not just disabled."""
         cot = self.create_custom_object_type(name='HiddenFieldEditTest', slug='hidden-field-edit-test')
         self.create_custom_object_type_field(
             cot, name='name', label='Name', type='text', primary=True,
@@ -814,7 +814,7 @@ class CustomObjectViewTestCase(
         self.assertIn('readonly', view.form.base_fields)
 
     def test_bulk_edit_form_omits_hidden_field(self):
-        """Regression #645: same as above, for the bulk edit form."""
+        """Same as above, for the bulk edit form."""
         cot = self.create_custom_object_type(name='HiddenFieldBulkEditTest', slug='hidden-field-bulk-edit-test')
         self.create_custom_object_type_field(
             cot, name='name', label='Name', type='text', primary=True,
@@ -836,7 +836,7 @@ class CustomObjectViewTestCase(
         self.assertIn('readonly', view.form.base_fields)
 
     def test_edit_form_omits_hidden_coordinates_field(self):
-        """Regression #645: a hidden coordinates field must omit both its lat/long sub-fields."""
+        """A hidden coordinates field must omit both its lat/long sub-fields."""
         cot = self.create_custom_object_type(name='HiddenCoordsEditTest', slug='hidden-coords-edit-test')
         self.create_custom_object_type_field(
             cot, name='name', label='Name', type='text', primary=True,
@@ -855,7 +855,7 @@ class CustomObjectViewTestCase(
         self.assertNotIn('location_longitude', view.form.base_fields)
 
     def test_bulk_edit_form_omits_hidden_coordinates_field(self):
-        """Regression #645: same as above, for the bulk edit form."""
+        """Same as above, for the bulk edit form."""
         cot = self.create_custom_object_type(name='HiddenCoordsBulkEditTest', slug='hidden-coords-bulk-edit-test')
         self.create_custom_object_type_field(
             cot, name='name', label='Name', type='text', primary=True,
@@ -875,7 +875,7 @@ class CustomObjectViewTestCase(
 
     def test_edit_form_applies_hidden_multiobject_default_on_create(self):
         """
-        Regression #42/#645: a hidden non-polymorphic MultiObject field is a real M2M
+        A hidden non-polymorphic MultiObject field is a real M2M
         model attribute, so omitting it from the rendered form must not also skip
         applying its configured default when creating a new object.
         """
@@ -909,7 +909,7 @@ class CustomObjectViewTestCase(
 
     def test_edit_form_multiobject_default_for_cot_target_uses_full_cached_model(self):
         """
-        Regression #776: resolving a multi-object default that targets another COT must
+        Resolving a multi-object default that targets another COT must
         use plain get_model(), so the form build leaves a full model in the cache rather
         than an uncached partial one.
         """
@@ -950,7 +950,7 @@ class CustomObjectViewTestCase(
 
     def test_edit_form_preserves_hidden_multiobject_relation_on_edit(self):
         """
-        Regression #645: editing an object must not clear a hidden MultiObject field's
+        Editing an object must not clear a hidden MultiObject field's
         existing relation -- there is no rendered input for it to come from, and a
         hidden field is defined as neither displayed nor editable.
         """
@@ -987,7 +987,7 @@ class CustomObjectViewTestCase(
         self.assertEqual(set(instance.sites.values_list('pk', flat=True)), {site_a.pk, site_b.pk})
 
     def test_bulk_edit_select_all_respects_full_queryset(self):
-        """Regression #380: 'select all matching query' must edit all objects, not just the current page.
+        """'Select all matching query' must edit all objects, not just the current page.
 
         The fix sets self.filterset on BulkEditView so that the _all flag causes the view to
         build pk_list from the full queryset. We verify this by submitting a description update
@@ -1019,7 +1019,7 @@ class CustomObjectViewTestCase(
         self.assertEqual(model.objects.filter(description='updated-by-select-all').count(), total)
 
     def test_bulk_delete_select_all_respects_full_queryset(self):
-        """Regression #380: 'select all matching query' must delete all objects, not just the current page.
+        """'Select all matching query' must delete all objects, not just the current page.
 
         The fix sets self.filterset on BulkDeleteView so that the _all flag causes the view
         to build pk_list from the full queryset rather than from the submitted pk form field.
@@ -1053,7 +1053,7 @@ class CustomObjectViewTestCase(
         self.assertEqual(model.objects.count(), 0)
 
     def test_add_permission_is_sufficient_to_access_add_url(self):
-        """Regression #396: add-only permission must grant access to the add URL, not require change."""
+        """Add-only permission must grant access to the add URL, not require change."""
         model = self.model
         content_type = ContentType.objects.get_for_model(model)
         obj_perm = ObjectPermission(name='add-only', actions=['add'])
@@ -1276,7 +1276,7 @@ class ComplexCustomObjectViewTestCase(
 
     @override_settings(EXEMPT_VIEW_PERMISSIONS=['*'])
     def test_get_object_changelog(self):
-        """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
+        """Changelog tab must return 200, not 500 from deprecated user kwarg."""
         url = self._get_url('changelog', self.instance_1)
         self.assertHttpStatus(self.client.get(url), 200)
 
@@ -1284,7 +1284,7 @@ class ComplexCustomObjectViewTestCase(
 # COMPAT(netbox<4.6.0): CustomFieldChoiceSet has no choice_colors.
 @skipUnless(hasattr(CustomFieldChoiceSet, 'get_choice_color'), 'NetBox < 4.6.0 has no choice colors')
 class SelectFieldColorDetailViewTestCase(CustomObjectsTestCase, TestCase):
-    """Regression tests for #529: selection field colors render correctly in the detail view."""
+    """Regression tests: selection field colors render correctly in the detail view."""
 
     def setUp(self):
         super().setUp()
@@ -1329,7 +1329,7 @@ class SelectFieldColorDetailViewTestCase(CustomObjectsTestCase, TestCase):
         )
 
     def test_detail_view_renders_select_color_badge(self):
-        """Regression #529: select field with a color renders a colored badge in the detail view."""
+        """Select field with a color renders a colored badge in the detail view."""
         response = self.client.get(self._detail_url())
         self.assertEqual(response.status_code, 200)
         content = response.content.decode()
@@ -1337,7 +1337,7 @@ class SelectFieldColorDetailViewTestCase(CustomObjectsTestCase, TestCase):
         self.assertIn('Active', content)
 
     def test_detail_view_renders_multiselect_color_badges(self):
-        """Regression #529: multiselect field with colors renders colored badges in the detail view."""
+        """Multiselect field with colors renders colored badges in the detail view."""
         response = self.client.get(self._detail_url())
         self.assertEqual(response.status_code, 200)
         content = response.content.decode()
@@ -1515,7 +1515,7 @@ class ObjectFieldViewTestCase(
 
     @override_settings(EXEMPT_VIEW_PERMISSIONS=['*'])
     def test_get_object_changelog(self):
-        """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
+        """Changelog tab must return 200, not 500 from deprecated user kwarg."""
         if self.instance_1 is None:
             self.skipTest("DCIM models not available")
         url = self._get_url('changelog', self.instance_1)
@@ -1529,7 +1529,7 @@ class ObjectFieldViewTestCase(
         self.assertCountEqual(self.instance_3.sites.all(), [self.site, self.site_2])
 
     def test_delete_confirmation_page_with_populated_multiobject_field(self):
-        """Regression #477: delete confirmation page returns 200 and omits through-table model names."""
+        """Delete confirmation page returns 200 and omits through-table model names."""
         if self.instance_1 is None:
             self.skipTest("DCIM models not available")
         # Dynamic models have unpredictable permission names (table{id}model), so grant
@@ -1546,7 +1546,7 @@ class ObjectFieldViewTestCase(
 
 class ObjectSelectorViewTestCase(TestCase):
     """
-    Regression tests for issue #441: the HTMX object-selector endpoint must not
+    Regression tests: the HTMX object-selector endpoint must not
     return a 500 when the requested model is a dynamically-generated custom object
     type model.
 
@@ -1604,7 +1604,7 @@ class ObjectSelectorViewTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
 
 
-class CoordinatesFieldViewTest(CustomObjectsTestCase, TestCase):
+class CoordinatesFieldViewTestCase(CustomObjectsTestCase, TestCase):
     """UI form behaviour for the coordinates field type."""
 
     @classmethod
@@ -1718,7 +1718,7 @@ class CoordinatesFieldViewTest(CustomObjectsTestCase, TestCase):
         self.assertIsNone(obj.location_longitude)
 
 
-class ArrayFieldViewTest(CustomObjectsTestCase, TestCase):
+class ArrayFieldViewTestCase(CustomObjectsTestCase, TestCase):
     """UI behaviour for the array field type: JSON input, CSV import and formatted display."""
 
     @classmethod
@@ -1866,7 +1866,7 @@ class ArrayFieldViewTest(CustomObjectsTestCase, TestCase):
         self.assertFalse(form.fields["array_max_length"].disabled)
 
 
-class ColorFieldViewTest(CustomObjectsTestCase, TestCase):
+class ColorFieldViewTestCase(CustomObjectsTestCase, TestCase):
     """UI behaviour for the color field type."""
 
     @classmethod
@@ -1972,7 +1972,7 @@ class ColorFieldViewTest(CustomObjectsTestCase, TestCase):
         self.assertEqual(self.model.objects.get(name="Imported").shade, "00ff00")
 
 
-class MACAddressFieldViewTest(CustomObjectsTestCase, TestCase):
+class MACAddressFieldViewTestCase(CustomObjectsTestCase, TestCase):
     """UI behaviour for the MAC address field type."""
 
     @classmethod
@@ -2044,8 +2044,8 @@ class MACAddressFieldViewTest(CustomObjectsTestCase, TestCase):
         self.assertContains(response, "Invalid MAC address format")
 
 
-class URLFieldLinkTitleViewTest(CustomObjectsTestCase, TestCase):
-    """UI form behaviour for the url field type's link-title support (issue #496)."""
+class URLFieldLinkTitleViewTestCase(CustomObjectsTestCase, TestCase):
+    """UI form behaviour for the url field type's link-title support."""
 
     @classmethod
     def setUpTestData(cls):
@@ -2136,8 +2136,8 @@ class URLFieldLinkTitleViewTest(CustomObjectsTestCase, TestCase):
         self.assertNotContains(response, "Orphan Title")
 
 
-class ValidationRegexViewTest(CustomObjectsTestCase, TestCase):
-    """Regression #763: the standard add/edit form must enforce validation_regex (via the UI form field)."""
+class ValidationRegexViewTestCase(CustomObjectsTestCase, TestCase):
+    """The standard add/edit form must enforce validation_regex (via the UI form field)."""
 
     @classmethod
     def setUpTestData(cls):
@@ -2287,7 +2287,7 @@ class QuickAddViewTestCase(CustomObjectsTestCase, TestCase):
 
 
 class CustomObjectConfigContextViewTestCase(CustomObjectsTestCase, TestCase):
-    """Config context tab on custom object instances (#98)."""
+    """Config context tab on custom object instances."""
 
     def _config_context_url(self, cot, instance):
         return reverse(

@@ -5,7 +5,7 @@ Tests for the custom object endpoints in the OpenAPI schema.
 from django.test import TestCase
 
 
-class OpenAPISchemaTest(TestCase):
+class OpenAPISchemaTestCase(TestCase):
     """The custom object endpoints appear in the OpenAPI schema, described generically."""
 
     @classmethod

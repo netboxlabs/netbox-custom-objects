@@ -421,7 +421,7 @@ class ChoiceSetSearchLifecycleTestCase(BranchingTestBase, _TestBase):
 # ── Concurrent-edit merge tests ───────────────────────────────────────────────
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class BaseConcurrentEditMergeTests(BranchingTestBase):
+class BaseConcurrentEditMergeTestCase(BranchingTestBase):
     """
     Merge scenarios where both main and branch accumulate changes before merge().
 
@@ -580,12 +580,12 @@ class BaseConcurrentEditMergeTests(BranchingTestBase):
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class IterativeConcurrentEditMergeTestCase(BaseConcurrentEditMergeTests, _TestBase):
-    """Run BaseConcurrentEditMergeTests with the iterative merge strategy."""
+class IterativeConcurrentEditMergeTestCase(BaseConcurrentEditMergeTestCase, _TestBase):
+    """Run BaseConcurrentEditMergeTestCase with the iterative merge strategy."""
     MERGE_STRATEGY = 'iterative'
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class SquashConcurrentEditMergeTestCase(BaseConcurrentEditMergeTests, _TestBase):
-    """Run BaseConcurrentEditMergeTests with the squash merge strategy."""
+class SquashConcurrentEditMergeTestCase(BaseConcurrentEditMergeTestCase, _TestBase):
+    """Run BaseConcurrentEditMergeTestCase with the squash merge strategy."""
     MERGE_STRATEGY = 'squash'

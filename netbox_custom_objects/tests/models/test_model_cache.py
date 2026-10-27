@@ -6,16 +6,17 @@ from unittest import mock
 from unittest.mock import patch
 
 from django.apps import apps
-from django.apps import apps as django_apps
-from django.db import connection, transaction
+from django.db import transaction
 from django.test import TestCase
 
+import netbox_custom_objects as nco_pkg
 from core.models import ObjectType
 from dcim.models import Site
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.tests.base import CustomObjectsTestCase
+from utilities.testing import create_test_user
 
 
 class ModelCacheInvalidationTestCase(CustomObjectsTestCase, TestCase):
@@ -23,7 +24,7 @@ class ModelCacheInvalidationTestCase(CustomObjectsTestCase, TestCase):
     the types its object fields point at."""
 
     def test_cache_invalidation_on_cotf_save(self):
-        """#340 – cache_timestamp on the parent COT is updated when a field is saved."""
+        """cache_timestamp on the parent COT is updated when a field is saved."""
         cot = self.create_custom_object_type(name='cachetest', slug='cache-test')
         # Capture the initial timestamp
         initial_timestamp = cot.cache_timestamp
@@ -212,7 +213,7 @@ class ModelRegistryTestCase(CustomObjectsTestCase, TestCase):
     """Generated models in Django's app registry, and the classes other contexts generate."""
 
     def test_model_registered_in_apps_after_cotf_save(self):
-        """#335 – The regenerated model is present in apps.get_models() after a field change."""
+        """The regenerated model is present in apps.get_models() after a field change."""
         cot = self.create_custom_object_type(name='regtest', slug='reg-test')
         self.create_custom_object_type_field(
             cot,
@@ -297,7 +298,7 @@ class ModelRegistryTestCase(CustomObjectsTestCase, TestCase):
         )
 
     def test_model_generated_in_another_context_leaves_main_classes_alone(self):
-        """Generating models for a branch must not rewire main's classes (#765).
+        """Generating models for a branch must not rewire main's classes.
 
         Main's object FK, multi-object through and polymorphic through must keep
         pointing at main's classes, so main can still assign related objects and
@@ -321,7 +322,7 @@ class ModelRegistryTestCase(CustomObjectsTestCase, TestCase):
         model_source = cot_source.get_model()
         cot_target.refresh_from_db()
         model_target = cot_target.get_model()
-        main_poly_through = django_apps.get_model(APP_LABEL, poly_field.through_model_name)
+        main_poly_through = apps.get_model(APP_LABEL, poly_field.through_model_name)
 
         self.addCleanup(CustomObjectType.clear_model_cache)
         with mock.patch.object(CustomObjectType, '_active_branch_id', return_value=-1):
@@ -346,7 +347,7 @@ class ModelRegistryTestCase(CustomObjectsTestCase, TestCase):
         refs_through = model_source._meta.get_field('refs').remote_field.through
         self.assertIs(refs_through._meta.get_field('source').remote_field.model, model_source)
         self.assertIs(refs_through._meta.get_field('target').remote_field.model, model_target)
-        poly_through = django_apps.get_model(APP_LABEL, poly_field.through_model_name)
+        poly_through = apps.get_model(APP_LABEL, poly_field.through_model_name)
         self.assertIs(poly_through, main_poly_through)
         self.assertIs(poly_through._meta.get_field('source').remote_field.model, model_source)
 
@@ -360,12 +361,11 @@ class ModelRegistryTestCase(CustomObjectsTestCase, TestCase):
         self.assertFalse(poly_through.objects.filter(source_id=source.pk).exists())
 
 
-class PolymorphicThroughModelRegistrationTest(CustomObjectsTestCase, TestCase):
+class PolymorphicThroughModelRegistrationTestCase(CustomObjectsTestCase, TestCase):
     """Verify the through model is re-registered on model regeneration (simulates restart)."""
 
     def setUp(self):
         super().setUp()
-        from utilities.testing import create_test_user
         self.user = create_test_user("poly-reg-user")
         self.client.force_login(self.user)
 
@@ -386,9 +386,6 @@ class PolymorphicThroughModelRegistrationTest(CustomObjectsTestCase, TestCase):
 
     def test_through_model_registered_after_get_model(self):
         """After clearing the cache and calling get_model(), the through model is accessible."""
-        from django.apps import apps as django_apps
-        from netbox_custom_objects.constants import APP_LABEL
-
         # Simulate restart by clearing cache
         CustomObjectType.clear_model_cache()
 
@@ -398,7 +395,7 @@ class PolymorphicThroughModelRegistrationTest(CustomObjectsTestCase, TestCase):
         # The through model must be findable
         through_name = self.m2m_field.through_model_name
         try:
-            through = django_apps.get_model(APP_LABEL, through_name)
+            through = apps.get_model(APP_LABEL, through_name)
         except LookupError:
             self.fail(
                 f"Through model '{through_name}' not in app registry after get_model()."
@@ -409,16 +406,6 @@ class PolymorphicThroughModelRegistrationTest(CustomObjectsTestCase, TestCase):
 class FailedFieldChangeTestCase(CustomObjectsTestCase, TestCase):
     """A field change that fails, or whose transaction rolls back, leaves the cached and registered
     models matching the table."""
-
-    def _db_columns(self, model):
-        """Return the set of actual DB column names for a generated model's table."""
-        with connection.cursor() as cursor:
-            return {
-                col.name
-                for col in connection.introspection.get_table_description(
-                    cursor, model._meta.db_table
-                )
-            }
 
     def _assert_model_matches_db(self, cot):
         cot.refresh_from_db()
@@ -485,7 +472,7 @@ class FailedFieldChangeTestCase(CustomObjectsTestCase, TestCase):
 
     def test_field_changes_leave_the_class_in_use_alone(self):
         """DDL binds its fields to a throwaway class, so a request using the
-        current class mid-change never sees in-flight fields (#767)."""
+        current class mid-change never sees in-flight fields."""
         cot = self.create_custom_object_type(name='notouch', slug='no-touch')
         self.create_custom_object_type_field(cot, name='name', type='text', primary=True)
         field = self.create_custom_object_type_field(cot, name='coordinatescoordinates', type='text')
@@ -546,19 +533,19 @@ class FailedFieldChangeTestCase(CustomObjectsTestCase, TestCase):
         list(model.objects.all())
 
     def test_rollback_after_rename_rebuilds_the_cached_model(self):
-        """The saving instance's cache entry looks valid, since both carry the rolled-back timestamp (#767)."""
+        """The saving instance's cache entry looks valid, since both carry the rolled-back timestamp."""
         _cot, stale_cot = self._rename_then_roll_back()
         self._assert_fits_table(stale_cot.get_model())
 
     def test_rollback_after_rename_rebuilds_the_registered_model(self):
-        """Registry lookups (e.g. ContentType.model_class()) bypass get_model() and its cache check (#767)."""
+        """Registry lookups (e.g. ContentType.model_class()) bypass get_model() and its cache check."""
         cot, _stale_cot = self._rename_then_roll_back()
         self._assert_fits_table(apps.get_model(APP_LABEL, cot.get_table_model_name(cot.pk)))
 
     def test_rollback_after_rename_is_seen_from_a_later_transaction(self):
         """The connection that rolled back serves the next request too, so a lookup
         from inside that request's transaction must not mistake it for the one the
-        class was built in (#767)."""
+        class was built in."""
         cot, stale_cot = self._rename_then_roll_back()
         with transaction.atomic():
             self._assert_fits_table(stale_cot.get_model())
@@ -566,16 +553,10 @@ class FailedFieldChangeTestCase(CustomObjectsTestCase, TestCase):
 
 
 class PolymorphicReverseDescriptorRecursionTestCase(CustomObjectsTestCase, TestCase):
-    """Regression test for issue #686: generating a polymorphic field's
+    """Regression test: generating a polymorphic field's
     reverse descriptor raised RecursionError."""
 
     def test_get_model_with_polymorphic_related_name_does_not_recurse(self):
-        from unittest import mock
-
-        from django.apps import apps as django_apps
-
-        import netbox_custom_objects as nco_pkg
-
         site_ot = ObjectType.objects.get(app_label="dcim", model="site")
         prefix_ot = ObjectType.objects.get(app_label="ipam", model="prefix")
 
@@ -598,12 +579,12 @@ class PolymorphicReverseDescriptorRecursionTestCase(CustomObjectsTestCase, TestC
         # get_model() -> _after_model_generation() -> related_object_types.all()
         # hits the "first access" path that triggers apps.get_models().
         cot.clear_model_cache(cot.id)
-        django_apps.clear_cache()
+        apps.clear_cache()
 
         # should_skip_dynamic_model_creation() disables get_models()'s
         # CustomObjectType loop under `manage.py test`; bypass it so this test
         # exercises the real vulnerable code path.
-        app_config = django_apps.get_app_config('netbox_custom_objects')
+        app_config = apps.get_app_config('netbox_custom_objects')
         with (
             mock.patch.object(nco_pkg, '_app_ready', True),
             mock.patch.object(app_config, 'should_skip_dynamic_model_creation', return_value=False),
@@ -615,10 +596,10 @@ class PolymorphicReverseDescriptorRecursionTestCase(CustomObjectsTestCase, TestC
         # a nested get_models() call triggered mid-generation (as above) can
         # leave get_model()'s return value out of sync with what's actually
         # registered in the app registry.
-        registered_model = django_apps.get_model(APP_LABEL, model.__name__)
+        registered_model = apps.get_model(APP_LABEL, model.__name__)
         self.assertIn(
             registered_model,
-            django_apps.get_models(),
+            apps.get_models(),
             "Generated model should be returned by apps.get_models().",
         )
         self.assertTrue(
@@ -633,12 +614,6 @@ class GetModelCacheRegistryConsistencyTestCase(CustomObjectsTestCase, TestCase):
     _model_cache and apps.all_models pointing at two different classes."""
 
     def test_get_model_registers_the_same_class_it_returns_and_caches(self):
-        from unittest import mock
-
-        from django.apps import apps as django_apps
-
-        import netbox_custom_objects as nco_pkg
-
         site_ot = ObjectType.objects.get(app_label="dcim", model="site")
         prefix_ot = ObjectType.objects.get(app_label="ipam", model="prefix")
 
@@ -659,9 +634,9 @@ class GetModelCacheRegistryConsistencyTestCase(CustomObjectsTestCase, TestCase):
 
         # Same setup as the sibling recursion test, to force the re-entrant path.
         cot.clear_model_cache(cot.id)
-        django_apps.clear_cache()
+        apps.clear_cache()
 
-        app_config = django_apps.get_app_config('netbox_custom_objects')
+        app_config = apps.get_app_config('netbox_custom_objects')
         with (
             mock.patch.object(nco_pkg, '_app_ready', True),
             mock.patch.object(app_config, 'should_skip_dynamic_model_creation', return_value=False),
@@ -670,7 +645,7 @@ class GetModelCacheRegistryConsistencyTestCase(CustomObjectsTestCase, TestCase):
         self.assertFalse(nco_pkg._generating_models.get())
 
         cached_model = CustomObjectType.get_cached_model(cot.id)
-        registered_model = django_apps.get_model(APP_LABEL, model.__name__)
+        registered_model = apps.get_model(APP_LABEL, model.__name__)
 
         # Must be the exact same class object, not just an equal one.
         self.assertIs(cached_model, model, "get_cached_model() must return the same class get_model() returned")
@@ -681,6 +656,6 @@ class GetModelCacheRegistryConsistencyTestCase(CustomObjectsTestCase, TestCase):
         )
         self.assertIn(
             registered_model,
-            django_apps.get_models(),
+            apps.get_models(),
             "Generated model should be returned by apps.get_models().",
         )

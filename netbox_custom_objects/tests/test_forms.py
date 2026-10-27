@@ -27,7 +27,7 @@ def _make_form(data, instance=None):
 
 
 class PolymorphicRelatedNameVisibilityTestCase(CustomObjectsTestCase, TestCase):
-    """Regression tests for issue #522: related_name field hidden when Polymorphic is checked.
+    """Regression tests: related_name field hidden when Polymorphic is checked.
 
     CustomObjectTypeFieldForm.__init__ removed related_object_type from self.fields
     when is_polymorphic=True (replacing it with related_object_types), then used
@@ -91,28 +91,28 @@ class PolymorphicRelatedNameVisibilityTestCase(CustomObjectsTestCase, TestCase):
         self.assertIn("related_name", _fieldset_fields(form))
 
     def test_related_name_visible_for_polymorphic_object(self):
-        """related_name must appear for polymorphic Object fields (regression: issue #522)."""
+        """related_name must appear for polymorphic Object fields."""
         form = self._bound_form(
             CustomFieldTypeChoices.TYPE_OBJECT,
             is_polymorphic=True,
             related_object_type_ids=[str(self.site_ot.pk)],
         )
         self.assertIn("related_name", form.fields,
-                      "related_name must not be deleted for polymorphic Object (issue #522)")
+                      "related_name must not be deleted for polymorphic Object")
         self.assertIn("related_name", _fieldset_fields(form),
-                      "related_name must appear in a fieldset for polymorphic Object (issue #522)")
+                      "related_name must appear in a fieldset for polymorphic Object")
 
     def test_related_name_visible_for_polymorphic_multiobject(self):
-        """related_name must appear for polymorphic MultiObject fields (regression: issue #522)."""
+        """related_name must appear for polymorphic MultiObject fields."""
         form = self._bound_form(
             CustomFieldTypeChoices.TYPE_MULTIOBJECT,
             is_polymorphic=True,
             related_object_type_ids=[str(self.site_ot.pk)],
         )
         self.assertIn("related_name", form.fields,
-                      "related_name must not be deleted for polymorphic MultiObject (issue #522)")
+                      "related_name must not be deleted for polymorphic MultiObject")
         self.assertIn("related_name", _fieldset_fields(form),
-                      "related_name must appear in a fieldset for polymorphic MultiObject (issue #522)")
+                      "related_name must appear in a fieldset for polymorphic MultiObject")
 
     def test_related_name_absent_for_non_object_type(self):
         """related_name must not appear for non-object field types (e.g. text)."""
@@ -231,7 +231,7 @@ class PolymorphicRelatedNameCollisionFormTestCase(CustomObjectsTestCase, TestCas
 
 class SchemaBookkeepingFieldsPreservedOnEditTestCase(CustomObjectsTestCase, TestCase):
     """
-    Regression #625: schema_id, deprecated, deprecated_since, and scheduled_removal
+    schema_id, deprecated, deprecated_since, and scheduled_removal
     are set outside this form (auto-assigned on creation, or via the portable-schema
     import mechanism) and are not rendered in any fieldset. An unrelated edit through
     CustomObjectTypeFieldForm must not silently reset them.

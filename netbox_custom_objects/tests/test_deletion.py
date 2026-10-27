@@ -54,7 +54,7 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
     # ------------------------------------------------------------------
 
     def test_delete_cot_with_instances(self):
-        """#140 – Deleting a COT must drop the backing table (and therefore all instances)."""
+        """Deleting a COT must drop the backing table (and therefore all instances)."""
         cot = self.create_simple_custom_object_type(name='deltest', slug='del-test')
         model = cot.get_model()
         table_name = cot.get_database_table_name()
@@ -79,7 +79,7 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         )
 
     def test_delete_co_referenced_by_another_co(self):
-        """#283/#471 – Deleting a CO that is the target of an object field must SET NULL
+        """Deleting a CO that is the target of an object field must SET NULL
         the referencing field on the source CO, not delete the source CO."""
         cot_a = self.create_simple_custom_object_type(name='typea', slug='type-a')
         cot_b = self.create_simple_custom_object_type(name='typeb', slug='type-b')
@@ -119,7 +119,7 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         )
 
     def test_delete_cot_referenced_by_another_cot(self):
-        """#183 – Deleting a COT must also clean up object fields in other COTs that reference it."""
+        """Deleting a COT must also clean up object fields in other COTs that reference it."""
         cot_target = self.create_simple_custom_object_type(name='target', slug='target-type')
         cot_source = self.create_simple_custom_object_type(name='source', slug='source-type')
 
@@ -143,7 +143,7 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         self.assertTrue(CustomObjectType.objects.filter(pk=cot_source.pk).exists())
 
     def test_delete_cotf_with_data(self):
-        """#367 – Deleting a field whose instances already contain data should succeed."""
+        """Deleting a field whose instances already contain data should succeed."""
         cot = self.create_simple_custom_object_type(name='fielddeltest', slug='field-del-test')
 
         extra_field = self.create_custom_object_type_field(
@@ -172,7 +172,7 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(fresh_model.objects.count(), 2)
 
     def test_delete_referenced_core_object(self):
-        """#471 – on_delete_behavior=set_null: deleting the referenced core object must SET NULL
+        """on_delete_behavior=set_null: deleting the referenced core object must SET NULL
         on the CO field, not delete the CO.
 
         The SET NULL behaviour is enforced at the database level via the ON DELETE SET NULL
@@ -458,11 +458,11 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         )
 
     # ------------------------------------------------------------------
-    # Cross-COT multiobject (M2M) deletion – issue #483
+    # Cross-COT multiobject (M2M) deletion
     # ------------------------------------------------------------------
 
     def test_delete_source_co_with_cross_cot_multiobject_field(self):
-        """#483 – Deleting a CO that is the SOURCE of a cross-COT M2M field
+        """Deleting a CO that is the SOURCE of a cross-COT M2M field
         succeeds and cascade-deletes the through rows."""
         cot_source = self.create_simple_custom_object_type(name='m2msrc', slug='m2m-src')
         cot_target = self.create_simple_custom_object_type(name='m2mtrg', slug='m2m-trg')
@@ -506,7 +506,7 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         )
 
     def test_delete_target_co_with_cross_cot_multiobject_field(self):
-        """#483 – Deleting a CO that is the TARGET of a cross-COT M2M field
+        """Deleting a CO that is the TARGET of a cross-COT M2M field
         succeeds and cascade-deletes the through rows."""
         cot_source = self.create_simple_custom_object_type(name='m2msrc2', slug='m2m-src2')
         cot_target = self.create_simple_custom_object_type(name='m2mtrg2', slug='m2m-trg2')
@@ -549,7 +549,7 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         )
 
     def test_delete_target_co_after_target_model_regeneration(self):
-        """#483 – Deletion of the target CO succeeds even after the TARGET COT's
+        """Deletion of the target CO succeeds even after the TARGET COT's
         model is regenerated (cache miss), which leaves the through model's target
         FK pointing at the old class.  The fix repoints the FK so the ORM-level
         cascade wires up correctly and the deletion succeeds."""
@@ -599,7 +599,7 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         )
 
     def test_delete_co_in_multi_hop_cross_cot_m2m_chain(self):
-        """#483 – Complex cross-COT chain: A.refs→B, B.ports→C.
+        """Complex cross-COT chain: A.refs→B, B.ports→C.
         Deleting a B instance must cascade-delete both A→B through rows and
         B→C through rows (B is both source and target in different M2M relations)."""
         cot_a = self.create_simple_custom_object_type(name='m2mcha', slug='m2m-ch-a')

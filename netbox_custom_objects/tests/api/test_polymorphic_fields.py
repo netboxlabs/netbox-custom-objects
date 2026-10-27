@@ -4,14 +4,18 @@ and reading and writing their values.
 """
 import json
 
-from django.test import TestCase
+from django.apps import apps
+from django.contrib.contenttypes.models import ContentType
+from django.test import Client, TestCase
 from django.urls import reverse
 from rest_framework import status
 
 from core.models import ObjectType
 from dcim.models import Site
+from extras.validators import CustomValidator
 from ipam.models import Prefix, IPAddress
 from ipam.choices import PrefixStatusChoices
+from utilities.testing import create_test_user
 
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
@@ -22,21 +26,19 @@ from netbox_custom_objects.tests.base import (
 )
 
 
-class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
+class PolymorphicFieldAPITestCase(CustomObjectsTestCase, TestCase):
     """
     API tests for polymorphic Object and MultiObject fields.
     """
 
     def setUp(self):
         super().setUp()
-        from django.test import Client as DjangoClient
-        from utilities.testing import create_test_user
         self.user = create_test_user("poly-api-user")
         token_key = create_token(self.user)
         self.header = {"HTTP_AUTHORIZATION": f"Token {token_key}"}
         # Reset client to clear the session cookie set by CustomObjectsTestCase.setUp()
         # (force_login causes SessionAuthentication to take priority over TokenAuthentication)
-        self.client = DjangoClient()
+        self.client = Client()
 
         # Site and Prefix used as related objects
         self.site = Site.objects.create(name="Test Site", slug="test-site")
@@ -76,7 +78,6 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
         self.m2m_field.related_object_types.set([self.site_ot, self.prefix_ot])
 
         self.model = self.cot.get_model()
-        self.field_perm_ot = ObjectType.objects.get_for_model(CustomObjectTypeField)
 
     # --- Field creation via API ---
 
@@ -264,7 +265,6 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
     def test_create_custom_object_with_polymorphic_gfk_via_api(self):
         """POST a custom object with a polymorphic single-object value (Site)."""
         _grant_perm(self.user, "add", self.model, "co-add")
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         data = {
             "name": "gfk-test-obj",
@@ -280,7 +280,6 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
     def test_create_custom_object_with_polymorphic_gfk_as_prefix(self):
         """POST a custom object with a polymorphic single-object value (Prefix)."""
         _grant_perm(self.user, "add", self.model, "co-add")
-        from django.contrib.contenttypes.models import ContentType
         prefix_ct = ContentType.objects.get_for_model(Prefix)
         data = {
             "name": "gfk-prefix-obj",
@@ -325,7 +324,7 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
         self.assertIsNone(obj.poly_obj)
 
     def test_patch_unrelated_field_with_stale_gfk_succeeds(self):
-        """PATCH of another field is not blocked by a stored reference whose target was deleted (#771)."""
+        """PATCH of another field is not blocked by a stored reference whose target was deleted."""
         _grant_perm(self.user, "change", self.model, "co-change-stale")
         obj = self.model.objects.create(name="gfk-stale-obj")
         site_pk = self.site.pk
@@ -345,9 +344,8 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
         self.assertEqual(obj.poly_obj_object_id, site_pk)
 
     def test_patch_gfk_to_deleted_object_rejected(self):
-        """PATCH pointing the reference at an object that no longer exists is a 400, not a 500 (#771)."""
+        """PATCH pointing the reference at an object that no longer exists is a 400, not a 500."""
         _grant_perm(self.user, "change", self.model, "co-change-deleted")
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         obj = self.model.objects.create(name="gfk-deleted-target")
         site_pk = self.site.pk
@@ -365,10 +363,7 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
 
     def test_custom_validator_sees_gfk_value_on_api_create(self):
         """A CUSTOM_VALIDATORS validate() call during API create must see the
-        submitted polymorphic GFK value, not None (#677)."""
-        from django.contrib.contenttypes.models import ContentType
-        from extras.validators import CustomValidator
-
+        submitted polymorphic GFK value, not None."""
         _grant_perm(self.user, "add", self.model, "co-add-validator")
         seen = {}
 
@@ -390,10 +385,7 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
 
     def test_custom_validator_sees_updated_gfk_value_on_api_update(self):
         """A CUSTOM_VALIDATORS validate() call during an API PATCH that changes the
-        polymorphic GFK value must see the new value, not the pre-update one (#677)."""
-        from django.contrib.contenttypes.models import ContentType
-        from extras.validators import CustomValidator
-
+        polymorphic GFK value must see the new value, not the pre-update one."""
         _grant_perm(self.user, "change", self.model, "co-change-validator")
         obj = self.model.objects.create(name="validator-api-update-obj")
         obj.poly_obj = self.site
@@ -418,8 +410,6 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
         """PATCHing poly_obj to null must clear it on the instance validate() runs
         against, and the None restore after validate() must still round-trip
         correctly into update()."""
-        from extras.validators import CustomValidator
-
         _grant_perm(self.user, "change", self.model, "co-change-validator-null")
         obj = self.model.objects.create(name="validator-api-clear-obj")
         obj.poly_obj = self.site
@@ -449,7 +439,6 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
     def test_create_custom_object_with_polymorphic_m2m_via_api(self):
         """POST a custom object with a list of heterogeneous polymorphic M2M values."""
         _grant_perm(self.user, "add", self.model, "co-add")
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         prefix_ct = ContentType.objects.get_for_model(Prefix)
         data = {
@@ -510,7 +499,6 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
         obj = self.model.objects.create(name="m2m-replace-obj")
         obj.poly_multi.add(self.site)
 
-        from django.contrib.contenttypes.models import ContentType
         prefix_ct = ContentType.objects.get_for_model(Prefix)
         response = self.client.patch(
             self._obj_detail_url(obj.pk),
@@ -563,7 +551,6 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
     def test_create_custom_object_with_disallowed_gfk_type_rejected(self):
         """POST with poly_obj set to a disallowed content type returns 400."""
         _grant_perm(self.user, "add", self.model, "co-add")
-        from django.contrib.contenttypes.models import ContentType
         ip_address = IPAddress.objects.create(address="192.0.2.1/24")
         disallowed_ct = ContentType.objects.get_for_model(IPAddress)
         data = {
@@ -582,7 +569,6 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
     def test_create_custom_object_with_disallowed_m2m_type_rejected(self):
         """POST with poly_multi containing a disallowed content type returns 400."""
         _grant_perm(self.user, "add", self.model, "co-add")
-        from django.contrib.contenttypes.models import ContentType
         ip_address = IPAddress.objects.create(address="192.0.2.2/24")
         disallowed_ct = ContentType.objects.get_for_model(IPAddress)
         site_ct = ContentType.objects.get_for_model(Site)
@@ -607,7 +593,6 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
     def test_delete_custom_object_with_gfk_value(self):
         """DELETE a custom object with a populated GFK polymorphic field returns 204 and removes the object."""
         _grant_perm(self.user, "delete", self.model, "co-delete")
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         obj = self.model.objects.create(
             name="gfk-delete-obj",
@@ -626,14 +611,13 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
         DELETE a custom object with populated M2M polymorphic values returns 204, removes the object,
         and cleans up through-table rows.
         """
-        from django.apps import apps as django_apps
         _grant_perm(self.user, "delete", self.model, "co-delete")
         obj = self.model.objects.create(name="m2m-delete-obj")
         obj.poly_multi.add(self.site, self.prefix)
         pk = obj.pk
 
         # Resolve the through model before the delete so we can verify cascade cleanup.
-        through_model = django_apps.get_model(APP_LABEL, self.m2m_field.through_model_name)
+        through_model = apps.get_model(APP_LABEL, self.m2m_field.through_model_name)
 
         response = self.client.delete(self._obj_detail_url(pk), **self.header)
 

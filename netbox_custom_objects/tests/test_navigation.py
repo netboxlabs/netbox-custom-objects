@@ -10,7 +10,7 @@ from netbox_custom_objects.navigation import get_grouped_menu_items, CustomObjec
 from .base import CustomObjectsTestCase
 
 
-class GetGroupedMenuItemsTest(CustomObjectsTestCase, TestCase):
+class GetGroupedMenuItemsTestCase(CustomObjectsTestCase, TestCase):
     """Tests for get_grouped_menu_items() navigation helper."""
 
     def setUp(self):
