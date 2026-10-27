@@ -213,8 +213,8 @@ class BulkEditOwnerTestCase(CustomObjectPageTestCase):
 class BulkImportPaneTestCase(CustomObjectPageTestCase):
     def test_direct_pane_active_by_default(self):
         response = self._get(self._url('bulk_import'))
-        self.assertContains(response, 'class="tab-pane show active" id="import-form"')
-        self.assertContains(response, 'class="tab-pane show" id="upload-form"')
+        self.assertContainsMarkup(response, 'class="tab-pane show active" id="import-form"')
+        self.assertContainsMarkup(response, 'class="tab-pane show" id="upload-form"')
 
     @skipUnless(Version('4.7') <= NETBOX_VERSION, 'NetBox passes import_method from 4.7')
     def test_failed_upload_shows_upload_pane(self):
@@ -227,8 +227,8 @@ class BulkImportPaneTestCase(CustomObjectPageTestCase):
                 'upload_file': SimpleUploadedFile('bad.csv', b'name,nonexistent\nx,y\n', content_type='text/csv'),
             },
         )
-        self.assertContains(response, 'class="tab-pane show active" id="upload-form"')
-        self.assertContains(response, 'class="tab-pane show" id="import-form"')
+        self.assertContainsMarkup(response, 'class="tab-pane show active" id="upload-form"')
+        self.assertContainsMarkup(response, 'class="tab-pane show" id="import-form"')
 
 
 class ListTableTestCase(CustomObjectPageTestCase):
@@ -291,8 +291,8 @@ class EditFormTestCase(CustomObjectPageTestCase):
                 page_title = re.search(r'<h1 class="page-title">(.*?)</h1>', response.content.decode(), re.S)
                 self.assertIsNotNone(page_title, f'h1.page-title not found for {url}')
                 self.assertEqual(' '.join(page_title.group(1).split()), title)
-                self.assertContains(response, '<h2 class="col-9 offset-3">Zone</h2>')
-                self.assertContains(response, '<h2 class="col-9 offset-3">Details</h2>')
+                self.assertContainsMarkup(response, '<h2 class="col-9 offset-3">Zone</h2>')
+                self.assertContainsMarkup(response, '<h2 class="col-9 offset-3">Details</h2>')
                 if Version('4.6') <= NETBOX_VERSION:
                     # Before 4.6, core's own edit buttons use btn-float.
                     self.assertNotContains(response, 'btn-float')

@@ -1,6 +1,7 @@
 # Test utilities for netbox_custom_objects plugin
 import contextlib
 import logging
+import re
 import time
 
 from django.apps import apps as django_apps
@@ -592,6 +593,16 @@ class CustomObjectsTestCase:
         field = CustomObjectTypeField.objects.create(**defaults)
         field.related_object_types.set(rot_list)
         return field
+
+    @staticmethod
+    def _collapse_markup(html):
+        """Collapse whitespace as a browser lays it out, so template formatting doesn't matter."""
+        return re.sub(r'\s*([<>])\s*', r'\1', re.sub(r'\s+', ' ', html))
+
+    def assertContainsMarkup(self, response, markup):
+        """assertContains, ignoring how the template wraps tags, attributes and text."""
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(self._collapse_markup(markup), self._collapse_markup(response.content.decode()))
 
     def _db_columns(self, model):
         """Return the set of actual DB column names for a generated model's table."""

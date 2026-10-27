@@ -155,15 +155,15 @@ class CombinedTabTestCase(CombinedTabMixin, CustomObjectsTestCase, TestCase):
     def test_type_filter(self):
         response = self._get(type='bridges')
         self.assertEqual(self._rows(response), ['Link Delta'])
-        self.assertContains(response, '<option value="bridges" selected>')
+        self.assertContainsMarkup(response, '<option value="bridges" selected>')
         # The choices come from every linked object, not just the filtered ones.
-        self.assertContains(response, '<option value="notes">')
+        self.assertContainsMarkup(response, '<option value="notes">')
 
     def test_tag_filter(self):
         response = self._get(tag='red')
         self.assertCountEqual(self._rows(response), ['Note Alpha', 'Link Delta'])
-        self.assertContains(response, '<option value="red" selected>')
-        self.assertContains(response, '<option value="blue">')
+        self.assertContainsMarkup(response, '<option value="red" selected>')
+        self.assertContainsMarkup(response, '<option value="blue">')
 
     def test_no_matches(self):
         response = self._get(q='nothing')
@@ -185,11 +185,11 @@ class CombinedTabTestCase(CombinedTabMixin, CustomObjectsTestCase, TestCase):
 
     def test_sort_headers_keep_filters(self):
         response = self._get(q='note', sort='object')
-        self.assertContains(response, '<th class="asc orderable">')
+        self.assertContainsMarkup(response, '<th class="asc orderable">')
         # The active column toggles to descending; its clear link drops only the sort.
-        self.assertContains(response, 'hx-get="?q=note&amp;sort=-object"')
-        self.assertContains(response, 'hx-get="?q=note" class="text-danger"')
-        self.assertContains(response, 'hx-get="?q=note&amp;sort=type"')
+        self.assertContainsMarkup(response, 'hx-get="?q=note&amp;sort=-object"')
+        self.assertContainsMarkup(response, 'hx-get="?q=note" class="text-danger"')
+        self.assertContainsMarkup(response, 'hx-get="?q=note&amp;sort=type"')
 
     def test_pagination(self):
         # Core's paginator moves up to five trailing rows onto the last page, so page 2
