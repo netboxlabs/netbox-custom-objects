@@ -70,7 +70,6 @@ Defer all version pins to `pyproject.toml` and `netbox_custom_objects/__init__.p
 │   │   └── custom_object_utils.py
 │   └── tests/
 │       ├── base.py                         — Shared test utilities and base cases.
-│       ├── plugin_testing.py               — Scaffold helpers for NetBox's view/API test cases under the plugin namespaces.
 │       ├── api/                            — REST API tests: custom objects, field values, types,
 │       │                                     fields, constraints, linked objects, config context.
 │       ├── test_concurrency.py             — Tests that run threads (TransactionTestCase).
