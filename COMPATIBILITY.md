@@ -37,22 +37,4 @@ release of Custom Objects.
 
 ## Upgrading
 
-When upgrading either NetBox or this plugin:
-
-1. Review the matrix above for the target combination.
-2. Back up the NetBox database.
-3. Install the new release of the plugin alongside (or after) the new NetBox release.
-4. Apply database migrations:
-   ```bash
-   python manage.py migrate
-   ```
-5. Collect static files, which include the plugin's in-app help pages:
-   ```bash
-   python manage.py collectstatic --no-input
-   ```
-6. Restart NetBox's WSGI and background worker processes:
-   ```bash
-   sudo systemctl restart netbox netbox-rq
-   ```
-
-`migrate` also adds any new columns that an upgrade needs to existing Custom Object Types' tables. To check for, or apply, those changes on their own, run `python manage.py upgrade_custom_objects` (add `--dry-run` to only report them).
+See [Upgrading](https://netboxlabs.com/docs/extensions/custom-objects/upgrading/) in the documentation.
