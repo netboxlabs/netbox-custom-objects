@@ -318,15 +318,15 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
 
     def get_related_object_type(self, obj):
         if obj.related_object_type:
-            return dict(
-                id=obj.related_object_type.id,
-                app_label=obj.related_object_type.app_label,
-                model=obj.related_object_type.model,
-            )
+            return {
+                'id': obj.related_object_type.id,
+                'app_label': obj.related_object_type.app_label,
+                'model': obj.related_object_type.model,
+            }
         return None
 
     def get_related_object_types(self, obj):
-        return [dict(id=ot.id, app_label=ot.app_label, model=ot.model) for ot in obj.related_object_types.all()]
+        return [{'id': ot.id, 'app_label': ot.app_label, 'model': ot.model} for ot in obj.related_object_types.all()]
 
     def create(self, validated_data):
         # Wrap save() + related_object_types.set() in an atomic block so that if

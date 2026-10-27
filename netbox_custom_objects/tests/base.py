@@ -1,4 +1,5 @@
 # Test utilities for netbox_custom_objects plugin
+import contextlib
 import logging
 import time
 
@@ -138,10 +139,8 @@ def _drop_branch_schemas():
     # if tearDown didn't track every connection that was opened during the test.
     for alias in list(connections):
         if alias != 'default':
-            try:
+            with contextlib.suppress(Exception):
                 connections[alias].close()
-            except Exception:
-                pass
 
     try:
         with connection.cursor() as cursor:
@@ -245,10 +244,8 @@ def _drop_dynamic_tables():
     # not the custom cot.delete() method which tries schema operations on tables
     # that no longer exist).  Wrapped in a broad except so a partially-migrated
     # schema never blocks test startup.
-    try:
+    with contextlib.suppress(Exception):
         CustomObjectType.objects.all().delete()
-    except Exception:
-        pass
 
     # Step 4 — drop all dynamic DB tables.
     all_tables = connection.introspection.table_names()

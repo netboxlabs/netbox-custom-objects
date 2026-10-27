@@ -70,9 +70,7 @@ def get_field_is_ui_visible(obj, field: CustomObjectTypeField) -> bool:
         )
     else:
         field_value = getattr(obj, field.name)
-    if field.ui_visible == CustomFieldUIVisibleChoices.IF_SET and field_value:
-        return True
-    return False
+    return bool(field.ui_visible == CustomFieldUIVisibleChoices.IF_SET and field_value)
 
 
 @register.filter(name='get_url_field_html')

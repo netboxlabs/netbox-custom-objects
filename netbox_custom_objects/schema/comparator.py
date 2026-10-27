@@ -43,6 +43,7 @@ Notes
   round-trip compatible with the schema format.
 """
 
+import contextlib
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -326,11 +327,9 @@ def _normalize_predicates(predicates, fields_by_schema_id: dict):
         if field is None or lookup == ConstraintLookupChoices.ISNULL or predicate_field_ref(value) is not None:
             normalized.append(predicate)
             continue
-        try:
+        # An invalid value is left as is; applying the document reports it.
+        with contextlib.suppress(ValidationError, TypeError):
             value = normalize_predicate_value(field, lookup, value)
-        except (ValidationError, TypeError):
-            # Invalid; applying the document reports it.
-            pass
         normalized.append({**predicate, 'value': value})
     return normalized
 

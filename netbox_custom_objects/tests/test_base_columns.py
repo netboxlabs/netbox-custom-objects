@@ -33,7 +33,7 @@ class CollectBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
 
     def test_base_columns_present_when_no_user_fields(self):
         """id, created, and last_updated must always appear as base columns."""
-        cot, model = self._make_cot_and_model('no_fields', 'no-fields')
+        _cot, model = self._make_cot_and_model('no_fields', 'no-fields')
         base = CustomObjectType._collect_base_columns(model, set())
         names = {c['name'] for c in base}
         self.assertIn('id', names)
@@ -42,7 +42,7 @@ class CollectBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
 
     def test_user_field_excluded_from_base_columns(self):
         """A user-defined field name must not appear in base columns."""
-        cot, model = self._make_cot_and_model('with_field', 'with-field', field_names=['my_text'])
+        _cot, model = self._make_cot_and_model('with_field', 'with-field', field_names=['my_text'])
         user_field_names = {'my_text'}
         base = CustomObjectType._collect_base_columns(model, user_field_names)
         names = {c['name'] for c in base}
@@ -51,7 +51,7 @@ class CollectBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
 
     def test_each_entry_has_required_keys(self):
         """Every base-column dict must carry name, field_class, and null."""
-        cot, model = self._make_cot_and_model('keys_check', 'keys-check')
+        _cot, model = self._make_cot_and_model('keys_check', 'keys-check')
         for entry in CustomObjectType._collect_base_columns(model, set()):
             self.assertIn('name', entry, f"Missing 'name' in {entry}")
             self.assertIn('field_class', entry, f"Missing 'field_class' in {entry}")
@@ -59,14 +59,14 @@ class CollectBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
 
     def test_id_field_class(self):
         """id should be reported as AutoField (or a subclass name)."""
-        cot, model = self._make_cot_and_model('id_type', 'id-type')
+        _cot, model = self._make_cot_and_model('id_type', 'id-type')
         base = CustomObjectType._collect_base_columns(model, set())
         id_entry = next(c for c in base if c['name'] == 'id')
         self.assertIn('Field', id_entry['field_class'])
 
     def test_multiple_user_fields_all_excluded(self):
         """All user-defined field names must be excluded regardless of count."""
-        cot, model = self._make_cot_and_model(
+        _cot, model = self._make_cot_and_model(
             'multi_fields',
             'multi-fields',
             field_names=['alpha', 'beta', 'gamma'],

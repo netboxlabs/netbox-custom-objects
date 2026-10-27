@@ -297,9 +297,11 @@ class BranchingReceiversTestCase(SimpleTestCase):
         heal_branch.assert_called_once_with(self.branch, verbosity=0)
 
     def test_heal_on_migrate_logs_failures(self):
-        with mock.patch('netbox_custom_objects.mixin_migration.heal_branch', side_effect=RuntimeError('boom')):
-            with self.assertLogs('netbox_custom_objects', level='ERROR') as logs:
-                _heal_branch_on_migrate(sender=None, branch=self.branch)
+        with (
+            mock.patch('netbox_custom_objects.mixin_migration.heal_branch', side_effect=RuntimeError('boom')),
+            self.assertLogs('netbox_custom_objects', level='ERROR') as logs,
+        ):
+            _heal_branch_on_migrate(sender=None, branch=self.branch)
         self.assertIn('healing branch 1 after migrate', logs.output[0])
 
 

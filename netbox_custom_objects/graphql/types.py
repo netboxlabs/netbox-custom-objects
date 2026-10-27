@@ -406,10 +406,7 @@ def _relationship_union_name(field):
 
 def _relationship_annotation(members, is_list, union_name):
     """Build the resolver return annotation from the resolved member types."""
-    if len(members) == 1:
-        inner = members[0]
-    else:
-        inner = Annotated[tuple(members), strawberry.union(union_name)]
+    inner = members[0] if len(members) == 1 else Annotated[tuple(members), strawberry.union(union_name)]
     return list[inner] if is_list else Optional[inner]
 
 

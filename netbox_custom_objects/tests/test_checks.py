@@ -24,11 +24,8 @@ def _run(*, branching_installed=True, netbox_version='4.6.2', branching_version=
     Exception instance/class to simulate the failure paths (a missing
     ``settings.RELEASE``, an unparsable version, or ``PackageNotFoundError``).
     """
-    if isinstance(netbox_version, str):
-        release = SimpleNamespace(version=netbox_version)
-    else:
-        # No RELEASE attribute -> accessing settings.RELEASE raises AttributeError.
-        release = None
+    # With no RELEASE attribute, accessing settings.RELEASE raises AttributeError.
+    release = SimpleNamespace(version=netbox_version) if isinstance(netbox_version, str) else None
 
     def fake_pkg_version(_name):
         if isinstance(branching_version, str):

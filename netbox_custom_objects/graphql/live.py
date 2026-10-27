@@ -33,6 +33,7 @@ The view patch in ``__init__.py`` calls :func:`get_live_schema` per request and
 assigns the result to the view before it executes the operation.
 """
 
+import contextlib
 import logging
 import threading
 from collections import OrderedDict
@@ -152,10 +153,8 @@ def cached_schema_signature(branch_key=None):
         return tuple(cached)
 
     signature = schema_signature()
-    try:
+    with contextlib.suppress(Exception):
         cache.set(key, signature, _SIGNATURE_CACHE_TIMEOUT)
-    except Exception:
-        pass
     return signature
 
 
@@ -424,10 +423,8 @@ def reset_cache():
     from django.core.cache import cache
 
     for key in list(_signature_keys_seen):
-        try:
+        with contextlib.suppress(Exception):
             cache.delete(key)
-        except Exception:
-            pass
     _signature_keys_seen.clear()
 
     from .types import clear_type_cache, reset_build_state

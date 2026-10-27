@@ -597,13 +597,13 @@ class UpgradeCustomObjectsCommandTestCase(CustomObjectsTestCase, TestCase):
 
     def test_command_runs_without_error(self):
         self.create_custom_object_type(name='cmd_basic', slug='cmd-basic')
-        stdout, stderr = self._call_command(verbosity=0)
+        _stdout, stderr = self._call_command(verbosity=0)
         # No exception means success; no DB errors in stderr
         self.assertNotIn('Error', stderr)
 
     def test_dry_run_flag_accepted(self):
         self.create_custom_object_type(name='cmd_dry', slug='cmd-dry')
-        stdout, stderr = self._call_command('--dry-run', verbosity=1)
+        stdout, _stderr = self._call_command('--dry-run', verbosity=1)
         self.assertIn('DRY RUN', stdout)
 
     def test_cot_flag_by_name(self):

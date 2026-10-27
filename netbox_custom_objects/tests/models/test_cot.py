@@ -299,9 +299,11 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         CustomObjectType.clear_model_cache(cot.id)
         # Simulate a stale ContentType: get_model_field raises NotImplementedError
         # while related_object_type_id is still set (non-null).
-        with patch.object(ObjectFieldType, 'get_model_field', side_effect=NotImplementedError):
-            with self.assertLogs('netbox_custom_objects.models', level='WARNING') as cm:
-                cot.get_model()
+        with (
+            patch.object(ObjectFieldType, 'get_model_field', side_effect=NotImplementedError),
+            self.assertLogs('netbox_custom_objects.models', level='WARNING') as cm,
+        ):
+            cot.get_model()
         self.assertTrue(
             any('device' in msg for msg in cm.output),
             f"Expected WARNING mentioning field name 'device'; got: {cm.output}",
@@ -831,9 +833,11 @@ class DisplayExpressionTestCase(CustomObjectsTestCase, TestCase):
         cot = self._make_cot('{{ make }}')
         instance = cot.get_model().objects.create(make='Extreme')
         # Only the expression's value fails, so swallowing the error would fall back to the primary field.
-        with patch.object(TextFieldType, 'get_display_value', side_effect=[DatabaseError('aborted'), 'Extreme']):
-            with self.assertRaises(DatabaseError):
-                str(instance)
+        with (
+            patch.object(TextFieldType, 'get_display_value', side_effect=[DatabaseError('aborted'), 'Extreme']),
+            self.assertRaises(DatabaseError),
+        ):
+            str(instance)
 
     def test_clean_rejects_invalid_syntax(self):
         for expression in ('{% invalid jinja %}', '{% if make %}{{ make }}', '{{ make', DEEPLY_NESTED_EXPRESSION):

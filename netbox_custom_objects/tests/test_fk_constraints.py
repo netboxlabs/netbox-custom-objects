@@ -236,7 +236,7 @@ class ObjectFieldFKConstraintCommitTestCase(TransactionCleanupMixin, CustomObjec
     def test_on_delete_change_after_pending_events_on_its_own_table(self):
         """Deferred events queued against the source table itself (an owner_id
         insert, and a delete seen by a through table's deferrable source FK)."""
-        src, tgt, site_field = self._make_source_and_target_types('fkown')
+        src, _tgt, site_field = self._make_source_and_target_types('fkown')
         src_model = src.get_model()
         owner = Owner.objects.create(name='fkown owner')
         doomed = src_model.objects.create(name='doomed')
@@ -251,7 +251,7 @@ class ObjectFieldFKConstraintCommitTestCase(TransactionCleanupMixin, CustomObjec
     def test_on_delete_change_after_pending_events_on_target_table(self):
         """Deleting a Site queues deferred events on dcim_site through core's
         deferrable NO ACTION FKs, as a merge replaying that delete would."""
-        src, tgt, site_field = self._make_source_and_target_types('fktgt')
+        src, _tgt, site_field = self._make_source_and_target_types('fktgt')
         site = Site.objects.create(name='fktgt site', slug='fktgt-site')
 
         with transaction.atomic():
@@ -264,7 +264,7 @@ class ObjectFieldFKConstraintCommitTestCase(TransactionCleanupMixin, CustomObjec
         """The target is a custom object type with its own multi-object field:
         deleting one of its rows queues a deferred event via the through
         table's deferrable NO ACTION source FK."""
-        src, tgt, site_field = self._make_source_and_target_types('fkcot')
+        src, tgt, _site_field = self._make_source_and_target_types('fkcot')
         self.create_custom_object_type_field(tgt, name='peers', type='multiobject', related_object_type=tgt.object_type)
         tgt_field = self.create_custom_object_type_field(
             src,

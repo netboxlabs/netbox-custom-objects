@@ -1,3 +1,4 @@
+import contextlib
 import logging
 
 from django.apps import apps as django_apps
@@ -318,10 +319,8 @@ class CustomObjectTableMixin(TableMixin):
             else:
                 # Define a method "render_table_column" method on any FieldType to customize output
                 # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
-                try:
+                with contextlib.suppress(AttributeError):
                     attrs[f'render_{field.name}'] = field_type.render_table_column
-                except AttributeError:
-                    pass
 
         self.table = type(
             f'{data.model._meta.object_name}Table',
@@ -463,10 +462,8 @@ class CustomObjectTypeFieldEditView(generic.ObjectEditView):
         if not obj.pk:
             cot_pk = request.GET.get('custom_object_type') or request.POST.get('custom_object_type')
             if cot_pk:
-                try:
+                with contextlib.suppress(ValueError, TypeError):
                     obj.custom_object_type_id = int(cot_pk)
-                except (ValueError, TypeError):
-                    pass
         return obj
 
 
@@ -480,10 +477,8 @@ class CustomObjectTypeConstraintEditView(generic.ObjectEditView):
         if not obj.pk:
             cot_pk = request.GET.get('custom_object_type') or request.POST.get('custom_object_type')
             if cot_pk:
-                try:
+                with contextlib.suppress(ValueError, TypeError):
                     obj.custom_object_type_id = int(cot_pk)
-                except (ValueError, TypeError):
-                    pass
         return obj
 
     def get_extra_addanother_params(self, request):
@@ -1241,10 +1236,7 @@ class CustomObjectDeleteView(RestrictedObjectMixin, generic.ObjectDeleteView):
         if obj is not None and obj.pk:
             return obj.get_absolute_url()
 
-        if obj:
-            custom_object_type = obj.custom_object_type.slug
-        else:
-            custom_object_type = self.kwargs.get('custom_object_type')
+        custom_object_type = obj.custom_object_type.slug if obj else self.kwargs.get('custom_object_type')
 
         return reverse(
             'plugins:netbox_custom_objects:customobject_list',
@@ -1472,10 +1464,8 @@ class CustomObjectBulkEditView(BackgroundJobURLKwargsMixin, CustomObjectTableMix
                 ct_pk_raw = _get_field_value(self, ct_sub)
                 model_class = None
                 if ct_pk_raw:
-                    try:
+                    with contextlib.suppress(TypeError, ValueError):
                         model_class = poly_obj_allowed.get(field_name, {}).get(int(ct_pk_raw))
-                    except (TypeError, ValueError):
-                        pass
                 if model_class is not None:
                     self.fields[obj_sub].disabled = False
                     self.fields[obj_sub].required = False

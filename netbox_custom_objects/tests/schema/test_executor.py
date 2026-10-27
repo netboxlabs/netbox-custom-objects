@@ -83,7 +83,7 @@ class ExecutorBuildDepOrderTestCase(SimpleTestCase):
     def test_no_dependencies_preserves_any_valid_order(self):
         diffs = [self._make_diff('x'), self._make_diff('y'), self._make_diff('z')]
         result = _build_dep_order(diffs)
-        self.assertEqual(set(d.slug for d in result), {'x', 'y', 'z'})
+        self.assertEqual({d.slug for d in result}, {'x', 'y', 'z'})
 
     def test_dependency_orders_dep_before_dependent(self):
         # b references a → a must come before b
@@ -126,7 +126,7 @@ class ExecutorBuildDepOrderTestCase(SimpleTestCase):
         a = self._make_diff('a', rot_refs=['dcim/device'])
         b = self._make_diff('b')
         result = _build_dep_order([a, b])
-        self.assertEqual(set(d.slug for d in result), {'a', 'b'})
+        self.assertEqual({d.slug for d in result}, {'a', 'b'})
 
     def test_polymorphic_rot_list_dependency_ordering(self):
         # b is listed in poly_a's related_object_types → b must come first.

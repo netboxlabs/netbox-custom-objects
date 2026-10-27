@@ -97,7 +97,7 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
         """
         from netbox_custom_objects.mixin_migration import heal_branch
 
-        cot, branch, table_name, branch_conn, _columns = self._setup_branch_with_dropped_title_column(
+        _cot, branch, _table_name, branch_conn, _columns = self._setup_branch_with_dropped_title_column(
             'heal_cot', 'heal-cot', 'site_link'
         )
 
@@ -127,7 +127,7 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
         """
         from django.core.management import call_command
 
-        cot, branch, table_name, branch_conn, _columns = self._setup_branch_with_dropped_title_column(
+        _cot, _branch, _table_name, branch_conn, _columns = self._setup_branch_with_dropped_title_column(
             'heal_cmd_cot', 'heal-cmd-cot', 'site_link'
         )
 
@@ -156,7 +156,7 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
         """
         from netbox_custom_objects.mixin_migration import heal_all_branches
 
-        cot, branch, table_name, branch_conn, _columns = self._setup_branch_with_dropped_title_column(
+        _cot, branch, _table_name, branch_conn, _columns = self._setup_branch_with_dropped_title_column(
             'heal_missing', 'heal-missing', 'site_link'
         )
         branch_conn.close()
@@ -187,7 +187,7 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
         """
         from netbox_custom_objects.mixin_migration import heal_all_branches
 
-        cot, branch, table_name, branch_conn, _columns = self._setup_branch_with_dropped_title_column(
+        _cot, _branch, _table_name, branch_conn, _columns = self._setup_branch_with_dropped_title_column(
             'heal_pending', 'heal-pending', 'site_link'
         )
 
@@ -213,7 +213,7 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
         from netbox_custom_objects import mixin_migration
         from netbox_custom_objects.mixin_migration import heal_all_branches
 
-        cot, branch1, table_name, branch1_conn, _columns = self._setup_branch_with_dropped_title_column(
+        cot, branch1, _table_name, branch1_conn, _columns = self._setup_branch_with_dropped_title_column(
             'heal_multi_a', 'heal-multi-a', 'site_link'
         )
         branch2 = _provision_branch('heal_multi_b branch', None, self.user)
@@ -256,7 +256,7 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
         """
         from netbox_custom_objects.mixin_migration import heal_all_branches
 
-        cot, branch, table_name, branch_conn, _columns = self._setup_branch_with_dropped_title_column(
+        _cot, _branch, _table_name, branch_conn, _columns = self._setup_branch_with_dropped_title_column(
             'heal_close', 'heal-close', 'site_link'
         )
         branch2 = _provision_branch('heal_close_pending branch', None, self.user)

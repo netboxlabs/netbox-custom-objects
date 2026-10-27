@@ -297,7 +297,7 @@ class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCas
 
         self.assertEqual(self._names('custom_objects_node_list', f'{{parent_id: "{root.pk}"}}'), ['child'])
 
-        data = self._gql('{ __type(name: "Table%sModelFilter") { inputFields { name } } }' % cot.pk)
+        data = self._gql('{ __type(name: "Table%sModelFilter") { inputFields { name } } }' % cot.pk)  # noqa: UP031
         names = {f['name'] for f in data['__type']['inputFields']}
         self.assertIn('parent_id', names)
         self.assertNotIn('parent', names)
@@ -331,7 +331,7 @@ class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCas
         model = cot.get_model()
         model.objects.create(name='s1', serial='ABC')
 
-        data = self._gql('{ __type(name: "Table%sModelFilter") { inputFields { name } } }' % cot.pk)
+        data = self._gql('{ __type(name: "Table%sModelFilter") { inputFields { name } } }' % cot.pk)  # noqa: UP031
         names = {f['name'] for f in data['__type']['inputFields']}
         self.assertIn('name', names)
         for excluded in ('serial', 'site', 'site_id', 'sites'):
@@ -362,7 +362,7 @@ class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCas
         return cot
 
     def _filter_input_names(self, cot):
-        data = self._gql('{ __type(name: "Table%sModelFilter") { inputFields { name } } }' % cot.pk)
+        data = self._gql('{ __type(name: "Table%sModelFilter") { inputFields { name } } }' % cot.pk)  # noqa: UP031
         return {f['name'] for f in data['__type']['inputFields']}
 
     def test_coordinates_field_filters(self):

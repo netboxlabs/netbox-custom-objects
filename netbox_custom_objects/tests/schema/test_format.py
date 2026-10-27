@@ -12,6 +12,7 @@ import json
 import unittest
 from pathlib import Path
 
+from django.core.exceptions import FieldDoesNotExist
 from django.db import IntegrityError, transaction
 from django.db.models.fields import NOT_PROVIDED
 from django.test import TestCase
@@ -284,14 +285,14 @@ class FieldDefaultsConsistencyTestCase(TestCase):
                 # Also verify the model field genuinely has no explicit default.
                 try:
                     model_field = CustomObjectTypeField._meta.get_field(schema_key)
-                    self.assertIs(
-                        model_field.default,
-                        NOT_PROVIDED,
-                        f'{schema_key} now has a model default — move it to _MODEL_DEFAULT_FIELDS.',
-                    )
-                except Exception:
+                except FieldDoesNotExist:
                     # Field may not exist on the model (type-specific virtual attrs).
-                    pass
+                    continue
+                self.assertIs(
+                    model_field.default,
+                    NOT_PROVIDED,
+                    f'{schema_key} now has a model default — move it to _MODEL_DEFAULT_FIELDS.',
+                )
 
     def test_constraint_defaults_match_model_defaults(self):
         """CONSTRAINT_DEFAULTS must match the CustomObjectTypeConstraint model defaults."""

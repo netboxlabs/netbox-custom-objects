@@ -432,10 +432,7 @@ class CustomObjectsPluginConfig(PluginConfig):
                 recorder = MigrationRecorder(connection)
                 applied_migrations = recorder.applied_migrations()
 
-                if (APP_LABEL, last_migration) not in applied_migrations:
-                    result = True
-                else:
-                    result = False
+                result = (APP_LABEL, last_migration) not in applied_migrations
 
             # Cache the result
             _migrations_checked = result
@@ -711,11 +708,11 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         cot_id_str = extract_cot_id_from_model_name(model_name)
         if cot_id_str is None:
-            raise LookupError("App '%s' doesn't have a '%s' model." % (self.label, model_name))
+            raise LookupError(f"App '{self.label}' doesn't have a '{model_name}' model.")
 
         # Guard against querying the DB when migrations haven't run yet
         if self.should_skip_dynamic_model_creation():
-            raise LookupError("App '%s' doesn't have a '%s' model." % (self.label, model_name))
+            raise LookupError(f"App '{self.label}' doesn't have a '{model_name}' model.")
 
         from .models import CustomObjectType
 
@@ -731,7 +728,7 @@ class CustomObjectsPluginConfig(PluginConfig):
             # error that would abort manage.py migrate.  obj.get_model() is
             # inside the block because it also queries CustomObjectTypeField,
             # which could be missing or have an absent column.
-            raise LookupError("App '%s' doesn't have a '%s' model." % (self.label, model_name))
+            raise LookupError(f"App '{self.label}' doesn't have a '{model_name}' model.")
 
     def get_models(self, include_auto_created=False, include_swapped=False):
         """Return all models for this plugin, including custom object type models."""

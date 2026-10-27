@@ -4,7 +4,7 @@ import functools
 import logging
 import re
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import date, datetime
 
 from django.apps import apps
@@ -1755,9 +1755,9 @@ class CustomObjectType(NetBoxModel):
             if max_cots and CustomObjectType.objects.count() >= max_cots:
                 raise ValidationError(
                     _(
-                        f'Maximum number of Custom Object Types ({max_cots}) '
+                        'Maximum number of Custom Object Types ({max_cots}) '
                         'exceeded; adjust max_custom_object_types to raise this limit'
-                    )
+                    ).format(max_cots=max_cots)
                 )
 
     @staticmethod
@@ -1880,7 +1880,7 @@ class CustomObjectType(NetBoxModel):
 
         # Create a combined list of fields that must be added and belong to the this
         # table.
-        fields = list(fields) + [field for field in fields_query]
+        fields = list(fields) + list(fields_query)
 
         for field in fields:
             if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
@@ -2920,11 +2920,10 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
                     [old_name, new_name, old_name, ct.id, old_name],
                 )
     except ProgrammingError:
-        logger.error(
+        logger.exception(
             '_rename_objectchange_field_key: ObjectChange schema mismatch rewriting %r -> %r; aborting rename',
             old_name,
             new_name,
-            exc_info=True,
         )
         raise
 
@@ -2951,11 +2950,10 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
                     [old_name, new_name, old_name, ct.id, old_name],
                 )
     except ProgrammingError:
-        logger.error(
+        logger.exception(
             '_rename_objectchange_field_key: ChangeDiff schema mismatch rewriting %r -> %r; aborting rename',
             old_name,
             new_name,
-            exc_info=True,
         )
         raise
 
@@ -3647,12 +3645,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             # fail outright if the table only exists in the branch schema.
             probe_conn = _get_schema_connection()
             try:
-                with transaction.atomic(using=probe_conn.alias):
-                    with probe_conn.schema_editor() as test_schema_editor:
-                        test_schema_editor.alter_field(model, old_field, model_field)
-                        # If we get here, the constraint was applied successfully
-                        # Now raise a custom exception to rollback the test transaction
-                        raise UniquenessConstraintTestError()
+                with transaction.atomic(using=probe_conn.alias), probe_conn.schema_editor() as test_schema_editor:
+                    test_schema_editor.alter_field(model, old_field, model_field)
+                    # If we get here, the constraint was applied successfully
+                    # Now raise a custom exception to rollback the test transaction
+                    raise UniquenessConstraintTestError()
             except UniquenessConstraintTestError:
                 # The constraint can be applied, validation passes
                 pass
@@ -4498,10 +4495,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Reindex all objects of this type if search indexing was affected.
         # Compare against the __init__ snapshot: ``_original`` is only set by
         # from_db(), so an instance created in-process and saved again has none.
-        if is_new:
-            needs_reindex = self.search_weight > 0
-        else:
-            needs_reindex = self.search_weight != self._original_search_weight
+        needs_reindex = self.search_weight > 0 if is_new else self.search_weight != self._original_search_weight
         if needs_reindex:
             _cot_id = self.custom_object_type_id
             transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
@@ -4538,20 +4532,16 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
                     field_type.remove_polymorphic_object_columns(self, model, schema_editor)
                 elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                    try:
+                    with suppress(LookupError):
                         _dropped_through_model = model._meta.apps.get_model(APP_LABEL, self.through_model_name)
-                    except LookupError:
-                        pass
                     field_type.drop_polymorphic_m2m_table(self, model, schema_editor)
             else:
                 # _schema_remove_field drops the through table (for MULTIOBJECT) but
                 # leaves the real through model in apps.all_models; capture it so the
                 # deregistration below removes it (issue #535).
                 if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                    try:
+                    with suppress(LookupError):
                         _dropped_through_model = model._meta.apps.get_model(APP_LABEL, self.through_model_name)
-                    except LookupError:
-                        pass
                 _schema_remove_field(self, model, schema_editor, schema_conn=schema_conn)
                 if self.type == CustomObjectFieldTypeChoices.TYPE_URL:
                     # Drop the title column alongside the primary URL column.

@@ -515,7 +515,7 @@ class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
 
     def test_get_model_unaffected_during_ordinary_test_run(self):
         """Ordinary test-suite get_model() calls stay fully hydrated."""
-        target_type, source_type = self._make_cross_cot_pair('d')
+        _target_type, source_type = self._make_cross_cot_pair('d')
         model = source_type.get_model(no_cache=True)
         field = model._meta.get_field('forwarder_profile')
         self.assertFalse(isinstance(field.remote_field.model, str))
@@ -1207,12 +1207,14 @@ class CustomObjectBaseModelTestCase(CustomObjectsTestCase, TestCase):
         """A field instance saved more than once reindexes on every weight change, not just the first."""
         field = self.create_custom_object_type_field(self.cot, name='tracked', type='text', search_weight=100)
         field = CustomObjectTypeField.objects.get(pk=field.pk)
-        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
-            with self.captureOnCommitCallbacks(execute=True):
-                field.search_weight = 0
-                field.save()
-                field.search_weight = 100
-                field.save()
+        with (
+            patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            field.search_weight = 0
+            field.save()
+            field.search_weight = 100
+            field.save()
         self.assertEqual(mock_enqueue.call_count, 2)
 
     def test_blank_unique_text_values_do_not_collide(self):
@@ -1492,7 +1494,9 @@ class CustomObjectPicklingTestCase(CustomObjectsTestCase, TestCase):
         # Unapplied migrations or a database failure: a missing attribute, with the error logged.
         for error in (ProgrammingError, OperationalError):
             with self.subTest(error=error.__name__):
-                with patch.object(CustomObjectType.objects, 'get', side_effect=error('boom')):
-                    with self.assertLogs(nco_models.logger, level='WARNING') as logs:
-                        self.assertFalse(hasattr(nco_models, self.model.__name__))
+                with (
+                    patch.object(CustomObjectType.objects, 'get', side_effect=error('boom')),
+                    self.assertLogs(nco_models.logger, level='WARNING') as logs,
+                ):
+                    self.assertFalse(hasattr(nco_models, self.model.__name__))
                 self.assertIs(logs.records[0].exc_info[0], error)

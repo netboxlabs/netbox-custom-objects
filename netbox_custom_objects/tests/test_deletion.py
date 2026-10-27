@@ -257,9 +257,12 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
 
         # The DB-level RESTRICT constraint should prevent deletion.
         # PostgreSQL raises an IntegrityError wrapping a ForeignKeyViolation.
-        with self.assertRaises(IntegrityError, msg='RESTRICT should prevent deletion of the referenced Device'):
-            with transaction.atomic(), connection.cursor() as cursor:
-                cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
+        with (
+            self.assertRaises(IntegrityError, msg='RESTRICT should prevent deletion of the referenced Device'),
+            transaction.atomic(),
+            connection.cursor() as cursor,
+        ):
+            cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
 
         # Both objects must remain intact.
         self.assertTrue(Device.objects.filter(pk=device_pk).exists())
@@ -351,9 +354,12 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         device_pk = device.pk
 
         # Confirm PROTECT is in effect: raw DELETE must be blocked.
-        with self.assertRaises(IntegrityError, msg='RESTRICT should block deletion before the change'):
-            with transaction.atomic(), connection.cursor() as cursor:
-                cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
+        with (
+            self.assertRaises(IntegrityError, msg='RESTRICT should block deletion before the change'),
+            transaction.atomic(),
+            connection.cursor() as cursor,
+        ):
+            cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
 
         # Change the field to SET_NULL.
         field = CustomObjectTypeField.objects.get(pk=field.pk)
@@ -394,9 +400,12 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         device_pk = device.pk
 
         # Confirm PROTECT is in effect.
-        with self.assertRaises(IntegrityError, msg='RESTRICT should block deletion before the change'):
-            with transaction.atomic(), connection.cursor() as cursor:
-                cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
+        with (
+            self.assertRaises(IntegrityError, msg='RESTRICT should block deletion before the change'),
+            transaction.atomic(),
+            connection.cursor() as cursor,
+        ):
+            cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
 
         # Change the field to CASCADE.
         field = CustomObjectTypeField.objects.get(pk=field.pk)

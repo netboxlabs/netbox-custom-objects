@@ -300,7 +300,7 @@ class GraphQLEndpointTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestC
         cot = self.create_multi_object_custom_object_type(name='Args707', slug='args707')
         gql_type_name = f'{cot.get_model().__name__}Type'
 
-        data = self._gql('{ __type(name: "%s") { fields { name args { name } } } }' % gql_type_name)
+        data = self._gql('{ __type(name: "%s") { fields { name args { name } } } }' % gql_type_name)  # noqa: UP031
         args_by_field = {f['name']: {a['name'] for a in f['args']} for f in data['__type']['fields']}
         self.assertEqual(args_by_field['tags'], {'filters', 'pagination'})
         # devices -> Device, sites -> Site: both core NetBox types with their
@@ -372,7 +372,7 @@ class GraphQLEndpointTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestC
         cot = self._make_poly_cot()
         gql_type_name = f'{cot.get_model().__name__}Type'
 
-        data = self._gql('{ __type(name: "%s") { fields { name args { name } } } }' % gql_type_name)
+        data = self._gql('{ __type(name: "%s") { fields { name args { name } } } }' % gql_type_name)  # noqa: UP031
         args_by_field = {f['name']: {a['name'] for a in f['args']} for f in data['__type']['fields']}
         self.assertEqual(args_by_field['poly_obj'], set())
         self.assertEqual(args_by_field['poly_objs'], set())
@@ -383,7 +383,7 @@ class GraphQLEndpointTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestC
         cot = self._site_object_field_type()
         gql_type_name = f'{cot.get_model().__name__}Type'
 
-        data = self._gql('{ __type(name: "%s") { fields { name args { name } } } }' % gql_type_name)
+        data = self._gql('{ __type(name: "%s") { fields { name args { name } } } }' % gql_type_name)  # noqa: UP031
         args_by_field = {f['name']: {a['name'] for a in f['args']} for f in data['__type']['fields']}
         self.assertEqual(args_by_field['site'], set())
 

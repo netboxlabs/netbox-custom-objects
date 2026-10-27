@@ -207,16 +207,16 @@ class CustomObjectsNamespaceTestCase(CustomObjectsTestCase, TestCase):
         """
         ns = CustomObjectsNamespace()
         with patch.object(CustomObjectType.objects, 'get', wraps=CustomObjectType.objects.get) as mock_get:
-            ns.j2widget
-            ns.j2widget
-            ns.j2widget
+            _ = ns.j2widget
+            _ = ns.j2widget
+            _ = ns.j2widget
         self.assertEqual(mock_get.call_count, 1)
 
     def test_cache_is_not_shared_across_namespace_instances(self):
         """Caching is per-render (per CustomObjectsNamespace instance), not global."""
-        CustomObjectsNamespace().j2widget
+        _ = CustomObjectsNamespace().j2widget
         with patch.object(CustomObjectType.objects, 'get', wraps=CustomObjectType.objects.get) as mock_get:
-            CustomObjectsNamespace().j2widget
+            _ = CustomObjectsNamespace().j2widget
         self.assertEqual(mock_get.call_count, 1)
 
     def test_unknown_name_warning_logged_once_per_process(self):

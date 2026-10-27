@@ -1,3 +1,4 @@
+import contextlib
 from copy import deepcopy
 
 from django.urls import NoReverseMatch, include, path
@@ -58,12 +59,10 @@ class CustomObjectsAPIRootView(APIView):
         linked_url_name = 'linked-objects'
         if namespace:
             linked_url_name = namespace + ':' + linked_url_name
-        try:
+        with contextlib.suppress(NoReverseMatch):
             ret['linked-objects'] = reverse(
                 linked_url_name, args=args, kwargs=kwargs, request=request, format=kwargs.get('format')
             )
-        except NoReverseMatch:
-            pass
 
         # Extra logic to populate roots for custom object type lists, listing only the
         # types whose definitions the user may see.

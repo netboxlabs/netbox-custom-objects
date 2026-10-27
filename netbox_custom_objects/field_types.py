@@ -1,3 +1,4 @@
+import contextlib
 import copy
 import datetime
 import decimal
@@ -1211,13 +1212,11 @@ class ObjectFieldType(FieldType):
             return  # GFK needs no post-generation resolution
         # Check if this field has a resolution method
         if resolve_method := getattr(model, f'_resolve_{field_name}_model', None):
-            try:
+            # A LookupError means the related COT hasn't been generated yet (startup
+            # ordering). ready() runs a second pass to resolve all lazy FKs once every
+            # COT model is in the app registry.
+            with contextlib.suppress(LookupError):
                 resolve_method(model)
-            except LookupError:
-                # The related COT hasn't been generated yet (startup ordering).
-                # ready() runs a second pass to resolve all lazy FKs once every
-                # COT model is in the app registry (issue #408).
-                pass
 
     def add_polymorphic_object_columns(self, field_instance, model, schema_editor):
         """
@@ -1439,10 +1438,8 @@ class CustomManyToManyManager(Manager):
     def _remove_prefetched_objects(self):
         """Drop this field's prefetch_related() result so reads after a write
         hit the database, like Django's ManyRelatedManager."""
-        try:
+        with contextlib.suppress(AttributeError, KeyError):
             self.instance._prefetched_objects_cache.pop(self.prefetch_cache_name)
-        except (AttributeError, KeyError):
-            pass
 
     def _resolve_pk(self, obj):
         """Accept an instance or raw PK — mirrors Django's ManyRelatedManager.
@@ -2381,10 +2378,8 @@ class PolymorphicManyToManyManager:
     def _remove_prefetched_objects(self):
         """Drop this field's prefetch_related() result so reads after a write
         hit the database, like Django's ManyRelatedManager."""
-        try:
+        with contextlib.suppress(AttributeError, KeyError):
             self.instance._prefetched_objects_cache.pop(self.field_name)
-        except (AttributeError, KeyError):
-            pass
 
     def _resolve_keys(self, objs):
         """Map model instances to ``(content_type_id, object_id)`` keys,

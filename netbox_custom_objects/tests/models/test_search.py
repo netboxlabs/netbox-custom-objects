@@ -51,62 +51,74 @@ class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
         """Changing search_weight on a field enqueues a reindex job after the transaction commits."""
         field = CustomObjectTypeField.objects.get(pk=self.field.pk)
         field.search_weight = 100
-        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
-            with self.captureOnCommitCallbacks(execute=True):
-                field.save()
+        with (
+            patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            field.save()
         mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
 
     def test_job_enqueued_on_field_weight_zeroed(self):
         """Changing search_weight to 0 enqueues a reindex job after the transaction commits."""
         field = CustomObjectTypeField.objects.get(pk=self.field.pk)
         field.search_weight = 0
-        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
-            with self.captureOnCommitCallbacks(execute=True):
-                field.save()
+        with (
+            patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            field.save()
         mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
 
     def test_job_not_enqueued_when_weight_unchanged(self):
         """Saving a field without changing search_weight does not enqueue a reindex job."""
         field = CustomObjectTypeField.objects.get(pk=self.field.pk)
         field.label = 'Modified Title'
-        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
-            with self.captureOnCommitCallbacks(execute=True):
-                field.save()
+        with (
+            patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            field.save()
         mock_enqueue.assert_not_called()
 
     def test_job_enqueued_on_searchable_field_creation(self):
         """Adding a new field with search_weight > 0 enqueues a reindex job after the transaction commits."""
-        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
-            with self.captureOnCommitCallbacks(execute=True):
-                new_field = self.create_custom_object_type_field(
-                    self.cot,
-                    name='subtitle',
-                    label='Subtitle',
-                    type='text',
-                    search_weight=300,
-                )
+        with (
+            patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            new_field = self.create_custom_object_type_field(
+                self.cot,
+                name='subtitle',
+                label='Subtitle',
+                type='text',
+                search_weight=300,
+            )
         self.addCleanup(new_field.delete)
         mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
 
     def test_job_not_enqueued_on_non_searchable_field_creation(self):
         """Adding a field with search_weight=0 does not enqueue a reindex job."""
-        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
-            with self.captureOnCommitCallbacks(execute=True):
-                non_search_field = self.create_custom_object_type_field(
-                    self.cot,
-                    name='notes',
-                    label='Notes',
-                    type='text',
-                    search_weight=0,
-                )
+        with (
+            patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            non_search_field = self.create_custom_object_type_field(
+                self.cot,
+                name='notes',
+                label='Notes',
+                type='text',
+                search_weight=0,
+            )
         self.addCleanup(non_search_field.delete)
         mock_enqueue.assert_not_called()
 
     def test_job_enqueued_on_searchable_field_deletion(self):
         """Deleting a field with search_weight > 0 enqueues a reindex job after the transaction commits."""
-        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
-            with self.captureOnCommitCallbacks(execute=True):
-                self.field.delete()
+        with (
+            patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            self.field.delete()
         mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
 
     def test_job_run_updates_cached_values(self):
@@ -228,18 +240,22 @@ class DisplayExpressionSearchTestCase(CustomObjectsTestCase, TestCase):
     def test_reindex_enqueued_when_display_expression_changes(self):
         cot = CustomObjectType.objects.get(pk=self.cot.pk)
         cot.display_expression = '{{ name }}'
-        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
-            with self.captureOnCommitCallbacks(execute=True):
-                cot.save()
+        with (
+            patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            cot.save()
         mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
 
     def test_reindex_not_enqueued_for_other_changes(self):
         cot = CustomObjectType.objects.get(pk=self.cot.pk)
         cot.description = 'Changed'
-        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
-            with self.captureOnCommitCallbacks(execute=True):
-                cot.save()
-                cot.save(update_fields=['cache_timestamp'])
+        with (
+            patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            cot.save()
+            cot.save(update_fields=['cache_timestamp'])
         mock_enqueue.assert_not_called()
 
     def _row_ids(self, display):

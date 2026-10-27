@@ -213,29 +213,30 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
             name='vendor_shade', fields=[self.vendor, shade], condition=[self._predicate(shade, 'exact', 'ff0000')]
         )
         cases = {
-            'one field': dict(fields=[self.vendor]),
-            'repeated field': dict(fields=[self.vendor, self.vendor]),
-            'ineligible type': dict(fields=[self.vendor, tags]),
-            'case-insensitive without text': dict(fields=[count], case_insensitive=True),
-            'same fields as another constraint': dict(fields=[self.serial, self.vendor]),
-            'same MAC condition, spelled differently': dict(
-                fields=[self.vendor, mac], condition=[self._predicate(mac, 'exact', '001a.2b3c.4d5e')]
-            ),
-            'condition not a list': dict(condition={'field': self.vendor.schema_id, 'lookup': 'isnull'}),
-            'condition without lookup': dict(condition=[{'field': self.vendor.schema_id}]),
-            'condition extra key': dict(condition=[{**self._predicate(self.vendor, 'isnull', True), 'not': True}]),
-            'condition unknown field': dict(condition=[{'field': 999, 'lookup': 'isnull', 'value': True}]),
-            'condition ineligible field': dict(condition=[self._predicate(tags, 'exact', 'choice1')]),
-            'condition unknown lookup': dict(condition=[self._predicate(self.vendor, 'contains', 'a')]),
-            'isnull without a boolean': dict(condition=[self._predicate(self.vendor, 'isnull', 'yes')]),
-            'in without a list': dict(condition=[self._predicate(self.vendor, 'in', 'a')]),
-            'in with an empty list': dict(condition=[self._predicate(self.vendor, 'in', [])]),
-            'compare to null': dict(condition=[self._predicate(self.vendor, 'exact', None)]),
-            'value of the wrong type': dict(condition=[self._predicate(count, 'exact', 'many')]),
-            'value not a choice': dict(condition=[self._predicate(color, 'exact', 'nope')]),
-            'value not a color': dict(condition=[self._predicate(shade, 'exact', '#FF0000')]),
-            'value not a MAC address': dict(condition=[self._predicate(mac, 'exact', '00:1a')]),
-            'object field compared by value': dict(condition=[self._predicate(site, 'exact', 1)]),
+            'one field': {'fields': [self.vendor]},
+            'repeated field': {'fields': [self.vendor, self.vendor]},
+            'ineligible type': {'fields': [self.vendor, tags]},
+            'case-insensitive without text': {'fields': [count], 'case_insensitive': True},
+            'same fields as another constraint': {'fields': [self.serial, self.vendor]},
+            'same MAC condition, spelled differently': {
+                'fields': [self.vendor, mac],
+                'condition': [self._predicate(mac, 'exact', '001a.2b3c.4d5e')],
+            },
+            'condition not a list': {'condition': {'field': self.vendor.schema_id, 'lookup': 'isnull'}},
+            'condition without lookup': {'condition': [{'field': self.vendor.schema_id}]},
+            'condition extra key': {'condition': [{**self._predicate(self.vendor, 'isnull', True), 'not': True}]},
+            'condition unknown field': {'condition': [{'field': 999, 'lookup': 'isnull', 'value': True}]},
+            'condition ineligible field': {'condition': [self._predicate(tags, 'exact', 'choice1')]},
+            'condition unknown lookup': {'condition': [self._predicate(self.vendor, 'contains', 'a')]},
+            'isnull without a boolean': {'condition': [self._predicate(self.vendor, 'isnull', 'yes')]},
+            'in without a list': {'condition': [self._predicate(self.vendor, 'in', 'a')]},
+            'in with an empty list': {'condition': [self._predicate(self.vendor, 'in', [])]},
+            'compare to null': {'condition': [self._predicate(self.vendor, 'exact', None)]},
+            'value of the wrong type': {'condition': [self._predicate(count, 'exact', 'many')]},
+            'value not a choice': {'condition': [self._predicate(color, 'exact', 'nope')]},
+            'value not a color': {'condition': [self._predicate(shade, 'exact', '#FF0000')]},
+            'value not a MAC address': {'condition': [self._predicate(mac, 'exact', '00:1a')]},
+            'object field compared by value': {'condition': [self._predicate(site, 'exact', 1)]},
         }
         for label, kwargs in cases.items():
             with self.subTest(label), self.assertRaises(ValidationError):
@@ -425,9 +426,11 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
 
         # A field deleted after the fields were validated.
         constraint = CustomObjectTypeConstraint(custom_object_type=self.cot, name='gone', type='check', rule=rule)
-        with patch.object(CustomObjectTypeConstraint, 'to_model_constraint', return_value=None):
-            with self.assertRaisesMessage(ValidationError, 'A field this constraint uses no longer exists.'):
-                constraint.full_clean()
+        with (
+            patch.object(CustomObjectTypeConstraint, 'to_model_constraint', return_value=None),
+            self.assertRaisesMessage(ValidationError, 'A field this constraint uses no longer exists.'),
+        ):
+            constraint.full_clean()
 
     def test_condition_compares_fields(self):
         part = self.create_custom_object_type_field(self.cot, name='part', type='text')

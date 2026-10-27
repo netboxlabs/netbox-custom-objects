@@ -336,6 +336,9 @@ known-first-party = [
 "**/migrations/*.py" = ["D", "E501", "I"]  # Django-generated migrations: no docstring coverage; long generated values; emitted in non-isort-canonical order.
 "**/tests/*.py" = ["D"]  # Tests do not require docstring coverage by default.
 "**/__init__.py" = ["D104"]  # Package marker files do not require public package docstrings.
+# The GraphQL types and filters build Strawberry annotations at runtime from objects (lazy types,
+# forward references) that do not all support `X | None`, so they keep `Optional[X]`.
+"netbox_custom_objects/graphql/*.py" = ["UP045"]
 
 [tool.ruff.format]
 # Use single quotes for strings.
