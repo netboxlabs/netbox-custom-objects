@@ -77,7 +77,7 @@ class TabControlsTestCase(TypeTabTestCase):
         self.assertNotContains(response, reverse(f'{URL_PREFIX}:customobjecttypefield_add'))
 
     def test_quick_search_filters_fields(self):
-        response = self.client.get(self._tab('fields'), {'q': 'not'}, HTTP_HX_REQUEST='true')
+        response = self.client.get(self._tab('fields'), {'q': 'not'}, headers={'hx-request': 'true'})
 
         def edit_url(field):
             return reverse(f'{URL_PREFIX}:customobjecttypefield_edit', kwargs={'pk': field.pk})

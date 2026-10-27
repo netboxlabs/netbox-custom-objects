@@ -245,7 +245,7 @@ class SchemaApplyBranchTestCase(TransactionCleanupMixin, _SchemaAPIMixin, Transa
             self.apply_url,
             data=self._apply_body(schema_doc),
             format='json',
-            HTTP_X_NETBOX_BRANCH=self.branch.schema_id,
+            headers={'x-netbox-branch': self.branch.schema_id},
         )
 
     def test_change_leaving_constraint_rolled_back_in_branch(self):

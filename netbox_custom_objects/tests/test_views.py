@@ -2665,7 +2665,7 @@ class FieldDeleteViewTestCase(CustomObjectsTestCase, TestCase):
     def test_htmx_request_renders_modal(self):
         field = self.create_custom_object_type_field(self.cot, name='code', label='Code', type='text')
         self.cot.get_model().objects.create(name='coded', code='X1')
-        response = self.client.get(self._url(field), HTTP_HX_REQUEST='true')
+        response = self.client.get(self._url(field), headers={'hx-request': 'true'})
         self.assertTemplateUsed(response, 'netbox_custom_objects/htmx/delete_form.html')
         self.assertTemplateNotUsed(response, 'netbox_custom_objects/field_delete.html')
         self.assertWarnsOf(response, 1)
@@ -2714,7 +2714,7 @@ class ProtectedObjectDeleteViewTestCase(CustomObjectsTestCase, TestCase):
         self.assertContains(response, 'M1')
 
     def test_htmx_delete_redirects_to_object(self):
-        response = self.client.get(self.url, HTTP_HX_REQUEST='true')
+        response = self.client.get(self.url, headers={'hx-request': 'true'})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response['HX-Redirect'], self.rack.get_absolute_url())
 

@@ -496,7 +496,7 @@ class SchemaYAMLFormatTestCase(_SchemaAPIBase):
             self.preview_url,
             data={'schema_version': '1', 'types': [type_def]},
             format='json',
-            HTTP_ACCEPT='application/yaml',
+            headers={'accept': 'application/yaml'},
         )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertIn('application/yaml', resp['Content-Type'])
@@ -561,10 +561,7 @@ class SchemaYAMLFormatTestCase(_SchemaAPIBase):
             }
         )
         resp = self.client.post(
-            self.apply_url,
-            data=body,
-            content_type='application/yaml',
-            HTTP_ACCEPT='application/yaml',
+            self.apply_url, data=body, content_type='application/yaml', headers={'accept': 'application/yaml'}
         )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertIn('application/yaml', resp['Content-Type'])

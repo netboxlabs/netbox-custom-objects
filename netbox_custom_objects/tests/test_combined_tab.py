@@ -209,7 +209,7 @@ class CombinedTabTestCase(CombinedTabMixin, CustomObjectsTestCase, TestCase):
                 self.assertEqual(self._rows(self._get(sort='object', per_page=2, page=page)), expected)
 
     def test_htmx_request_renders_partial(self):
-        response = self.client.get(self.url, {'q': 'bravo'}, HTTP_HX_REQUEST='true')
+        response = self.client.get(self.url, {'q': 'bravo'}, headers={'hx-request': 'true'})
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, PARTIAL_TEMPLATE)
         self.assertTemplateNotUsed(response, FULL_TEMPLATE)
@@ -281,7 +281,7 @@ class CombinedTabBuiltinHostTestCase(CombinedTabMixin, CustomObjectsTestCase, Te
     def test_htmx_request_renders_partial(self):
         self.user.is_superuser = True
         self.user.save()
-        response = self.client.get(self.url, HTTP_HX_REQUEST='true')
+        response = self.client.get(self.url, headers={'hx-request': 'true'})
         self.assertTemplateUsed(response, PARTIAL_TEMPLATE)
         self.assertTemplateNotUsed(response, FULL_TEMPLATE)
         self.assertEqual(self._rows(response), ['Note Alpha'])
