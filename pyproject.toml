@@ -98,14 +98,31 @@ ignore = [
     "docs/development/*.md",
     "mkdocs.yml",
     "testing/configuration.py",
+    "testing/configuration_branching.py",
+    # The test suite lives inside the package but is excluded from the dist
+    # (see [tool.setuptools.packages.find] exclude). CI installs editable, so
+    # the suite still resolves from the source tree.
+    "netbox_custom_objects/tests/*",
+    "netbox_custom_objects/tests/*/*",
+    # In-app model help pages: built from docs_models/ by mkdocs.models.yml before
+    # packaging, so they ship in the dist but are not tracked in git.
+    "netbox_custom_objects/static/*",
+    "docs_models/*/*",
+    "mkdocs.models.yml",
+    "docs/media/*/*",
+    ".yamllint",
+    ".git-blame-ignore-revs",
+    ".claude/*",
+    ".claude/skills/*/*",
     # Per-view query-count baseline: test-only tooling, not distribution content.
     "netbox_custom_objects/tests/query_counts.json",
     "uv.lock",
     ".github/ISSUE_TEMPLATE/*.yaml",
     ".github/ISSUE_TEMPLATE/config.yml",
     ".github/labels.yml",
-    ".github/pull_request_template.md",
+    ".github/PULL_REQUEST_TEMPLATE.md",
     ".github/workflows/*.yml",
+    ".github/workflows/*.yaml",
 ]
 
 [tool.codespell]
