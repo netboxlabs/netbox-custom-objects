@@ -1,17 +1,28 @@
 # REST API
 
-The NetBox Custom Objects plugin exposes full CRUD operations through the standard NetBox REST API, rooted at `/api/plugins/custom-objects/`. The root of the API lists endpoints for Custom Object Types, Custom Object Type Fields, the linked-objects helper, and a dynamically generated endpoint for each Custom Object Type you have defined:
+The NetBox Custom Objects plugin exposes full CRUD operations through the standard NetBox REST API, rooted at `/api/plugins/custom-objects/`. The root of the API lists endpoints for Custom Object Types, their fields and constraints, the linked-objects helper, and a dynamically generated endpoint for each Custom Object Type you can view:
 
 ```json
 {
-    "custom-object-types": "https://netbox/api/plugins/custom-objects/custom-object-types/",
+    "custom-object-type-constraints": "https://netbox/api/plugins/custom-objects/custom-object-type-constraints/",
     "custom-object-type-fields": "https://netbox/api/plugins/custom-objects/custom-object-type-fields/",
+    "custom-object-types": "https://netbox/api/plugins/custom-objects/custom-object-types/",
     "linked-objects": "https://netbox/api/plugins/custom-objects/linked-objects/",
     "dhcp_scope": "https://netbox/api/plugins/custom-objects/dhcp_scope/"
 }
 ```
 
 The endpoint name for each Custom Object Type is its **slug** — a type with slug `dhcp_scope` is reachable at `/api/plugins/custom-objects/dhcp_scope/`.
+
+Requests are [authenticated](https://netboxlabs.com/docs/netbox/integrations/rest-api/#authentication) as for the rest of NetBox's REST API, and NetBox's object permissions apply. For example, to list the objects of a type with a v2 token:
+
+```no-highlight
+curl -H "Authorization: Bearer nbt_<key>.<token>" \
+     -H "Accept: application/json" \
+     https://netbox/api/plugins/custom-objects/dhcp_scope/
+```
+
+The examples below show the JSON body of each request; send it with `-H "Content-Type: application/json"` and `--data`.
 
 !!! tip
     For schema management — exporting Custom Object Type definitions, previewing diffs, and applying schemas to other instances — see the [Portable Schema](portable-schema.md) documentation, which also covers the `schema/preview/` and `schema/apply/` endpoints.
@@ -39,7 +50,11 @@ Create a Custom Object Type with a `POST` to `/api/plugins/custom-objects/custom
 | `description` | no | Short description (max 200 characters). |
 | `version` | no | [PEP 440](https://peps.python.org/pep-0440/) version string (e.g. `1.0.0`). Used by the portable schema feature. |
 | `group_name` | no | Groups similar Custom Object Types together in the navigation menu. |
+| `display_expression` | no | Jinja expression that renders each object's display name, e.g. `{{ hostname }} ({{ cpu_cores }} cores)`. Overrides the primary field. |
+| `config_context_enabled` | no | Gives objects of this type config context support (see [Config context](#config-context)). Can only be set when the type is created. Default: `false`. |
 | `tags` | no | List of NetBox tag IDs to attach to this Custom Object Type. |
+
+Responses also include the type's `fields` (brief representations), its `schema_document` (see [Portable Schema](portable-schema.md)), and the read-only `table_model_name` and `object_type_name` of the model that backs the type.
 
 ## Custom Object Type Fields
 
@@ -76,18 +91,20 @@ Available `type` values are:
 | `multiobject` | Reference to multiple objects of the same type |
 | `color` | RGB color as six lowercase hexadecimal digits, e.g. `00ff00` |
 | `mac_address` | EUI-48 MAC address; accepted in any common format, returned as `00:1A:2B:3C:4D:5E` |
+| `array` | List of values (or of fixed-size tuples) of one element type |
+| `coordinates` | Latitude and longitude |
 
 Common attributes available on all field types:
 
 | Attribute | Required | Description |
 |-----------|----------|-------------|
 | `name` | yes | Internal field name. Must be lowercase alphanumeric with underscores only (e.g. `rack_unit`). Must be unique within the Custom Object Type. |
-| `type` | yes | Field type (see table above). |
-| `label` | no | Display name shown in the UI. Defaults to `name`. |
+| `type` | no | Field type (see table above). Default: `text`. |
+| `label` | no | Display name shown in the UI. Defaults to `name` with underscores replaced by spaces and the first letter capitalized. |
 | `description` | no | Help text shown in forms. |
 | `group_name` | no | Fields sharing the same group name are displayed together. |
 | `required` | no | Whether a value must be provided. Default: `false`. |
-| `unique` | no | Whether values must be unique across all objects of this type. Default: `false`. Not supported for `boolean` or `multiobject` fields. |
+| `unique` | no | Whether values must be unique across all objects of this type. Default: `false`. Not supported for `boolean`, `multiobject` or `coordinates` fields. |
 | `primary` | no | Whether this field's value is used as the object's display name. |
 | `context` | no | Whether this field's value is shown when the object is referenced by another object. |
 | `default` | no | Default value (must be a valid JSON value). |
@@ -98,14 +115,14 @@ Common attributes available on all field types:
 | `ui_editable` | no | `"yes"`, `"no"` (read-only), or `"hidden"`. Default: `"yes"`. |
 | `is_cloneable` | no | Whether the field value is copied when cloning an object. Default: `false`. |
 | `comments` | no | Free-form notes about this field (supports Markdown). |
-| `deprecated` | no | Marks the field as deprecated (read-only in the UI). Default: `false`. |
+| `deprecated` | no | Marks the field as deprecated. This is informational only: the field keeps working as before. It can't be set in the web UI. Default: `false`. |
 | `deprecated_since` | no | [PEP 440](https://peps.python.org/pep-0440/) version string when the field was deprecated (e.g. `"2.0.0"`). |
 | `scheduled_removal` | no | [PEP 440](https://peps.python.org/pep-0440/) version string when the field is planned for removal (e.g. `"3.0.0"`). |
 | `schema_id` | (read-only) | Stable, auto-assigned identifier used by the portable schema feature. See [Portable Schema](portable-schema.md). |
 
 ### Text Fields
 
-Field types: `text`, `longtext`
+Field types: `text`, `longtext` (and `url`, below)
 
 ```json
 {
@@ -121,6 +138,18 @@ Field types: `text`, `longtext`
 | Attribute | Description |
 |-----------|-------------|
 | `validation_regex` | Regular expression enforced on field values. |
+
+### URL Fields
+
+Field type: `url`
+
+A URL field also accepts `validation_regex`. Each object stores a link title alongside the URL, which the API reads and writes as `<name>_title`, e.g. `"docs": "https://wiki.example.com/server-001", "docs_title": "Runbook"`.
+
+### Coordinates Fields
+
+Field type: `coordinates`
+
+A coordinates field stores a latitude and a longitude. Each object reads and writes them as two values, `<name>_latitude` and `<name>_longitude`, e.g. `"location_latitude": 40.7128, "location_longitude": -74.006`. Set both or neither.
 
 ### Numeric Fields
 
@@ -149,8 +178,8 @@ Field type: `array`
 ```json
 {
   "custom_object_type": 9,
-  "name": "coordinates",
-  "label": "Coordinates",
+  "name": "waypoints",
+  "label": "Waypoints",
   "type": "array",
   "array_element_type": "integer",
   "array_tuple_size": 3,
@@ -166,7 +195,7 @@ Field type: `array`
 | `validation_regex` | For `text` elements: a regular expression every value must match. |
 | `validation_minimum`, `validation_maximum` | For `integer` and `decimal` elements: the allowed range of every value. |
 
-An object's value is a JSON list, e.g. `"coordinates": [[0, 0, 0], [10, 0, 5]]`.
+An object's value is a JSON list, e.g. `"waypoints": [[0, 0, 0], [10, 0, 5]]`.
 
 ### Choice Fields
 
@@ -218,15 +247,15 @@ Additional attributes for object reference fields:
 
 | Attribute | Description |
 |-----------|-------------|
-| `app_label` | Django app label of the related model (write-only). Required for non-polymorphic object fields when `related_object_type` is not supplied directly. |
+| `app_label` | Django app label of the related model (write-only). Required for non-polymorphic object fields. |
 | `model` | Model name of the related model (write-only). Required alongside `app_label`. |
 | `related_object_type` | (read-only) Nested representation of the referenced object type. |
 | `is_polymorphic` | When `true`, the field accepts references to objects of multiple different types. Requires `related_object_types_input` instead of `app_label`/`model`. Cannot be changed after the field is created. Default: `false`. |
 | `related_object_types_input` | List of `{"app_label": ..., "model": ...}` dicts (write-only). Required for polymorphic fields. |
-| `related_object_types` | (read-only) Nested representation of the allowed object types for polymorphic fields. |
+| `related_object_types` | (read-only) The allowed object types for polymorphic fields, as a list of `{"id": ..., "app_label": ..., "model": ...}`. |
 | `related_object_filter` | JSON `query_params` dict used to filter the object selection drop-down. |
 | `related_name` | Reverse relation accessor name on the related object (e.g. `ssl_profiles` allows `obj.ssl_profiles.all()`). |
-| `on_delete_behavior` | Action when the referenced object is deleted: `"set_null"` (default), `"cascade"`, or `"protect"`. **Applies only to `object` fields; ignored on `multiobject`.** |
+| `on_delete_behavior` | Action when the referenced object is deleted: `"set_null"` (default), `"cascade"`, or `"protect"`. **Applies only to `object` fields.** Creating any other type of field with it returns `400 Bad Request`. |
 
 !!! note
     An `object` or `multiobject` field can reference any Custom Object Type as well as any core NetBox object. To reference another Custom Object Type, set `app_label` to `"custom-objects"` and `model` to the target Custom Object Type's slug. For example:
@@ -319,7 +348,7 @@ Once a Custom Object Type's schema is defined, create Custom Objects (instances)
 }
 ```
 
-For non-polymorphic `object` and `multiobject` fields, pass the primary key (integer) of the referenced object — or a list of primary keys, for `multiobject`. For **polymorphic** fields, pass a dict identifying both the content type and the object:
+For `select` fields, pass the choice's value; for `multiselect` fields, a list of values. For non-polymorphic `object` and `multiobject` fields, pass the primary key (integer) of the referenced object — or a list of primary keys, for `multiobject`. For **polymorphic** fields, pass a dict identifying both the content type and the object (a list of them, for `multiobject`):
 
 ```json
 {
@@ -327,30 +356,57 @@ For non-polymorphic `object` and `multiobject` fields, pass the primary key (int
 }
 ```
 
-`content_type_id` may be used in place of `app_label` + `model`, and `id` may be used as an alias for `object_id` so that the read representation can be round-tripped directly back as a write payload.
+`content_type_id` may be used in place of `app_label` + `model`, and `id` may be used in place of `object_id`.
 
-The response includes the created object with its assigned ID and standard metadata:
+The response includes the created object with its assigned ID and standard metadata. Values are read back in a richer form than they are written:
+
+- `select` values are returned as `{"value": ..., "label": ...}`, and `multiselect` values as a list of them.
+- `object` and `multiobject` values are returned as brief representations of the referenced objects.
+- Polymorphic values are returned as `{"_content_type": "<app_label>.<model>", "id": ..., "display": ...}`. To write one back, replace `_content_type` with `app_label` and `model`, or with `content_type_id`.
 
 ```json
 {
   "id": 15,
   "url": "https://netbox/api/plugins/custom-objects/server/15/",
-  "custom_object_type": {
-    "id": 9,
-    "name": "server",
-    "description": "Server inventory objects"
-  },
-  "internal_id": 102,
-  "hostname": "server-001",
-  "cpu_cores": 8,
-  "environment": "production",
-  "device_list": [34, 1],
-  "primary_device": 16,
+  "display": "server-001",
+  "owner": null,
+  "created": "2026-01-15T10:30:00.358032Z",
+  "last_updated": "2026-01-15T10:30:00.382330Z",
   "tags": [],
-  "created": "2024-01-15T10:30:00Z",
-  "last_updated": "2024-01-15T10:30:00Z"
+  "cpu_cores": 8,
+  "device_list": [
+    {
+      "id": 34,
+      "url": "https://netbox/api/dcim/devices/34/",
+      "display": "dev2",
+      "name": "dev2",
+      "description": ""
+    },
+    {
+      "id": 1,
+      "url": "https://netbox/api/dcim/devices/1/",
+      "display": "dev3",
+      "name": "dev3",
+      "description": ""
+    }
+  ],
+  "environment": {
+    "value": "production",
+    "label": "Production"
+  },
+  "hostname": "server-001",
+  "internal_id": 102,
+  "primary_device": {
+    "id": 16,
+    "url": "https://netbox/api/dcim/devices/16/",
+    "display": "dev1",
+    "name": "dev1",
+    "description": ""
+  }
 }
 ```
+
+`display` is the object's display name, and `owner` is NetBox's object owner. With `?brief=true`, objects are returned as just `id`, `url` and `display`. As with core endpoints, `?fields=` and `?omit=` select which fields are returned.
 
 ### Config context
 
@@ -366,7 +422,7 @@ instead of the rendered context.
 
 ## Custom Validation
 
-NetBox's [`CUSTOM_VALIDATORS`](https://netboxlabs.com/docs/netbox/en/stable/configuration/data-validation/#custom_validators) setting is supported for Custom Objects. Use `netbox_custom_objects.<cot-slug>` as the key, where `<cot-slug>` is the slug of the Custom Object Type:
+NetBox's [`CUSTOM_VALIDATORS`](https://netboxlabs.com/docs/netbox/configuration/data-validation/#custom_validators) setting is supported for Custom Objects. Use `netbox_custom_objects.<cot-slug>` as the key, where `<cot-slug>` is the slug of the Custom Object Type:
 
 ```python
 # configuration.py
@@ -407,13 +463,26 @@ Example response:
     "count": 1,
     "results": [
         {
-            "custom_object_type": {"id": 1, "name": "My Type", "slug": "my-type"},
-            "field_name": "device",
-            "object": {"id": 7, "display": "My Custom Object"}
+            "custom_object_type": {
+                "id": 9,
+                "url": "https://netbox/api/plugins/custom-objects/custom-object-types/9/",
+                "name": "server",
+                "slug": "server",
+                "description": "Server inventory objects"
+            },
+            "field_name": "primary_device",
+            "object": {
+                "id": 15,
+                "url": "https://netbox/api/plugins/custom-objects/server/15/",
+                "display": "server-001",
+                ...
+            }
         }
     ]
 }
 ```
+
+`object` is the full representation of the custom object, as returned by its own endpoint. Results aren't paginated. A missing or invalid parameter returns `400 Bad Request`, and a target object you can't view returns `404 Not Found`.
 
 ## OpenAPI schema
 
@@ -437,7 +506,7 @@ As with other NetBox objects, you can view the API output for Custom Objects in 
 
 ```
 HTTP 200 OK
-Allow: GET, POST, HEAD, OPTIONS
+Allow: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS
 Content-Type: application/json
 Vary: Accept
 
@@ -448,10 +517,15 @@ Vary: Accept
     "results": [
         {
             "id": 1,
-            "url": "http://localhost:8001/api/plugins/custom-objects/dhcp_scope/1/",
+            "url": "https://netbox/api/plugins/custom-objects/dhcp_scope/1/",
+            "display": "DHCP Scope 1",
+            "owner": null,
+            "created": "2026-01-15T10:30:00.358032Z",
+            "last_updated": "2026-01-15T10:30:00.358032Z",
+            "tags": [],
             "range": {
                 "id": 1,
-                "url": "http://localhost:8001/api/ipam/ip-ranges/1/",
+                "url": "https://netbox/api/ipam/ip-ranges/1/",
                 "display": "192.168.0.1-100/24",
                 "family": {
                     "value": 4,
@@ -474,15 +548,35 @@ Vary: Accept
 |----------|------------|
 | Custom Object Type | `/api/plugins/custom-objects/custom-object-types/<id>/` |
 | Custom Object Type Field | `/api/plugins/custom-objects/custom-object-type-fields/<id>/` |
+| Custom Object Type Constraint | `/api/plugins/custom-objects/custom-object-type-constraints/<id>/` |
 | Custom Object | `/api/plugins/custom-objects/<slug>/<id>/` |
 
-Standard NetBox filter parameters (e.g. `q=`, `tag=`, `created__gte=`) work against the list endpoints. Each Custom Object Type also exposes filters for every defined field — see the OpenAPI schema at `/api/schema/swagger-ui/` for the full list of filters available on a given type.
+Standard NetBox filter parameters (e.g. `q=`, `tag=`, `created__gte=`) work against the list endpoints. Each Custom Object Type's endpoint also has a filter for each of its fields; see [Filtering Custom Objects](#filtering-custom-objects).
 
 The Custom Object Type and Custom Object Type Field list endpoints accept filters for their own attributes, for example `?slug=dhcp_scope` or `?name=hostname`. Fields can also be filtered by the type they belong to (`?custom_object_type_id=9` or `?custom_object_type=dhcp_scope`) and by field type (`?type=integer`).
 
+## Filtering Custom Objects
+
+Each field of a Custom Object Type gets a filter on that type's endpoint, named after the field, unless the field's **Filter logic** is `disabled`. As with NetBox's own filters, a filter can be repeated to match any of several values.
+
+| Field type | Filter |
+|------------|--------|
+| `text`, `longtext`, `url` | `?<field>=` matches part of the value when filter logic is `loose` (the default), or the whole value when it's `exact`. Either way, the core NetBox lookup suffixes are available, e.g. `?<field>__isw=` (starts with) or `?<field>__n=` (does not equal). |
+| `json` | `?<field>=` matches part of the JSON text. |
+| `integer`, `decimal`, `date`, `datetime` | `?<field>=` matches the value exactly; suffixes such as `__gte`, `__lt` and `__n` are also available. |
+| `boolean` | `?<field>=true` or `false`. |
+| `select` | `?<field>=<value>` matches the choice value. |
+| `multiselect` | `?<field>=<value>` matches objects whose selections include the value. |
+| `color`, `mac_address` | `?<field>=` matches the value exactly. |
+| `object` | `?<field>=<id>` or `?<field>_id=<id>` matches the referenced object's ID. |
+| `multiobject` | `?<field>=<id>` matches objects that reference that ID. |
+| polymorphic `object` / `multiobject` | One filter per allowed type, named `<field>_<app_label>_<model>`, e.g. `?linked_resource_dcim_device=7`. |
+| `array` | `?<field>=a,b` matches objects whose list includes every one of the comma-separated values; `?<field>__len=` matches the number of items. |
+| `coordinates` | `?<field>_latitude=` and `?<field>_longitude=`. |
+
 ## Bulk Operations
 
-All three list endpoints accept bulk writes, the same as NetBox core endpoints. Send a list of objects, each identifying its target by `id`:
+All four list endpoints (types, fields, constraints and each type's objects) accept bulk writes, the same as NetBox core endpoints. Send a list of objects, each identifying its target by `id`:
 
 | Method | Body | Effect |
 |--------|------|--------|
@@ -492,6 +586,8 @@ All three list endpoints accept bulk writes, the same as NetBox core endpoints. 
 | `DELETE` | `[{"id": 1}, {"id": 2}]` | Delete each listed object |
 
 Each request is applied atomically: if any listed object cannot be created, updated, or deleted, none of them are changed. Deleting a Custom Object Type drops its database table along with every object of that type.
+
+Custom object endpoints don't support NetBox's `?background=true` option for running bulk writes as a background job; requests that use it return `400 Bad Request`.
 
 ## Export Templates
 
