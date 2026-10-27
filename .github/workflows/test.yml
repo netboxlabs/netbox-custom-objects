@@ -63,8 +63,9 @@ jobs:
         run: pip install pre-commit
       - name: Run pre-commit
         run: pre-commit run --all-files --show-diff-on-failure --color=always
-      - name: Install docs dependencies
-        run: pip install '.[docs]'
+      # Same zensical pin as the docs extra in pyproject.toml.
+      - name: Install zensical
+        run: pip install 'zensical==0.0.43'
       - name: Build in-app model documentation
         run: |
           zensical build -s -f mkdocs.models.yml

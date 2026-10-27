@@ -21,9 +21,10 @@ jobs:
       - name: Install pypa/build
         run: |
           python3 -m pip install build
-      - name: Install docs dependencies
+      # Same zensical pin as the docs extra in pyproject.toml.
+      - name: Install zensical
         run: |
-          python3 -m pip install '.[docs]'
+          python3 -m pip install 'zensical==0.0.43'
       - name: Build in-app model documentation
         run: |
           zensical build -s -f mkdocs.models.yml

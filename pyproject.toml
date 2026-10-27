@@ -80,6 +80,7 @@ test = [
 docs = [
     "mkdocs==1.6.1",
     "mkdocs-material==9.7.6",
+    # Keep in step with the zensical pin in test.yml and release.yaml.
     "zensical==0.0.43",
 ]
 # Install with `pip install "netboxlabs-netbox-custom-objects[branching]"` when
