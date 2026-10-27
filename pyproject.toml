@@ -86,7 +86,7 @@ docs = [
 # pairing this plugin with netbox-branching.  Note: this extra also implies a
 # stricter NetBox version requirement (>= 4.6.2), which is enforced at startup
 # by netbox_custom_objects.checks rather than declared here.
-branching = ["netbox-branching>=1.0.4"]
+branching = ["netboxlabs-netbox-branching>=1.0.4"]
 
 [tool.check-manifest]
 # Files tracked in git but intentionally excluded from sdist/wheel.
