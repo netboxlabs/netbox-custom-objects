@@ -43,9 +43,10 @@ match fields across export and apply cycles:
 - Assigned atomically using `SELECT ... FOR UPDATE` on the parent COT row to prevent
   race conditions under concurrent field creation.
 
-> **Note for bulk operations:** `bulk_create()` bypasses the model `save()` method and will
-> not auto-assign `schema_id`. Callers that use `bulk_create()` must set `schema_id`
-> explicitly on each field instance.
+!!! note "Bulk operations"
+    `bulk_create()` bypasses the model `save()` method and will
+    not auto-assign `schema_id`. Callers that use `bulk_create()` must set `schema_id`
+    explicitly on each field instance.
 
 ### Tombstones
 
@@ -63,15 +64,19 @@ it was removed. The executor uses tombstones to drop the corresponding DB column
 tombstone the comparator treats the absent field as ambiguous and emits a warning rather than
 a `REMOVE`.
 
-Tombstones are persisted in the `CustomObjectType.schema_document` field and read back into
-every subsequent export, so the full removal history accumulates over time.
+Tombstones are only recorded by applying a document: deleting a field in the UI or the REST
+API doesn't add one. When a document is applied, its `removed_fields` are stored in the
+type's `schema_document` (replacing any stored earlier), and every later export includes
+them. To keep the full removal history, carry each tombstone forward into every later
+document, as an exported document does.
 
 ### Schema Document Storage
 
-`CustomObjectType.schema_document` stores the most recently applied or exported schema
-snapshot as a JSON blob. It is written by the executor after a successful apply, and read
-by the exporter when building tombstone lists. Until a COT has been exported or a schema
-applied, the field is `null`.
+`CustomObjectType.schema_document` stores the most recently applied schema document as a
+JSON blob. It is written by the executor after a successful apply (exporting doesn't change
+it), and read by the exporter when building tombstone lists. It also holds a snapshot of the
+type's base database columns, taken when the type is created, which
+`manage.py upgrade_custom_objects` uses to detect columns that changed in an upgrade.
 
 ---
 
@@ -94,10 +99,11 @@ conflicting IDs, so UUID collision avoidance is unnecessary.
 This follows the same convention as Protocol Buffers, which also uses integer field IDs and
 places the responsibility for incrementing them on the schema author.
 
-> **Important constraint:** if the product ever requires bidirectional sync or multi-master
-> schema evolution — where two environments independently evolve the same COT and their schemas
-> need to be reconciled — integer IDs would need to be replaced with UUIDs. The current design
-> does not support that workflow.
+!!! warning
+    If the product ever requires bidirectional sync or multi-master
+    schema evolution — where two environments independently evolve the same COT and their schemas
+    need to be reconciled — integer IDs would need to be replaced with UUIDs. The current design
+    does not support that workflow.
 
 ### Single-Source-of-Truth Distribution Model
 
@@ -158,13 +164,15 @@ YAML or JSON, and is used by the API endpoints before any DB access.
 | `version` | no | [PEP 440](https://peps.python.org/pep-0440/) version string for the schema (e.g. `"2.1.0"`). |
 | `description` | no | Short description (max 200 characters). |
 | `group_name` | no | Navigation menu grouping. |
-| `fields` | yes | Array of active field definitions. |
+| `fields` | no | Array of active field definitions. Omitted when the type has no fields. |
 | `removed_fields` | no | Array of tombstone records for previously removed fields. |
 | `constraints` | no | Array of [constraint definitions](#constraint-definition). |
 | `removed_constraints` | no | Names of constraints to remove. |
 
 !!! note
     The `comments` attribute on Custom Object Types and Custom Object Type Fields is intentionally **excluded** from the schema document format. It is editorial annotation rather than structural schema, and including it would create noise in diffs and across-installation sharing.
+
+    Tags, a type's `display_expression` and `config_context_enabled`, and a field's `context` flag aren't part of the format either, so applying a document doesn't set them.
 
 ### Field Definition
 
@@ -188,7 +196,7 @@ All fields share these base attributes:
 | `ui_visible` | no | `"always"`, `"if-set"`, or `"hidden"`. Default: `"always"`. |
 | `ui_editable` | no | `"yes"`, `"no"`, or `"hidden"`. Default: `"yes"`. |
 | `is_cloneable` | no | Whether the field is copied when cloning objects. Default: `false`. |
-| `deprecated` | no | Marks the field as deprecated. Default: `false`. |
+| `deprecated` | no | Marks the field as deprecated (informational only; see [Field Deprecation Lifecycle](#field-deprecation-lifecycle)). Default: `false`. |
 | `deprecated_since` | no | [PEP 440](https://peps.python.org/pep-0440/) version string when the field was deprecated (e.g. `"2.0.0"`). |
 | `scheduled_removal` | no | [PEP 440](https://peps.python.org/pep-0440/) version string when the field is planned for removal (e.g. `"3.0.0"`). |
 
@@ -212,7 +220,7 @@ An `array` field's `array_element_type` and `array_tuple_size`, and a field's ty
 
 `related_name` names the reverse relation on the related object type, e.g. `related_name: widgets` lets a `device` object field be followed back as `device.widgets`. It's optional: with the default `""`, a non-polymorphic object field gets a generated name, and multi-object and polymorphic fields get no reverse relation. When a document omits it, an existing field keeps its name (documents exported before `related_name` was added don't include it); `""` clears it. It uses lowercase letters, digits and single underscores (max 100 characters), and must be unique among the fields pointing at each object type. Changing it renames the reverse relation.
 
-`is_polymorphic` defaults to `false`. When `true`, the field uses a generic foreign key and accepts references to any of the types listed in `related_object_types`. The `is_polymorphic` flag and the set of allowed types cannot be changed after the field is created.
+`is_polymorphic` defaults to `false`. When `true`, the field uses a generic foreign key and accepts references to any of the types listed in `related_object_types`. The `is_polymorphic` flag can't be changed after the field is created. Applying a document can change the set of allowed types, which the UI and REST API don't allow.
 
 ### Related Object Type Encoding
 
@@ -362,9 +370,9 @@ print(yaml.safe_dump(document, sort_keys=False))
 `export_cots` returns a dict with `schema_version` and `types`. For a single COT without the
 document wrapper, use `export_cot(cot)`.
 
-> **Fields without a `schema_id`** (created before the portable schema feature was introduced)
-> are skipped with a `WARNING` log entry. Run the backfill migration (see below) to assign IDs
-> to pre-existing fields.
+!!! note
+    **Fields without a `schema_id`** (created before the portable schema feature was introduced)
+    are skipped with a `WARNING` log entry. See [Backfilling Pre-Existing Fields](#backfilling-pre-existing-fields).
 
 ### Previewing a Schema (API)
 
@@ -380,7 +388,7 @@ header gets a JSON response.
 POST /api/plugins/custom-objects/schema/preview/
 Content-Type: application/yaml
 Accept: application/yaml
-Authorization: Token <token>
+Authorization: Bearer nbt_<key>.<token>
 
 schema_version: "1"
 types:
@@ -427,7 +435,7 @@ column. The preview endpoint never returns `409` — it is safe to call at any t
 POST /api/plugins/custom-objects/schema/apply/
 Content-Type: application/yaml
 Accept: application/yaml
-Authorization: Token <token>
+Authorization: Bearer nbt_<key>.<token>
 
 allow_destructive: false
 schema: { ... }
@@ -464,12 +472,29 @@ Response `409 Conflict`:
 
 ```yaml
 error: destructive_changes
-detail: "Schema contains destructive field removals for COT(s): circuit."
+detail: "Schema contains destructive field removals for COT(s): circuit. Pass allow_destructive=True to apply them."
 destructive_slugs: [circuit]
 ```
 
-Response `400 Bad Request` (invalid schema, unresolvable reference, circular COT dependency, or a
-type change to or from `coordinates` or `url`, which isn't supported):
+Response `400 Bad Request`, for a document that doesn't match the schema format (at most ten
+errors are listed):
+
+```yaml
+schema_errors:
+  - path: [types, 0, fields, 1, type]
+    message: "..."
+```
+
+Other `400 Bad Request` responses give an `error` code and a `detail` message:
+
+| `error` | Cause |
+|---------|-------|
+| `unresolvable_reference` | A choice set, object type or field type in the document doesn't exist. |
+| `circular_dependency` | New Custom Object Types reference each other in a cycle. |
+| `invalid_constraint` | A constraint is invalid, e.g. existing objects already violate it. |
+| `unsupported_field_change` | The document changes an `array` field's element type or tuple size, or a field's type to or from `array`. |
+| `unsupported_type_change` | The document changes a field's type to or from `coordinates` or `url`. |
+| `invalid_related_name` | A field's `related_name` is already used for its object type, or clashes with an attribute of a polymorphic field's target model. |
 
 ```yaml
 error: unresolvable_reference
@@ -503,9 +528,13 @@ deprecated_since: "2.1.0"
 scheduled_removal: "3.0.0"
 ```
 
-- `deprecated: true` marks the field as read-only in the UI; no new values can be entered.
-- `deprecated_since` is an informational version string (no format enforced).
+- `deprecated: true` marks the field as deprecated. It's informational only: the field keeps
+  working, and values can still be entered and changed. NetBox doesn't act on it.
+- `deprecated_since` records the version in which the field was deprecated.
 - `scheduled_removal` signals to consumers when the field will be tombstoned.
+
+These attributes can be set by applying a document or through the REST API, but not in the
+web UI.
 
 Deprecation is non-destructive. The field remains in `fields` (not `removed_fields`) until it
 is actually deleted, at which point a tombstone entry should be added.
@@ -585,6 +614,7 @@ full rollback.
 | `UnknownObjectTypeError` | A `related_object_type` string cannot be resolved |
 | `UnknownFieldTypeError` | A `type` value is not one of the supported field type strings |
 | `UnsupportedFieldChangeError` | A document changes an `array` field's element type or tuple size, or a field's type to or from `array` |
+| `UnsupportedTypeChangeError` | A document changes a field's type to or from `coordinates` or `url` |
 | `InvalidConstraintError` | A constraint fails validation, e.g. existing objects already violate it |
 | `InvalidRelatedNameError` | A field's `related_name` is already used for its object type, or clashes with an attribute of a polymorphic field's target model |
 
