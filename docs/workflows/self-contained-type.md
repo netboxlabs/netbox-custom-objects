@@ -38,24 +38,26 @@
     | Internal name | `support_contract` |
     | Display name (singular) | `Support Contract` |
     | Display name (plural) | `Support Contracts` |
-    | URL path/slug | `support-contracts` (filled in from the plural name) |
+    | URL path/slug | `support-contracts` (filled in from the plural name when you leave that field) |
     | Description | `Vendor support contracts` |
 
 3. Click **Create**. NetBox shows the new type's page.
 
 ### 3. Add the Fields
 
-For each row below, click **Add** on the type's page, choose **Field**, fill in the values, and click **Create**:
+For each row below, click **Add** on the type's page, choose **Field**, fill in the values, and click **Create**. NetBox returns to the type's **Fields** tab after each one; **Create & Add Another** keeps the form open for the next field instead.
 
-| Name | Label | Type | Other settings |
-|------|-------|------|----------------|
-| `contract_number` | Contract number | Text | **Required**, **Primary name field** |
-| `vendor` | Vendor | Text | **Required** |
-| `status` | Status | Selection | **Choice set:** Contract status; **Default:** `"active"` |
-| `start_date` | Start date | Date | |
-| `end_date` | End date | Date | |
-| `portal` | Support portal | URL | |
-| `notes` | Notes | Text (long) | |
+| Name | Label | Type | Display weight | Other settings |
+|------|-------|------|----------------|----------------|
+| `contract_number` | Contract number | Text | 100 | **Required**, **Primary name field** |
+| `vendor` | Vendor | Text | 110 | **Required** |
+| `status` | Status | Selection | 120 | **Choice set:** Contract status; **Default value:** `"active"` |
+| `start_date` | Start date | Date | 130 | |
+| `end_date` | End date | Date | 140 | |
+| `portal` | Support portal | URL | 150 | |
+| `notes` | Notes | Text (long) | 160 | |
+
+**Display weight** (under **Behavior**) sets the order of the fields in forms, on the detail page and in the list. Fields with the same weight are sorted by name, so without these weights the end date would come before the start date.
 
 ### 4. Set the Display Name (Optional)
 
@@ -73,9 +75,9 @@ By default, each contract is named after its contract number, the primary name f
 
 ### 6. Find and Review Them
 
-1. Click **Support Contracts** in the navigation menu to open the list view. Use **Configure Table** to show the vendor, status and end date columns.
-2. Filter the list, e.g. by status.
-3. Search for `ACME-1001` in NetBox's global search. The contract appears in the results.
+1. Click **Support Contracts** in the navigation menu to open the list view. Every field has a column; use **Configure Table** to hide the ones you don't need.
+2. On the **Filters** tab, choose **Active** under **Status** and click **Search**.
+3. Search for `ACME-1001` in NetBox's global search. The contract appears in the results, matched on its display name.
 4. Open a contract and check its **Changelog** and **Journal** tabs.
 
 ## Result
