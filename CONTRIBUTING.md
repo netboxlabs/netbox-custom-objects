@@ -138,7 +138,7 @@ NetBox development environment.
    ```bash
    export NETBOX_CONFIGURATION=configuration
    export PYTHONPATH=$PWD/testing:$PYTHONPATH
-   python ../netbox/netbox/manage.py test netbox_custom_objects -v 2
+   python ../netbox/netbox/manage.py test netbox_custom_objects.tests --keepdb -v 2
    ```
 
 5. **Run NetBox** and verify the plugin loads and behaves as expected.
