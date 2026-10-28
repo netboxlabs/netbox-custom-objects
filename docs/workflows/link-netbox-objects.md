@@ -24,13 +24,13 @@
 
 For each row, click **Add** on the type's page, choose **Field**, fill in the values, and click **Create**:
 
-| Name | Label | Type | Other settings |
-|------|-------|------|----------------|
-| `destination` | Destination | Text | **Required**, **Primary name field**, e.g. `10.20.0.0/16` |
-| `next_hop` | Next hop | Text | **Required** |
-| `device` | Device | Object | **Required**; **Related object type:** DCIM > Device; **Reverse relation name:** `static_routes`; **On delete behavior:** Cascade |
-| `vrf` | VRF | Object | **Related object type:** IPAM > VRF |
-| `metric` | Metric | Integer | **Minimum value:** `0` |
+| Name | Label | Type | Display weight | Other settings |
+|------|-------|------|----------------|----------------|
+| `destination` | Destination | Text | 100 | **Required**, **Primary name field**; values like `10.20.0.0/16` |
+| `next_hop` | Next hop | Text | 110 | **Required** |
+| `device` | Device | Object | 120 | **Required**; **Related object type:** DCIM > Device; **Reverse relation name:** `static_routes`; **On delete behavior:** Cascade |
+| `vrf` | VRF | Object | 130 | **Related object type:** IPAM > VRF |
+| `metric` | Metric | Integer | 140 | **Minimum value:** `0` |
 
 **On delete behavior: Cascade** deletes a device's routes when the device is deleted. The default, **Set null**, would leave routes with no device, which this field doesn't allow.
 
@@ -38,13 +38,13 @@ For each row, click **Add** on the type's page, choose **Field**, fill in the va
 
 1. Under **Custom Objects > Objects**, click the **+** next to **Static Routes**.
 2. Enter a destination and next hop, and pick the device (and a VRF, if you use them).
-3. Click **Create**. Add a second route for the same device.
+3. Click **Create & Add Another**, and add a second route for the same device.
 
 ### 4. See the Routes from the Device
 
 1. Open the device's page. A **Custom Objects** tab shows how many custom objects reference it.
 2. Click the tab. Both routes are listed, with the field that links them (**Device**).
-3. Use the tab's search and type filter to narrow the list, and its edit button to change a route.
+3. Use the tab's search to narrow the list, and a route's edit button to change it. A type filter appears once custom objects of more than one type link to the device, and a tag filter once they have tags.
 
 ### 5. Link Devices to Support Contracts
 
@@ -62,12 +62,12 @@ The device field above is defined on the custom object. To put a field on the de
     | Related object type | Custom Objects > Support Contract |
 
 3. Click **Create**.
-4. Edit a device, choose a contract in **Support contract**, and save. The device's page shows the contract under **Custom Fields**, linked to the contract's page.
-5. Open that contract's page and check whether, and where, the device is shown.
+4. Edit a device, choose a contract in **Support contract** (under **Custom Fields**, near the bottom of the form), and save. The device's page shows the contract under **Custom Fields**, linked to the contract's page.
+5. The contract's page doesn't list the devices that link to it this way. To find them, filter the device list by the custom field: on **Devices > Devices**, open the **Filters** tab and choose the contract under **Support contract**.
 
 ### 6. Follow the Link in a Template or Script (Optional)
 
-The **Reverse relation name** makes the routes available from the device, e.g. in an [export template](https://netboxlabs.com/docs/netbox/models/extras/exporttemplate/) for devices:
+The **Reverse relation name** makes the routes available from the device, e.g. in an [export template](https://netboxlabs.com/docs/netbox/models/extras/exporttemplate/) for devices. Go to **Customization > Export Templates**, click **Add**, set **Name** to `Static routes`, **Object types** to DCIM > Device, and **Template code** to:
 
 ```jinja2
 {% for device in queryset %}
@@ -76,6 +76,14 @@ The **Reverse relation name** makes the routes available from the device, e.g. i
   ip route {{ route.destination }} {{ route.next_hop }}
 {%- endfor %}
 {% endfor %}
+```
+
+Then, on the device list, choose **Export > Static routes**. The file lists each device followed by its routes:
+
+```no-highlight
+core-sw-01
+  ip route 10.20.0.0/16 192.0.2.1
+  ip route 0.0.0.0/0 198.51.100.1
 ```
 
 ## Result
