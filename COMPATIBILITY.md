@@ -9,6 +9,7 @@ release of Custom Objects.
 | 0.7.0 | 4.5.2 | 4.7.x | 3.12 |
 | 0.6.1 | 4.5.2 | 4.7.x | 3.12 |
 | 0.6.0 | 4.5.2 | 4.6.x | 3.12 |
+| 0.5.3 | 4.5.2 | 4.6.x | 3.12 |
 | 0.5.2 | 4.5.2 | 4.6.x | 3.12 |
 | 0.5.1 | 4.5.2 | 4.6.x | 3.12 |
 | 0.5.0 | 4.5.2 | 4.6.x | 3.12 |
@@ -45,7 +46,13 @@ When upgrading either NetBox or this plugin:
    ```bash
    python manage.py migrate
    ```
-5. Clear the cache:
+5. Collect static files, which include the plugin's in-app help pages:
    ```bash
-   python manage.py clearcache
+   python manage.py collectstatic --no-input
    ```
+6. Restart NetBox's WSGI and background worker processes:
+   ```bash
+   sudo systemctl restart netbox netbox-rq
+   ```
+
+`migrate` also adds any new columns that an upgrade needs to existing Custom Object Types' tables. To check for, or apply, those changes on their own, run `python manage.py upgrade_custom_objects` (add `--dry-run` to only report them).

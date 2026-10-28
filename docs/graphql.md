@@ -20,12 +20,17 @@ model's field.
 
 ## Authentication
 
-GraphQL requests use the same authentication as the REST API. Pass a token in the
-`Authorization` header:
+GraphQL requests use the same [authentication](https://netboxlabs.com/docs/netbox/integrations/rest-api/#authentication)
+as the REST API. Pass a v2 token in the `Authorization` header:
 
+```no-highlight
+curl -H "Authorization: Bearer nbt_<key>.<token>" \
+     -H "Content-Type: application/json" \
+     https://netbox/graphql/ \
+     --data '{"query": "{ custom_objects_dhcp_scope_list { id display } }"}'
 ```
-Authorization: Token <your-api-token>
-```
+
+Legacy v1 tokens use `Authorization: Token <token>` instead.
 
 Object-level permissions are enforced. The top-level `<name>` / `<name>_list`
 queries only return custom objects the authenticated user has permission to view,
@@ -82,9 +87,11 @@ query {
 }
 ```
 
-> **Tip:** `display` is the only human-readable field guaranteed to exist on every
-> type — it is the value of the type's primary field. `name` exists only if the
-> type defines a custom field literally named `name`.
+!!! tip
+    `display` is the only human-readable field guaranteed to exist on every
+    type. It is the object's display name: the type's display expression, else its
+    primary field's value, else the type's name and the object's ID. `name` exists
+    only if the type defines a custom field literally named `name`.
 
 ## Filtering a list
 
@@ -128,8 +135,10 @@ filter based on its type:
 
 Object and multi-object fields nest the target type's own filter, whether the
 target is a NetBox model (`primary_site: {region: {slug: {exact: "emea"}}}`) or
-another Custom Object Type. Multi-object fields that point at a Custom Object Type
-also take `filters:` on the field itself, to filter the related objects returned.
+another Custom Object Type. A non-polymorphic multi-object field also takes
+`filters:` and `pagination:` on the field itself, to filter and page the related
+objects returned, as long as its target has a GraphQL type (see
+[Fallback for targets without a GraphQL type](#fallback-for-targets-without-a-graphql-type)).
 
 Polymorphic fields get one filter per type they can point at, named
 `<field>_<app_label>_<model>` as in the REST API, e.g. `target_dcim_site` and
@@ -144,6 +153,11 @@ for tuples).
 
 A field whose **Filter logic** is set to **Disabled** has no filter, as in the
 REST API.
+
+Lists are paginated with a `pagination:` argument, as in NetBox's own list
+queries, e.g. `custom_objects_server_list(pagination: {offset: 0, limit: 50})`. See
+NetBox's [GraphQL pagination documentation](https://netboxlabs.com/docs/netbox/integrations/graphql-api/#pagination)
+for the options.
 
 ## Querying a single object
 
@@ -163,11 +177,18 @@ Each generated type exposes:
 | Field | Description |
 |-------|-------------|
 | `id` | The object's primary key. |
-| `display` | The object's display string (its primary field value). |
+| `display` | The object's display name (see the tip above). |
+| `class_type` | The name of the object's model class, e.g. `Table9Model`. |
 | `created` / `last_updated` | Change-logging timestamps. |
+| `owner` | The object's owner. A custom field named `owner` takes its place. |
 | `tags` | The object's tags. |
+| `journal_entries` | The object's journal entries. |
+| `changelog` | The object's change records. |
 | `local_context_data` / `config_context` | With config context support enabled: the local context data, and the rendered context (read-only). A custom field named `config_context` takes its place. |
-| One field per custom field | Named exactly as the field's `name`. |
+| One field per custom field | Named exactly as the field's `name`. Coordinates fields, and the link title of a URL field, aren't available in GraphQL. |
+
+Each Custom Object Type's GraphQL type is named `Table<id>ModelType`, where `<id>`
+is the Custom Object Type's ID, e.g. `Table9ModelType`.
 
 ### Scalar field types
 
@@ -175,14 +196,18 @@ Scalar custom fields map to their natural GraphQL types:
 
 | Custom field type | GraphQL type |
 |-------------------|--------------|
-| text, long text, URL, select, color, MAC address | `String` |
+| text, long text, URL, color, MAC address | `String` |
 | integer | `Int` |
 | decimal | `Decimal` |
 | boolean | `Boolean` |
 | date | `Date` |
 | datetime | `DateTime` |
 | JSON | `JSON` |
-| multi-select | `[String]` |
+| select | `CustomObjectChoiceType` |
+| multi-select | `[CustomObjectChoiceType]` |
+
+`CustomObjectChoiceType` has a `value` (the stored choice value) and a `label`, as
+in the REST API. Filters on select fields still match the stored value.
 
 ### Relationship field types
 
@@ -220,6 +245,7 @@ query {
     target {                # polymorphic object field
       ... on SiteType { id name }
       ... on DeviceType { id name }
+      ... on Table9ModelType { id display }   # a Custom Object Type
     }
   }
 }

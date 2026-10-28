@@ -1,28 +1,28 @@
 # Custom Object Type Constraints
 
-A Custom Object Type Constraint either requires a combination of a Custom Object Type's field values to be unique across its objects, for example a serial number that only has to be unique per vendor, or requires every object to satisfy a rule, for example an end date after its start date. The database enforces it, so it applies however objects are created or changed. See the [Custom Objects documentation](https://github.com/netboxlabs/netbox-custom-objects/blob/main/docs/index.md#adding-constraints-to-the-custom-object-type) for details.
+A Custom Object Type Constraint either requires a combination of a Custom Object Type's field values to be unique across its objects, for example a serial number that only has to be unique per vendor, or requires every object to satisfy a rule, for example an end date after its start date. The database enforces it, so it applies however objects are created or changed, and it can't be saved while existing objects already break it. See the [Custom Objects documentation](https://github.com/netboxlabs/netbox-custom-objects/blob/main/docs/index.md#adding-constraints-to-the-custom-object-type) for details.
 
 ## Fields
 
 ### Name
 
-A lowercased, URL-friendly name, unique within the Custom Object Type, e.g. `vendor_serial`.
+A lowercased, URL-friendly name of up to 50 characters, unique within the Custom Object Type, e.g. `vendor_serial`. Names may not start or end with an underscore, and double underscores are not allowed.
 
 ### Type
 
-The kind of constraint: `Unique` or `Check`.
+The kind of constraint: `Unique` (the default) or `Check`.
 
 ### Fields
 
-For a unique constraint: the fields whose combined values must be unique. Choose at least two, or one when the constraint is case-insensitive or has a condition. Multi-object, multi-select, JSON, coordinates and array fields can't be included.
+For a unique constraint: the fields whose combined values must be unique. Choose at least two, or one when the constraint is case-insensitive or has a condition. Multi-object, multi-select, JSON, coordinates and array fields can't be included. A type can't have two unique constraints with the same fields and settings.
 
 ### Case-Insensitive
 
-For a unique constraint: compare text, long text and URL fields without regard to case.
+For a unique constraint: compare text, long text and URL fields without regard to case. The constraint must include at least one such field.
 
 ### Empty Values Are Distinct
 
-For a unique constraint: when enabled (the default), objects that leave any of the constrained fields empty never conflict. Disable it to treat empty values as equal.
+For a unique constraint: when enabled (the default), objects that leave any of the constrained fields empty never conflict. Disable it to treat empty values as equal; this requires PostgreSQL 15 or later.
 
 ### Condition
 

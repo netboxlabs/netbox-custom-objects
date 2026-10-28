@@ -6,23 +6,23 @@ A Custom Object Type defines a new object type in NetBox — the equivalent of a
 
 ### Internal Name
 
-A unique, lowercased, URL-friendly internal name, e.g. `vendor_policy`. Only lowercase alphanumeric characters and underscores are permitted; names may not start or end with an underscore, and double underscores are not allowed.
+A unique, lowercased, URL-friendly internal name of up to 100 characters, e.g. `vendor_policy`. Only lowercase alphanumeric characters and underscores are permitted; names may not start or end with an underscore, and double underscores are not allowed.
 
 ### Display Name (Singular)
 
-The human-friendly singular name shown throughout the UI, e.g. `Vendor Policy`. Defaults to the internal name if left blank.
+The human-friendly singular name shown throughout the UI, e.g. `Vendor Policy`. If left blank, the internal name is used with its first letter capitalized, e.g. `Vendor_policy`.
 
 ### Display Name (Plural)
 
-The human-friendly plural name shown throughout the UI, e.g. `Vendor Policies`. Defaults to the internal name if left blank.
+The human-friendly plural name shown throughout the UI, e.g. `Vendor Policies`. If left blank, the singular display name followed by `s` is used.
 
 ### URL Path/Slug
 
-A unique, plural, URL-friendly identifier used as a URL component for this type's list and detail views, e.g. `vendor-policies`.
+A unique, plural, URL-friendly identifier used as a URL component for this type's list and detail views, e.g. `vendor-policies`. In the form, it's filled in from the plural display name.
 
 ### Display Expression
 
-An optional Jinja2 template used to render the display name of individual objects of this type, e.g. `{{ name }} - {{ manufacturer }}`. Reference field values by name; undefined fields resolve to an empty string. If left blank, the field marked as the type's primary field is used instead.
+An optional Jinja2 template used to render the display name of individual objects of this type, e.g. `{{ name }} - {{ manufacturer }}`. Reference field values by name; undefined fields resolve to an empty string. The template's syntax is checked when the type is saved, and it can be up to 500 characters long. If left blank, the value of the type's primary field is used instead, or, without a primary field, the type's display name and the object's ID (e.g. `Vendor Policy 3`).
 
 The rendered display name is included in global search, quick search and object selectors, so searching for any text in it finds the object. It's stored in NetBox's search cache when an object is saved, and every object of the type is reindexed when the expression changes. An expression can include values from related objects, e.g. `{{ interface.device.name }}`. Changes to those objects don't update the cached display name immediately, but a background job (which needs NetBox's background worker running) refreshes the cached display names hourly for every type whose expression references an object or multi-object field, so search catches up within an hour. The same job also indexes any object that has no cached display name yet, such as objects that existed before this feature was installed.
 

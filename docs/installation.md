@@ -2,9 +2,12 @@
 
 ## Requirements
 
-* NetBox v4.5.2 or later (see [`COMPATIBILITY.md`](https://github.com/netboxlabs/netbox-custom-objects/blob/main/COMPATIBILITY.md) for the supported version matrix)
+* NetBox v4.5.2 through v4.7.x (see [`COMPATIBILITY.md`](https://github.com/netboxlabs/netbox-custom-objects/blob/main/COMPATIBILITY.md) for the supported version matrix)
+* Python 3.12 or later
 * PostgreSQL (required — Custom Object Types are backed by real database tables)
-* Redis (required — used by background jobs such as search reindexing)
+* Redis (required — used for background jobs such as search reindexing, and for the cache that keeps NetBox's worker processes in step when a Custom Object Type is deleted)
+
+Using Custom Objects with [NetBox Branching](branching.md) requires NetBox v4.6.2 or later and netbox-branching v1.0.4 or later.
 
 ## Installation
 
@@ -12,8 +15,14 @@
 
 Add the Python package to NetBox's running environment:
 
-```
+```no-highlight
 pip install netboxlabs-netbox-custom-objects
+```
+
+To keep the plugin installed when NetBox is upgraded, add it to `local_requirements.txt` in the NetBox root directory:
+
+```no-highlight
+echo netboxlabs-netbox-custom-objects >> local_requirements.txt
 ```
 
 ### 2. Enable the Plugin
@@ -31,7 +40,7 @@ PLUGINS = [
 
 Apply the plugin's database migrations and collect its static files:
 
-```
+```no-highlight
 ./manage.py migrate
 ./manage.py collectstatic
 ```
@@ -40,24 +49,13 @@ Apply the plugin's database migrations and collect its static files:
 
 Restart NetBox's WSGI and background worker processes:
 
-```
+```no-highlight
 sudo systemctl restart netbox netbox-rq
 ```
 
-### NetBox Branching Integration
+### NetBox Branching
 
-If you are using Custom Objects alongside the [NetBox Branching](https://github.com/netboxlabs/netbox-branching) plugin, add the following to your `configuration.py` to exempt Custom Object Types and their fields from branch tracking. See [Using Custom Objects with Branching](branching.md) for a full explanation.
-
-```python
-PLUGINS_CONFIG = {
-    'netbox_branching': {
-        'exempt_models': [
-            'netbox_custom_objects.customobjecttype',
-            'netbox_custom_objects.customobjecttypefield',
-        ],
-    },
-}
-```
+No extra configuration is needed to use Custom Objects with NetBox Branching. See [Using Custom Objects with NetBox Branching](branching.md) for the requirements and what is supported.
 
 ## Configuration Parameters
 
