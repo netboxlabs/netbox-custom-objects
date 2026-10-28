@@ -55,3 +55,5 @@ nav:
   - GraphQL API: graphql.md
   - Portable Schema: portable-schema.md
   - Releases: releases.md
+  - Development:
+      - Contributing: development/contributing.md
