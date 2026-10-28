@@ -1,19 +1,15 @@
 # Custom Objects Tab
 
-When a Custom Object Type has an Object or Multi-object field that points at another model — a built-in NetBox model such as Device or Site, or another Custom Object Type — a **Custom Objects** tab is added to the detail page of every referenced object. The tab lists all custom objects that link to the object being viewed, across every referencing field and type, with:
+The **Custom Objects** tab on an object's detail page lists the custom objects that reference it through object or multi-object fields, including polymorphic fields.
 
-- a badge showing the linked-object count (the tab hides itself when there are none),
-- search, plus type and tag filters, and sortable columns,
-- HTMX-driven pagination and per-user column configuration,
-- per-row edit/delete actions.
+The tab provides:
 
-Discovery is automatic and requires no configuration; both non-polymorphic and polymorphic Object/Multi-object fields are supported. The tab supersedes the older "Custom Objects linking to this object" panel — it surfaces the same relationships and, unlike the panel, enforces per-Custom-Object-Type view permissions on the rows it lists.
+- A count of linked objects the user can view.
+- Search, type and tag filters, sortable columns, pagination and configurable columns.
+- Edit and delete actions for individual objects.
 
-The tab is fully live: no NetBox restart is needed for any everyday change. Defining a new Custom Object Type, adding a field that references a model nothing referenced before, and creating, editing, or deleting custom objects are all reflected on the next page load.
+The tab is hidden when the user cannot view any linked objects. Changes to types, fields and objects appear on the next page load; no restart or additional configuration is required.
 
-!!! note
-    The badge count is filtered to the viewing user's permissions, so it reflects the rows that user can actually open — and the tab hides itself entirely when the user may view none of the linked objects.
-
-Because the rows span heterogeneous models (one per Custom Object Type), they cannot be combined into a single SQL query: the tab filters, sorts, and paginates in memory, and offers per-row rather than bulk actions. Rendering the tab on an object referenced by a very large number of custom objects costs proportionally more.
+Loading may take longer for objects with many linked custom objects.
 
 The Value column lists the objects each multi-object field links to, up to the [`max_multiobject_display`](configuration.md#max_multiobject_display) setting.

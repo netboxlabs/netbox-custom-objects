@@ -11,7 +11,7 @@ Check the [compatibility matrix](https://github.com/netboxlabs/netbox-custom-obj
     pip install --upgrade netboxlabs-netbox-custom-objects
     ```
 
-    If you installed the plugin through `local_requirements.txt`, NetBox's `upgrade.sh` script installs the latest release for you.
+    If the plugin is listed in `local_requirements.txt`, NetBox's `upgrade.sh` script installs it for you. Update any version pin before running the script.
 
 3. Apply database migrations:
 
@@ -33,12 +33,12 @@ Check the [compatibility matrix](https://github.com/netboxlabs/netbox-custom-obj
 
 ## Custom Object Type Tables
 
-Each Custom Object Type has its own database table. When a new release of NetBox or Custom Objects adds columns that every custom object needs, `migrate` adds them to the existing tables, including in every [NetBox Branching](branching.md) branch.
+Each Custom Object Type has its own database table. When an upgrade adds columns shared by all custom objects, `migrate` updates the existing tables in main and in branches without pending migrations. Other branches are updated after their migrations run; see [Upgrades](branching.md#upgrades).
 
 The `upgrade_custom_objects` management command runs the same check on demand:
 
 ```no-highlight
-./manage.py upgrade_custom_objects             # check and update every type, and every branch
+./manage.py upgrade_custom_objects             # check and update every type, in main and branches without pending migrations
 ./manage.py upgrade_custom_objects --dry-run   # only report what would change
 ./manage.py upgrade_custom_objects --cot dhcp_scope   # one type (by name or ID), main only
 ```

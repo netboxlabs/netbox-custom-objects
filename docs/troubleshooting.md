@@ -17,7 +17,7 @@ Changing a field's search weight, adding or removing a searchable field, or chan
 
 ## Errors After Deleting a Custom Object Type
 
-When a Custom Object Type is deleted, the process that deletes it tells NetBox's other worker processes through NetBox's shared Redis cache, and each one stops using the type's model at its next request or job. If every NetBox process doesn't use the same Redis cache, the others can keep the deleted type's model, and later fail with database errors about its missing table, for example when deleting a tag. Make sure all of them share the `caching` Redis configuration, or restart NetBox after deleting a type.
+All NetBox web and background worker processes must share the same Redis `caching` configuration. Otherwise, some processes may continue using a deleted type's model and report errors about its missing table. Check the cache configuration, then restart the web and background workers.
 
 ## Missing Columns After an Upgrade
 

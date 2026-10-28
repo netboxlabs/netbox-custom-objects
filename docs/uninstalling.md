@@ -5,9 +5,9 @@ NetBox's guide to [removing a plugin](https://netboxlabs.com/docs/netbox/plugins
 !!! warning
     Uninstalling deletes every Custom Object Type and all of their objects. Back up the NetBox database before you start. To keep a copy of your type definitions, [export them](portable-schema.md) first.
 
-## 1. Merge or Delete Open Branches
+## 1. Remove Branch Copies
 
-If you use [NetBox Branching](branching.md), merge or delete any open branch that changes Custom Object Types or custom objects. Each branch keeps its own copy of the types' tables.
+If you use [NetBox Branching](branching.md), merge any changes you want to keep, then archive or delete every branch that contains Custom Objects tables. This includes branches with no custom-object changes and branches that have already been merged: merging preserves their database tables.
 
 ## 2. Delete Every Custom Object Type
 
@@ -26,4 +26,4 @@ Follow NetBox's [plugin removal guide](https://netboxlabs.com/docs/netbox/plugin
 | `PLUGINS` entry and app label | `netbox_custom_objects` |
 | Database tables | `netbox_custom_objects_*` |
 
-Once every type has been deleted, no `custom_objects_*` tables should remain. If `\dt custom_objects_*` lists any, they belong to a type that wasn't deleted.
+After deleting the types and removing their branch copies, run `\dt *.custom_objects_*` in the database shell to check all schemas. No matching tables should remain.

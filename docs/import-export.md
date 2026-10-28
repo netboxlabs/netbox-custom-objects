@@ -4,7 +4,7 @@ Custom objects can be imported and exported in bulk like NetBox's own objects, f
 
 ## Bulk Import
 
-The **Import** button (shown to users who can add the type's objects) accepts CSV, JSON or YAML. Each column, or key, is a field's name, and each row creates an object. As in NetBox, include an `id` column to update existing objects instead of creating new ones.
+The **Import** button requires add permission and accepts CSV, JSON or YAML. Use field names as column headings or keys. Each row creates an object unless it includes an `id`, which updates an existing object and, on NetBox 4.6.5 and later, also requires change permission.
 
 Values are given as follows:
 

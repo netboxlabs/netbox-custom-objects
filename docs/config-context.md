@@ -32,12 +32,12 @@ Notes:
 
 - Field **names are unique per type**, so there is never ambiguity about which field feeds a dimension.
 - A field must be an object field with both the **name and target model** above; a mis-named or mis-pointed field is simply ignored.
-- If a type defines **none** of these fields, aggregation is skipped entirely and its rendered context is just its Local Context Data. This is a deliberate difference from Devices/VMs: **global (unassigned) ConfigContexts are not applied** to such a type — enabling config context support alone never silently pulls in every global context. Add at least one convention field (e.g. `site`) to opt the type into source aggregation; global contexts then apply too (as they do for any object with a dimension).
+- Without any matching fields, only **Local Context Data** is used. Add at least one field from the table, such as `site`, to include matching source contexts and global contexts.
 
 ## Jinja Config and Export Templates
 
 !!! note
-    Requires NetBox 4.7 or later. On earlier NetBox versions, `custom_objects` is simply unavailable in templates and nothing else changes — no error, no crash. A `DEBUG`-level log message noting this is emitted at plugin startup; enable debug logging if you need to confirm why `custom_objects` isn't resolving.
+    Requires NetBox 4.7 or later. On older versions, the `custom_objects` variable and filter are unavailable. The plugin logs this at `DEBUG` level during startup.
 
 Custom Objects can be referenced directly from NetBox [config templates](https://netboxlabs.com/docs/netbox/models/extras/configtemplate/) and [export templates](https://netboxlabs.com/docs/netbox/models/extras/exporttemplate/), so device configuration can pull in data modelled with Custom Object Types (e.g. OSPF interface parameters, BGP peer groups, MPLS label ranges) alongside built-in NetBox models.
 
