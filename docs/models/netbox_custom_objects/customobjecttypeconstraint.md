@@ -1,6 +1,6 @@
 # Custom Object Type Constraints
 
-A Custom Object Type Constraint either requires a combination of a Custom Object Type's field values to be unique across its objects, for example a serial number that only has to be unique per vendor, or requires every object to satisfy a rule, for example an end date after its start date. The database enforces it, so it applies however objects are created or changed, and it can't be saved while existing objects already break it. See the [Custom Objects documentation](https://github.com/netboxlabs/netbox-custom-objects/blob/main/docs/index.md#adding-constraints-to-the-custom-object-type) for details.
+A Custom Object Type Constraint either requires a combination of a Custom Object Type's field values to be unique across its objects, for example a serial number that only has to be unique per vendor, or requires every object to satisfy a rule, for example an end date after its start date. The database enforces it, so it applies however objects are created or changed, and it can't be saved while existing objects already break it. See the [Custom Objects documentation](https://netboxlabs.com/docs/extensions/custom-objects/#adding-constraints-to-the-custom-object-type) for details.
 
 ## Fields
 

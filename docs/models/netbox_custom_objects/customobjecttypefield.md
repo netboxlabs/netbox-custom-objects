@@ -1,6 +1,6 @@
 # Custom Object Type Fields
 
-A Custom Object Type Field adds a field to a Custom Object Type: storage in the type's database table, an input on its edit form, and an attribute in its REST API and GraphQL representations. See the [field attributes documentation](https://github.com/netboxlabs/netbox-custom-objects/blob/main/docs/field-attributes.md) for each field type and the attributes specific to it.
+A Custom Object Type Field adds a field to a Custom Object Type: storage in the type's database table, an input on its edit form, and an attribute in its REST API and GraphQL representations. See the [field attributes documentation](https://netboxlabs.com/docs/extensions/custom-objects/field-attributes/) for each field type and the attributes specific to it.
 
 ## Fields
 
@@ -118,4 +118,4 @@ Free-form notes about the field.
 
 ### Deprecated, Deprecated Since and Scheduled Removal
 
-Mark the field as deprecated, and record the version in which it was deprecated and the version in which it's planned to be removed, e.g. `2.0.0` and `3.0.0`. These are informational only: a deprecated field keeps working. They're set through the REST API or a [portable schema](https://github.com/netboxlabs/netbox-custom-objects/blob/main/docs/portable-schema.md) document, and can't be edited here.
+Mark the field as deprecated, and record the version in which it was deprecated and the version in which it's planned to be removed, e.g. `2.0.0` and `3.0.0`. These are informational only: a deprecated field keeps working. They're set through the REST API or a [portable schema](https://netboxlabs.com/docs/extensions/custom-objects/portable-schema/) document, and can't be edited here.
