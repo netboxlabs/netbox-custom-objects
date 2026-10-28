@@ -18,7 +18,7 @@ The name of the field as displayed to users. If left blank, the field's name is 
 
 ### Primary Name Field
 
-Use this field's value as each object's displayed name. A Custom Object Type has at most one primary name field, so marking a field as primary unmarks any other. The type's display expression, if set, takes precedence. A field can't be both a primary name field and a context field.
+Use this field's value as each object's displayed name. A Custom Object Type should have only one primary name field; saving this form with it enabled unmarks any other. The type's display expression, if set, takes precedence. A field can't be both a primary name field and a context field.
 
 ### Context Field
 

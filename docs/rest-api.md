@@ -54,7 +54,7 @@ Create a Custom Object Type with a `POST` to `/api/plugins/custom-objects/custom
 | `config_context_enabled` | no | Gives objects of this type config context support (see [Config context](#config-context)). Can only be set when the type is created. Default: `false`. |
 | `tags` | no | List of NetBox tag IDs to attach to this Custom Object Type. |
 
-Responses also include the type's `fields` (brief representations), its `schema_document` (see [Portable Schema](portable-schema.md)), and the read-only `table_model_name` and `object_type_name` of the model that backs the type.
+Responses also include the type's `fields` (each field's full representation), its `schema_document` (see [Portable Schema](portable-schema.md)), and the read-only `table_model_name` and `object_type_name` of the model that backs the type.
 
 ## Custom Object Type Fields
 
@@ -557,13 +557,14 @@ The Custom Object Type and Custom Object Type Field list endpoints accept filter
 
 ## Filtering Custom Objects
 
-Each field of a Custom Object Type gets a filter on that type's endpoint, named after the field, unless the field's **Filter logic** is `disabled`. As with NetBox's own filters, a filter can be repeated to match any of several values.
+Each field of a Custom Object Type gets a filter on that type's endpoint, named after the field, unless the field's **Filter logic** is `disabled`. The `select`, `multiselect`, `color`, `mac_address` and `multiobject` filters can be repeated to match any of several values, e.g. `?environment=production&environment=staging`; the others take a single value.
 
 | Field type | Filter |
 |------------|--------|
 | `text`, `longtext`, `url` | `?<field>=` matches part of the value when filter logic is `loose` (the default), or the whole value when it's `exact`. Either way, the core NetBox lookup suffixes are available, e.g. `?<field>__isw=` (starts with) or `?<field>__n=` (does not equal). |
 | `json` | `?<field>=` matches part of the JSON text. |
-| `integer`, `decimal`, `date`, `datetime` | `?<field>=` matches the value exactly; suffixes such as `__gte`, `__lt` and `__n` are also available. |
+| `integer`, `decimal` | `?<field>=` matches the value exactly; suffixes such as `__gte`, `__lt` and `__n` are also available. |
+| `date`, `datetime` | `?<field>=` matches the value exactly. |
 | `boolean` | `?<field>=true` or `false`. |
 | `select` | `?<field>=<value>` matches the choice value. |
 | `multiselect` | `?<field>=<value>` matches objects whose selections include the value. |

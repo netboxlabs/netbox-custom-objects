@@ -178,7 +178,7 @@ Each generated type exposes:
 |-------|-------------|
 | `id` | The object's primary key. |
 | `display` | The object's display name (see the tip above). |
-| `class_type` | The object's GraphQL type name. |
+| `class_type` | The name of the object's model class, e.g. `Table9Model`. |
 | `created` / `last_updated` | Change-logging timestamps. |
 | `owner` | The object's owner. A custom field named `owner` takes its place. |
 | `tags` | The object's tags. |
