@@ -5,6 +5,7 @@
 This documentation covers:
 
 - Setting up: [installation](installation.md), [configuration](configuration.md), [permissions](permissions.md), [upgrading](upgrading.md) and [uninstalling](uninstalling.md)
+- [Workflows](workflows/index.md) that walk through common tasks from start to finish
 - [Field attributes](field-attributes.md) available on each field type
 - Working with custom objects: [import and export](import-export.md), the [Custom Objects tab](related-objects-tab.md), and [config context and templates](config-context.md)
 - [REST API](rest-api.md) usage and endpoints

@@ -61,6 +61,15 @@ nav:
       - Config Context and Templates: config-context.md
       - Branching Support: branching.md
       - Portable Schema: portable-schema.md
+  - Workflows:
+      - Overview: workflows/index.md
+      - A Self-Contained Object Type: workflows/self-contained-type.md
+      - Linking to NetBox Objects: workflows/link-netbox-objects.md
+      - Relating Custom Objects: workflows/relate-custom-objects.md
+      - Bulk Importing and Editing: workflows/bulk-import.md
+      - Referencing Several Object Types: workflows/polymorphic-references.md
+      - Keeping Data Clean: workflows/data-quality.md
+      - Promoting a Schema: workflows/promote-schema.md
   - REST API: rest-api.md
   - GraphQL API: graphql.md
   - Data Model:
