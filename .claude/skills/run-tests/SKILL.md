@@ -5,29 +5,30 @@ description: Run the netbox_custom_objects plugin's Django test suite against a 
 
 # Run the plugin's test suite
 
-This plugin uses Django's built-in test runner (`django.test.TestCase`), **not** pytest — `pyproject.toml` lists `pytest` as a test extra but the suite is invoked via NetBox's `manage.py test`. CI runs this exact command in `.github/workflows/lint-tests.yaml`.
+This plugin uses Django's built-in test runner (`django.test.TestCase`), **not** pytest; the suite is invoked via NetBox's `manage.py test`. CI runs it in `.github/workflows/test.yml`.
 
 ## Canonical command
 
-From the NetBox repo root (with the plugin installed in editable mode and `testing/configuration.py` linked into NetBox):
+From the NetBox repo root, with the plugin installed in editable mode and the environment variables below set:
 
 ```bash
 python netbox/manage.py test netbox_custom_objects.tests --keepdb
 ```
 
-This is the same command CI runs. Add `-v 2` to print each test as it executes; drop to `-v 1` for terser output.
+CI runs the same command without `--keepdb`, since it starts from a fresh database. Add `-v 2` to print each test as it executes; drop to `-v 1` for terser output.
 
 ## Prerequisites (one-time setup)
 
 1. NetBox checkout alongside this repo (`../netbox` or any sibling path).
-2. `testing/configuration.py` symlinked into NetBox:
+2. NetBox pointed at the shipped test configuration with environment variables (no symlink into NetBox):
    ```bash
-   ln -sf "$PWD/testing/configuration.py" ../netbox/netbox/configuration.py
+   export PYTHONPATH="$PWD/testing:$PYTHONPATH"
+   export NETBOX_CONFIGURATION=configuration   # or configuration_branching, with netbox-branching installed
    ```
-   This config sets `PLUGINS = ['netbox_custom_objects']` and points at a local Postgres + Redis on default ports (`netbox` / `netbox` / `netbox`).
+   `testing/configuration.py` sets `PLUGINS = ['netbox_custom_objects']` and points at a local Postgres + Redis on default ports (`netbox` / `netbox` / `netbox`).
 3. Plugin installed in editable mode with test extras:
    ```bash
-   pip install -e '.[dev,test]'
+   pip install -e '.[dev,test,docs]'
    ```
 4. NetBox dependencies installed: `pip install -r ../netbox/requirements.txt`.
 5. Postgres + Redis reachable on localhost (defaults).
@@ -44,18 +45,11 @@ python netbox/manage.py test netbox_custom_objects.tests.api --keepdb
 python netbox/manage.py test netbox_custom_objects.tests.models.test_cot.CustomObjectTypeTestCase --keepdb
 ```
 
-Available test modules in `netbox_custom_objects/tests/`:
-- `api` — REST API endpoints: custom objects, field values, types, fields, constraints, linked objects, config context.
-- `test_concurrency` — Tests that run threads (TransactionTestCase): concurrent model generation, double submits, FK-constraint hook races.
-- `test_deletion` — Cascade deletion when a referenced object is deleted.
-- `test_field_types` — FieldType subclass behaviour (model field, form field, serializer, filter).
-- `test_filtersets` — Filterset generation and filtering for custom object models.
-- `models` — model tests: types, fields, constraints, choice sets, generated models, model cache, search, app config, utilities.
-- `test_navigation` — Dynamic navigation menu construction.
-- `test_table_schema` — DB schema create/delete/alter for custom object tables.
-- `test_views` — UI views via NetBox's test client.
+The test packages in `netbox_custom_objects/tests/` are `api`, `branching`, `graphql`, `models`, `schema` and `upgrade`, alongside `test_*.py` modules for views, forms, filtersets, field types and more. AGENTS.md's repository map describes each one.
 
-Stop on first failure: `--failfast`. Run in parallel: `--parallel auto` (note: `--keepdb` and `--parallel` don't always compose cleanly).
+The branching tests need netbox-branching installed and `NETBOX_CONFIGURATION=configuration_branching`. They're tagged `branching`, so `--tag branching` runs only them and `--exclude-tag branching` skips them, as CI's two branching jobs do.
+
+Stop on first failure: `--failfast`. Don't use `--parallel`: CI runs serially because the GraphQL schema-cache and query-count tests aren't yet safe with it (its workers share one Redis cache).
 
 ## After model changes
 
@@ -75,5 +69,5 @@ python netbox/manage.py makemigrations netbox_custom_objects
 ## References
 
 - [`AGENTS.md`](../../../AGENTS.md) "Testing" and "Development" sections — environment setup and layout.
-- [`.github/workflows/lint-tests.yaml`](../../../.github/workflows/lint-tests.yaml) — authoritative CI invocation.
+- [`.github/workflows/test.yml`](../../../.github/workflows/test.yml) — authoritative CI invocation.
 - [`testing/configuration.py`](../../../testing/configuration.py) — NetBox config the test runner uses.
