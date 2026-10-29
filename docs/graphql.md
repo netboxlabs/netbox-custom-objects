@@ -243,13 +243,17 @@ query {
   custom_objects_binding_list {
     name
     target {                # polymorphic object field
-      ... on SiteType { id name }
-      ... on DeviceType { id name }
+      ... on SiteType { id site_name: name }
+      ... on DeviceType { id device_name: name }
       ... on Table9ModelType { id display }   # a Custom Object Type
     }
   }
 }
 ```
+
+A field selected in more than one fragment must have the same GraphQL type in each,
+or be given a different alias in each. Here a site's `name` is required (`String!`)
+while a device's can be empty (`String`), so each fragment aliases it.
 
 #### Fallback for targets without a GraphQL type
 
