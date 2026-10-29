@@ -1,5 +1,63 @@
 # Releases
 
+## v1.0.0 (2026-10-30)
+
+### New Features
+
+**Constraints**
+
+Custom Object Types can now define constraints across several fields. A unique constraint requires a combination of field values to be unique, optionally only among objects that match a condition, and with case-insensitive comparison or empty values treated as equal. A check constraint requires every object, or every object matching a condition, to satisfy a rule, such as an end date after its start date. Constraints are enforced by the database, so they apply in the UI, the REST API, imports and scripts alike, and they can be defined in portable schema documents.
+
+- [#669](https://github.com/netboxlabs/netbox-custom-objects/issues/669) - Unique constraints across several fields
+- [#673](https://github.com/netboxlabs/netbox-custom-objects/issues/673) - Partial (conditional) unique constraints
+- [#674](https://github.com/netboxlabs/netbox-custom-objects/issues/674) - Check constraints
+
+**New Field Types**
+
+- [#671](https://github.com/netboxlabs/netbox-custom-objects/issues/671) - Color: an RGB color, shown as a swatch
+- [#672](https://github.com/netboxlabs/netbox-custom-objects/issues/672) - MAC address: an EUI-48 address, accepted in any common format
+- [#675](https://github.com/netboxlabs/netbox-custom-objects/issues/675) - Array: a list of values of one type, or of fixed-size tuples
+
+**Documentation**
+
+The documentation has been reviewed against the code and expanded, with new pages for configuration, permissions, upgrading, uninstalling, import and export, and troubleshooting, a reference page for each model, and step-by-step workflow guides.
+
+- [#466](https://github.com/netboxlabs/netbox-custom-objects/issues/466) - Recommend `get_model_with_serializer()` for custom scripts and plugins
+- [#635](https://github.com/netboxlabs/netbox-custom-objects/issues/635) - Document typical workflows
+- [#975](https://github.com/netboxlabs/netbox-custom-objects/issues/975) - Correct inaccurate documentation
+- [#983](https://github.com/netboxlabs/netbox-custom-objects/issues/983) - Add configuration, upgrading, uninstalling, permissions and troubleshooting pages
+
+### Enhancements
+
+- [#670](https://github.com/netboxlabs/netbox-custom-objects/issues/670) - Portable schema documents now carry an object field's reverse relation name (`related_name`)
+- [#758](https://github.com/netboxlabs/netbox-custom-objects/issues/758) - A display expression can now include the object's ID
+- [#773](https://github.com/netboxlabs/netbox-custom-objects/issues/773) - A cached Custom Object Type model no longer runs a query each time it's looked up
+- [#775](https://github.com/netboxlabs/netbox-custom-objects/issues/775) - Polymorphic multi-object columns are prefetched in list views
+- [#856](https://github.com/netboxlabs/netbox-custom-objects/issues/856) - Custom object pages now match core NetBox 4.7, including other plugins' buttons on detail pages
+- [#857](https://github.com/netboxlabs/netbox-custom-objects/issues/857) - Button labels, tooltips and headings that couldn't be translated now can
+- [#970](https://github.com/netboxlabs/netbox-custom-objects/issues/970) - Adopt the NetBox Labs plugin scaffold for packaging, linting and CI
+- [#986](https://github.com/netboxlabs/netbox-custom-objects/issues/986) - Add a contributor guide
+
+### Bug Fixes
+
+- [#769](https://github.com/netboxlabs/netbox-custom-objects/issues/769) - Decimal fields were limited to 8 digits with 2 decimal places, and the edit form accepted values the database rejected; they now match NetBox's 16 digits with 4 decimal places, and multi-select values match NetBox's 100-character limit
+- [#770](https://github.com/netboxlabs/netbox-custom-objects/issues/770) - Coordinates columns were dropped when a branch was squash-merged, and missed when a coordinates field was renamed
+- [#771](https://github.com/netboxlabs/netbox-custom-objects/issues/771) - Two objects with a blank value in a nullable unique text field conflicted, because custom objects didn't inherit NetBox's `BaseModel`
+- [#774](https://github.com/netboxlabs/netbox-custom-objects/issues/774) - The REST API accepted a display expression with invalid syntax, and database errors raised while rendering one were hidden
+- [#776](https://github.com/netboxlabs/netbox-custom-objects/issues/776) - The multi-object form field could register a partial model and repoint other types' foreign keys to it
+- [#854](https://github.com/netboxlabs/netbox-custom-objects/issues/854) - Custom object list buttons, menu buttons and detail tabs ignored the user's permissions
+- [#855](https://github.com/netboxlabs/netbox-custom-objects/issues/855) - The Fields and Constraints tabs didn't behave like core child-object tabs, and "Create & Add Another" failed for constraints
+- [#865](https://github.com/netboxlabs/netbox-custom-objects/issues/865) - Exporting a Custom Object Type with a Coordinates field raised `KeyError`
+- [#900](https://github.com/netboxlabs/netbox-custom-objects/issues/900) - Custom Object Type definitions were visible to users without permission to view them
+- [#901](https://github.com/netboxlabs/netbox-custom-objects/issues/901) - A constraint including a polymorphic object field wasn't validated by the UI form, and a violation returned HTTP 500
+- [#902](https://github.com/netboxlabs/netbox-custom-objects/issues/902) - A polymorphic object field's on-delete behavior wasn't enforced, leaving a dangling reference when the referenced object was deleted
+- [#903](https://github.com/netboxlabs/netbox-custom-objects/issues/903) - A Custom Object Type REST API endpoint didn't apply object-level permissions
+- [#925](https://github.com/netboxlabs/netbox-custom-objects/issues/925) - Bulk edit, delete and import returned HTTP 500 for an unknown Custom Object Type slug
+- [#926](https://github.com/netboxlabs/netbox-custom-objects/issues/926) - A field form that failed validation still demoted the type's primary field
+- [#938](https://github.com/netboxlabs/netbox-custom-objects/issues/938) - Applying a schema document didn't check permissions for the constraints it added, changed or removed
+
+---
+
 ## v0.7.1 (2026-10-21)
 
 ### Enhancements

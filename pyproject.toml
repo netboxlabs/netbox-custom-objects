@@ -18,7 +18,7 @@ build-backend = "setuptools.build_meta"
 # Distribution name is already published; it must not be renamed to match
 # repo_slug. The scaffold derives `netbox-custom-objects` from repo_slug.
 name = "netboxlabs-netbox-custom-objects"
-version = "0.7.1"
+version = "1.0.0"
 description = "A plugin to manage custom objects in NetBox"
 readme = { file = "README.md", content-type = "text/markdown" }
 license-files = ["LICENSE.md"]
@@ -31,7 +31,7 @@ maintainers = [
 ]
 keywords = ["netbox", "netbox-plugin"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Framework :: Django",
     "Framework :: Django :: 5.2",
     "Intended Audience :: Developers",
@@ -102,6 +102,7 @@ ignore = [
     "SECURITY.md",
     "docs/*.md",
     "docs/models/*/*.md",
+    "docs/workflows/*.md",
     "docs/development/*.md",
     "mkdocs.yml",
     "testing/configuration.py",

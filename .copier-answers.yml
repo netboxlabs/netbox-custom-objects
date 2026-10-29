@@ -7,7 +7,7 @@ branching_support: true
 commercial: false
 current_year: 2026
 default_model_name: ''
-dev_status: 4 - Beta
+dev_status: 5 - Production/Stable
 django_version: '5.2'
 filtersets_layout: flat
 forms_layout: type_files
