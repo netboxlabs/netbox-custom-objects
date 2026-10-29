@@ -69,3 +69,5 @@ nav:
       - Custom Object Type Constraint: models/netbox_custom_objects/customobjecttypeconstraint.md
   - Troubleshooting: troubleshooting.md
   - Releases: releases.md
+  - Development:
+      - Contributing: development/contributing.md
