@@ -127,9 +127,11 @@ the pattern `^[a-z0-9]+(_[a-z0-9]+)*$`. This is the same pattern used by the JSO
 validation and round-trip cleanly through export and apply cycles.
 
 The pattern permits:
+
 - `circuit`, `bandwidth_mbps`, `carrier_code_v2`
 
 The pattern rejects:
+
 - `_private` (leading underscore)
 - `foo_` (trailing underscore)
 - `test__field` (double underscore)

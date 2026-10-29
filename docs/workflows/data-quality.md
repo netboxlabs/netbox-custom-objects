@@ -1,6 +1,7 @@
 # Keeping Data Clean
 
 **Scenario:** your support contracts need some rules:
+
 - contract numbers follow your format;
 - a contract number is unique per vendor (different vendors may reuse a number);
 - an end date is never before its start date;
