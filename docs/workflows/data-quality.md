@@ -22,7 +22,7 @@
 
 1. On the Support Contract type's page, open the **Fields** tab and edit **Contract number**.
 2. Set **Validation regex** to `^[A-Z]+-[0-9]+$` and save.
-3. Try saving a contract with the number `acme 1001`. The form rejects it.
+3. Try saving a contract with the number `acme 1001`. The form shows "Values must match this regex" under **Contract number**.
 
 Existing values aren't rechecked when you add a regex; it applies the next time each contract is saved.
 
@@ -31,8 +31,8 @@ Existing values aren't rechecked when you add a regex; it applies the next time 
 1. On the type's page, click **Add** and choose **Constraint**.
 2. Set **Name** to `unique_number_per_vendor` and **Type** to **Unique**.
 3. Under **Fields**, choose **Vendor** and **Contract number**, and enable **Case-insensitive**, so `Acme` and `ACME` count as the same vendor.
-4. Click **Create**. If existing contracts already break the rule, NetBox shows an error and doesn't create the constraint.
-5. Try adding a second contract with the same vendor and number. It's rejected. The same number with another vendor is accepted.
+4. Click **Create**. If existing contracts already break the rule, NetBox says so ("Existing Support Contract objects already have duplicate values for these fields.") and doesn't create the constraint.
+5. Try adding a contract with vendor `ACME` and the number of an existing Acme contract. It's rejected with "Support Contract with this Contract number and Vendor already exists." The same number with vendor `Globex` is accepted.
 
 ### 3. Require the End Date After the Start Date
 
@@ -43,7 +43,7 @@ Existing values aren't rechecked when you add a regex; it applies the next time 
     [{"field": "end_date", "lookup": "gt", "value": {"field": "start_date"}}]
     ```
 
-3. Set **Error message** to `The end date must be after the start date.` and click **Create**.
+3. Set **Error message** to `The end date must be after the start date.` and click **Create**. The **Constraints** tab describes the rule as "End date is greater than Start date".
 4. Try saving a contract that ends before it starts. Your error message is shown. A contract with no end date is still accepted: a comparison with an empty value passes.
 
 ### 4. Require an End Date on Active Contracts
@@ -58,7 +58,7 @@ Existing values aren't rechecked when you add a regex; it applies the next time 
 
 Constraints cover comparisons between fields. For other rules, NetBox's [`CUSTOM_VALIDATORS`](https://netboxlabs.com/docs/netbox/configuration/data-validation/#custom_validators) setting applies to custom objects too, keyed by the type's slug:
 
-1. In `configuration.py`, add:
+1. In `configuration.py`, add (the key ends with the type's slug):
 
     ```python
     CUSTOM_VALIDATORS = {
@@ -69,11 +69,11 @@ Constraints cover comparisons between fields. For other rules, NetBox's [`CUSTOM
     ```
 
 2. Restart NetBox.
-3. Try saving a contract with a one-letter vendor. It's rejected.
+3. Try saving a contract with a one-letter vendor. It's rejected with "Custom validation failed for vendor", followed by the validator's message.
 
 ### 6. Check That Every Path Is Covered
 
-Repeat one rejected change through the REST API and through a CSV import. The same rules apply, and both return the error instead of saving.
+Repeat one rejected change through the REST API and through a CSV import. The same rules apply: the REST API returns `400 Bad Request` with the same message, and the import is rejected without creating anything.
 
 ## Result
 
