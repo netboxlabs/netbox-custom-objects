@@ -1,8 +1,5 @@
 # Referencing More Than One Kind of Object
 
-!!! warning "Draft"
-    The steps on this page haven't been verified yet.
-
 **Scenario:** you want to model business services, such as "Payroll" or "Customer portal", and record what runs each one. A service can run on physical devices, virtual machines, or a mix of both, and has one main entry point, which can be either a device or a VM.
 
 **You'll use:** polymorphic object and multi-object fields, which can reference objects of several types.

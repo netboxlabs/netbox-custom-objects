@@ -1,8 +1,5 @@
 # A Self-Contained Object Type
 
-!!! warning "Draft"
-    The steps on this page haven't been verified yet.
-
 **Scenario:** you want to track support contracts in NetBox: who each one is with, its contract number, when it starts and ends, its status, and a link to the vendor's portal. Contracts don't need to reference anything else in NetBox yet.
 
 **You'll use:** Custom Object Types, fields of several types, a choice set, the display name, list and detail views, and search.

@@ -1,8 +1,5 @@
 # Relating Custom Objects to Each Other
 
-!!! warning "Draft"
-    The steps on this page haven't been verified yet.
-
 **Scenario:** you want to track software licenses. Each vendor sells products, products can be bundled into suites (Adobe Creative Cloud includes Photoshop and Acrobat), and each product has licenses. A license key only needs to be unique within its product.
 
 **You'll use:** fields that reference another Custom Object Type, a field that references its own type, a reverse relation name, and a unique constraint over two fields.

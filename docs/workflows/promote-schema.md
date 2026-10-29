@@ -1,8 +1,5 @@
 # Promoting a Schema Between Instances
 
-!!! warning "Draft"
-    The steps on this page haven't been verified yet.
-
 **Scenario:** you design and test Custom Object Types on a staging NetBox, and want to create the same types on production without rebuilding them by hand. Later, you change a type on staging and roll the change out too.
 
 **You'll use:** [portable schema](../portable-schema.md) export, preview and apply, schema versions, and tombstones for removed fields.

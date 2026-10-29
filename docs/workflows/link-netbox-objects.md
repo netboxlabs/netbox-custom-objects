@@ -1,8 +1,5 @@
 # Linking to NetBox Objects
 
-!!! warning "Draft"
-    The steps on this page haven't been verified yet.
-
 **Scenario:** you want to record the static routes configured on each device. Each route belongs to one device and optionally a VRF. You'll also link devices to the [support contracts](self-contained-type.md) that cover them, so the link can be followed from either side.
 
 **You'll use:** object fields that point at NetBox models, reverse relation names, the Custom Objects tab, and a NetBox custom field that points at a Custom Object Type.

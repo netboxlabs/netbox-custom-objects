@@ -1,8 +1,5 @@
 # Bulk Importing and Editing
 
-!!! warning "Draft"
-    The steps on this page haven't been verified yet.
-
 **Scenario:** you have a spreadsheet of existing support contracts to load into NetBox, and later need to change many of them at once. You also want to load static routes that reference devices by name.
 
 **You'll use:** bulk import, bulk edit, export, and updating objects by re-importing them.

@@ -1,8 +1,5 @@
 # Keeping Data Clean
 
-!!! warning "Draft"
-    The steps on this page haven't been verified yet.
-
 **Scenario:** your support contracts need some rules:
 - contract numbers follow your format;
 - a contract number is unique per vendor (different vendors may reuse a number);

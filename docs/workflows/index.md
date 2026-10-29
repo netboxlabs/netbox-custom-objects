@@ -13,4 +13,4 @@ These guides walk through common tasks from start to finish, using example scena
 | [Promoting a schema between instances](promote-schema.md) | Staging to production | Exporting, previewing and applying a portable schema document |
 
 !!! note
-    These workflows are new, and the steps are being checked by following each one on a test instance. If a step doesn't match what you see, please [open an issue](https://github.com/netboxlabs/netbox-custom-objects/issues).
+    If a step doesn't match what you see, please [open an issue](https://github.com/netboxlabs/netbox-custom-objects/issues).
