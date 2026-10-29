@@ -23,39 +23,39 @@
 
 For each row, click **Add > Field** on the type's page:
 
-| Name | Label | Type | Other settings |
-|------|-------|------|----------------|
-| `name` | Name | Text | **Required**, **Primary name field** |
-| `owner_team` | Owning team | Text | |
-| `members` | Runs on | Multiple objects | **Polymorphic** enabled; **Related object types:** DCIM > Device and Virtualization > Virtual Machine |
-| `entry_point` | Entry point | Object | **Polymorphic** enabled; **Related object types:** DCIM > Device and Virtualization > Virtual Machine |
+| Name | Label | Type | Display weight | Other settings |
+|------|-------|------|----------------|----------------|
+| `name` | Name | Text | 100 | **Required**, **Primary name field** |
+| `owner_team` | Owning team | Text | 110 | |
+| `members` | Runs on | Multiple objects | 120 | **Polymorphic** enabled; **Related object types:** DCIM > Device and Virtualization > Virtual Machine |
+| `entry_point` | Entry point | Object | 130 | **Polymorphic** enabled; **Related object types:** DCIM > Device and Virtualization > Virtual Machine |
 
 The **Polymorphic** setting can't be changed once a field exists, and a polymorphic field can't be renamed, so choose them carefully.
 
 ### 3. Add a Service
 
 1. Under **Custom Objects > Objects**, click the **+** next to **Services**.
-2. Enter a name. **Runs on** shows one selector for devices and one for virtual machines; pick some of each.
-3. For **Entry point**, pick a single device or virtual machine.
+2. Enter a name and owning team. **Runs on** has one selector per allowed type, **Runs on (DCIM > Device)** and **Runs on (Virtualization > Virtual Machine)**; pick some of each.
+3. For **Entry point**, first choose the **Entry point type** (e.g. Virtualization > Virtual Machine), then the object itself.
 4. Click **Create**.
 
 ### 4. Look at the Service from Both Sides
 
-1. The service's page lists its devices and virtual machines together under **Runs on**.
+1. The service's page lists its devices and virtual machines together in a **Runs on** panel, with each one's type.
 2. Open one of those virtual machines. Its **Custom Objects** tab lists the service.
 
 ### 5. Query It Through the APIs (Optional)
 
-- **REST:** `GET /api/plugins/custom-objects/service/?members_virtualization_virtualmachine=<id>` lists the services that run on a given VM. Each value of `members` is returned with a `_content_type`, such as `"virtualization.virtualmachine"`.
-- **GraphQL:** select fields for each type with inline fragments:
+- **REST:** `GET /api/plugins/custom-objects/services/?members_virtualization_virtualmachine=<id>` lists the services that run on a given VM (the path is the type's slug, `services`). Each value of `members` is returned with a `_content_type`, such as `"virtualization.virtualmachine"`.
+- **GraphQL:** the query is named after the slug too. Select fields for each type with inline fragments. A field that has different types in different fragments needs an alias in each: a device's `name` can be empty, a virtual machine's can't.
 
     ```graphql
     query {
-      custom_objects_service_list {
+      custom_objects_services_list {
         display
         members {
-          ... on DeviceType { name site { name } }
-          ... on VirtualMachineType { name cluster { name } }
+          ... on DeviceType { device: name site { name } }
+          ... on VirtualMachineType { vm: name cluster { name } }
         }
       }
     }
