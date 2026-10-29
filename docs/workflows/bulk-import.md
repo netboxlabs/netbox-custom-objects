@@ -18,7 +18,7 @@
 ### 1. Check the Import Format
 
 1. Click **Support Contracts** in the navigation menu, then **Import**.
-2. Scroll down to **Field Options**. It lists each field's column name, whether it's required, and, for the status field, the accepted values.
+2. Scroll down to **Field Options**. It lists each field's column name, with a check mark for required ones. Click the **?** next to **Status** to see its accepted values.
 
 ### 2. Import Contracts
 
@@ -31,14 +31,16 @@
     GLOBX-17,Globex,expired,2024-01-01,2024-12-31,
     ```
 
-2. Click **Submit**. NetBox lists the created contracts.
-3. Try importing a row with a status that isn't in the choice set, such as `cancelled`. The import is rejected, and none of the rows in it are created.
+2. Click **Submit**. NetBox reports "Imported 3 Support Contracts" and lists them.
+3. Try importing two rows where the second has a status that isn't in the choice set, such as `cancelled`. The import is rejected with "Record 2 status: Select a valid choice." and neither row is created.
+
+For a large file, enable **Background job** before submitting. The import then runs in NetBox's background worker, and NetBox links to the job so you can follow its progress.
 
 ### 3. Edit Several Contracts at Once
 
-1. In the Support Contracts list, filter by vendor `Acme` and select the contracts.
+1. In the Support Contracts list, filter by vendor `Acme` and select ACME-2001 and ACME-2002.
 2. Click **Edit Selected**.
-3. Set **Status** to **Expired** and click **Apply**.
+3. Set **Status** to **Expired** and click **Apply**. NetBox reports "Updated 2 Support Contracts".
 
 ### 4. Export and Update by Re-importing
 
@@ -51,7 +53,7 @@
     13,2027-06-30
     ```
 
-3. Import it. Rows with an `id` update those contracts, changing only the columns given. On NetBox 4.6.5 and later, this needs change permission as well as add permission.
+3. Import it. Rows with an `id` update those contracts, changing only the columns given; the list that follows shows the contracts that changed. On NetBox 4.6.5 and later, this needs change permission as well as add permission.
 
 ### 5. Import Routes That Reference Devices
 
@@ -64,7 +66,7 @@
     10.40.0.0/16,192.0.2.1,core-sw-01,10
     ```
 
-3. Click **Submit**. Each route is linked to the device named `core-sw-01`.
+3. Click **Submit**. NetBox reports "Imported 2 Static Routes", each linked to the device named `core-sw-01`.
 
 Object fields identify the objects they reference by a natural identifier, here the device's name. See [Import and Export](../import-export.md) for how that identifier is chosen, and for referencing custom objects, which usually have to be identified by ID.
 
