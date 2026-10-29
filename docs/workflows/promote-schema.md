@@ -28,7 +28,7 @@ On staging, edit the Support Contract type, set **Version** to `1.0.0`, and save
     python3 netbox/manage.py nbshell
     ```
 
-2. Write the type's schema document, and an apply request wrapping it, to files:
+2. Write the type's schema document, and an apply request wrapping it, to files. The NetBox shell is interactive, so keep the blank line after each `with` block:
 
     ```python
     import yaml
@@ -38,9 +38,13 @@ On staging, edit the Support Contract type, set **Version** to `1.0.0`, and save
     document = export_cots(CustomObjectType.objects.filter(slug='support-contracts'))
     with open('/tmp/contracts-schema.yaml', 'w') as f:
         yaml.safe_dump(document, f, sort_keys=False)
+
     with open('/tmp/contracts-apply.yaml', 'w') as f:
         yaml.safe_dump({'allow_destructive': False, 'schema': document}, f, sort_keys=False)
+
     ```
+
+    The same lines can be saved to a file and piped in with `python3 netbox/manage.py nbshell < export.py`.
 
 3. Copy the files somewhere safe. Keeping `contracts-schema.yaml` in version control lets you review each change as a diff.
 
@@ -74,7 +78,7 @@ The response says `applied: true`. The Support Contract type now exists on produ
 
 ### 5. Change the Type on Staging
 
-1. On staging, add an Integer field `renewal_notice_days` (label `Renewal notice (days)`), delete the **Notes** field, and set the type's **Version** to `1.1.0`.
+1. On staging, add an Integer field `renewal_notice_days` (label `Renewal notice (days)`, display weight `145`), delete the **Notes** field, and set the type's **Version** to `1.1.0`.
 2. Export again, as in step 2.
 3. Deleting a field in the UI doesn't record its removal in the schema document, so add it by hand. In both files, under the type, add a tombstone with the deleted field's `id` from the version 1.0.0 export:
 
@@ -83,13 +87,13 @@ The response says `applied: true`. The Support Contract type now exists on produ
       - {id: 7, name: notes, type: longtext, removed_in: "1.1.0"}
     ```
 
-    Without it, production keeps the field, and the preview only warns that it's missing from the document.
+    Without it, production keeps the field, and the preview only warns that the field "exists in the DB but is absent" from the document.
 
 ### 6. Roll Out the Change
 
 1. Preview the new document on production. It shows an `add` for the new field and a `remove` for **Notes**, with `has_destructive_changes: true`.
-2. Apply it. Because it removes a field, the apply is refused with `409 Conflict` and nothing changes.
-3. Once you've confirmed that dropping the Notes column is intended, set `allow_destructive: true` in `contracts-apply.yaml` and apply again.
+2. Apply it. Because it removes a field, the apply is refused with `409 Conflict` (`error: destructive_changes`) and nothing changes.
+3. Once you've confirmed that dropping the Notes column is intended, set `allow_destructive: true` in `contracts-apply.yaml` and apply again. The response says `applied: true`, and production's copy of the type records the removed field, so later exports from production keep its tombstone.
 
 ### 7. Try It in a Branch First (Optional)
 
