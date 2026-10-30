@@ -16,7 +16,7 @@ from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 from utilities.exceptions import AbortRequest, PermissionsViolation
 from django.views.generic import View
-from extras.choices import CustomFieldUIEditableChoices, CustomFieldUIVisibleChoices
+from extras.choices import CustomFieldUIEditableChoices
 from extras.forms import JournalEntryForm
 from extras.models import ConfigContext, JournalEntry
 from extras.tables import JournalEntryTable
@@ -39,7 +39,7 @@ from utilities.permissions import get_permission_for_model
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
 from netbox_custom_objects.filtersets import get_filterset_class
-from netbox_custom_objects.tables import CustomObjectTable, CustomObjectTypeFieldTable
+from netbox_custom_objects.tables import CustomObjectTypeFieldTable
 from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
@@ -278,63 +278,7 @@ class BackgroundJobURLKwargsMixin:
 
 class CustomObjectTableMixin(TableMixin):
     def get_table(self, data, request, bulk_actions=True):
-        model_fields = self.custom_object_type.fields.all()
-        fields = ["id"] + [
-            field.name
-            for field in model_fields
-            if field.ui_visible != CustomFieldUIVisibleChoices.HIDDEN
-        ]
-
-        meta = type(
-            "Meta",
-            (),
-            {
-                "model": data.model,
-                "fields": fields,
-                "attrs": {
-                    "class": "table table-hover object-list",
-                },
-            },
-        )
-
-        attrs = {
-            "Meta": meta,
-            "__module__": "database.tables",
-        }
-
-        for field in model_fields:
-            if field.ui_visible == CustomFieldUIVisibleChoices.HIDDEN:
-                continue
-            field_type = field_types.FIELD_TYPE_CLASS[field.type]()
-            try:
-                attrs[field.name] = field_type.get_table_column_field(field)
-            except NotImplementedError:
-                logger.debug(
-                    "table mixin: {} field is not implemented; using a default column".format(
-                        field.name
-                    )
-                )
-            # Primary field (if text-based) is linkified to the target Custom Object. Other fields may be
-            # rendered via field-specific "render_foo" methods as supported by django-tables2.
-            linkable_field_types = [
-                CustomFieldTypeChoices.TYPE_TEXT,
-                CustomFieldTypeChoices.TYPE_LONGTEXT,
-            ]
-            if field.primary and field.type in linkable_field_types:
-                attrs[f"render_{field.name}"] = field_type.render_table_column_linkified
-            else:
-                # Define a method "render_table_column" method on any FieldType to customize output
-                # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
-                try:
-                    attrs[f"render_{field.name}"] = field_type.render_table_column
-                except AttributeError:
-                    pass
-
-        self.table = type(
-            f"{data.model._meta.object_name}Table",
-            (CustomObjectTable,),
-            attrs,
-        )
+        self.table = tables.get_custom_object_table(self.custom_object_type, data.model)
         return super().get_table(data, request, bulk_actions=bulk_actions)
 
 

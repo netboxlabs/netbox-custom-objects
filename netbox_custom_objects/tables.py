@@ -1,3 +1,5 @@
+import logging
+import re
 from urllib.parse import quote
 
 import django_tables2 as tables
@@ -6,13 +8,20 @@ from django.template import Context, Template
 from django.urls import reverse
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
+from extras.choices import CustomFieldTypeChoices, CustomFieldUIVisibleChoices
 from netbox.tables import NetBoxTable, columns
 from utilities.permissions import get_permission_for_model
 
+from netbox_custom_objects import field_types
 from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.utilities import get_viewname
 
-__all__ = ("CustomObjectTable", "CustomObjectTypeFieldTable")
+__all__ = ("CustomObjectTable", "CustomObjectTypeFieldTable", "get_custom_object_table")
+
+logger = logging.getLogger("netbox_custom_objects.tables")
+
+# The name NetBox looks up a custom object list table by: "Table<id>ModelTable".
+_TABLE_NAME_RE = re.compile(r"^Table(\d+)ModelTable$")
 
 
 OBJECTCHANGE_FULL_NAME = """
@@ -291,3 +300,78 @@ class CustomObjectTable(NetBoxTable):
             "created",
             "last_updated",
         )
+
+
+def get_custom_object_table(custom_object_type, model=None):
+    """
+    Build the list table class for a Custom Object Type's objects.
+    """
+    model = model or custom_object_type.get_model()
+    model_fields = custom_object_type.fields.all()
+    fields = ["id"] + [
+        field.name
+        for field in model_fields
+        if field.ui_visible != CustomFieldUIVisibleChoices.HIDDEN
+    ]
+
+    meta = type(
+        "Meta",
+        (),
+        {
+            "model": model,
+            "fields": fields,
+            "attrs": {
+                "class": "table table-hover object-list",
+            },
+        },
+    )
+
+    attrs = {
+        "Meta": meta,
+        "__module__": __name__,
+    }
+
+    for field in model_fields:
+        if field.ui_visible == CustomFieldUIVisibleChoices.HIDDEN:
+            continue
+        field_type = field_types.FIELD_TYPE_CLASS[field.type]()
+        try:
+            attrs[field.name] = field_type.get_table_column_field(field)
+        except NotImplementedError:
+            logger.debug(
+                "{} field is not implemented; using a default column".format(
+                    field.name
+                )
+            )
+        # Link text-based primary fields to their custom objects.
+        linkable_field_types = [
+            CustomFieldTypeChoices.TYPE_TEXT,
+            CustomFieldTypeChoices.TYPE_LONGTEXT,
+        ]
+        if field.primary and field.type in linkable_field_types:
+            attrs[f"render_{field.name}"] = field_type.render_table_column_linkified
+        else:
+            # Use the field type's custom renderer, if available.
+            # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
+            try:
+                attrs[f"render_{field.name}"] = field_type.render_table_column
+            except AttributeError:
+                pass
+
+    return type(f"{model._meta.object_name}Table", (CustomObjectTable,), attrs)
+
+
+def __getattr__(name):
+    """
+    Resolve dynamic list tables, e.g. "Table3ModelTable", for NetBox's saved table configurations.
+
+    NetBox imports "<app_label>.tables.<name>", so build matching tables on demand.
+    """
+    if match := _TABLE_NAME_RE.match(name):
+        try:
+            custom_object_type = CustomObjectType.objects.get(pk=match.group(1))
+        except CustomObjectType.DoesNotExist:
+            pass
+        else:
+            return get_custom_object_table(custom_object_type)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
