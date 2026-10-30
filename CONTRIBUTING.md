@@ -220,7 +220,7 @@ A PR is reviewed only if:
 - Update README or in-repo docs when behavior changes.
 - Include short examples or screenshots for UI-adjacent changes.
 - Keep docstrings current for public methods, models, and utilities.
-- Build the docs locally with `mkdocs build --strict` before submitting
+- Build the docs locally with `zensical build --strict` before submitting
   documentation changes.
 
 ---
