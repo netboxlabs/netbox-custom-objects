@@ -1,5 +1,24 @@
 # Releases
 
+## 0.7.2
+
+### Enhancements
+
+- [#758](https://github.com/netboxlabs/netbox-custom-objects/issues/758) - A display expression can now include the object's ID
+
+### Bug Fixes
+
+- [#769](https://github.com/netboxlabs/netbox-custom-objects/issues/769) - Align decimal fields and validation with NetBox (16 digits, 4 decimal places), and allow multi-select values up to 100 characters
+- [#770](https://github.com/netboxlabs/netbox-custom-objects/issues/770) - Coordinates columns were dropped when a branch was squash-merged, and missed when a coordinates field was renamed
+- [#771](https://github.com/netboxlabs/netbox-custom-objects/issues/771) - Fix conflicts between blank values in nullable unique text fields
+- [#776](https://github.com/netboxlabs/netbox-custom-objects/issues/776) - Prevent the multi-object form field from registering an incomplete model
+- [#865](https://github.com/netboxlabs/netbox-custom-objects/issues/865) - Exporting a Custom Object Type with a Coordinates field raised `KeyError`
+- [#900](https://github.com/netboxlabs/netbox-custom-objects/issues/900) - Custom Object Type definitions were visible to users without permission to view them
+- [#903](https://github.com/netboxlabs/netbox-custom-objects/issues/903) - A Custom Object Type REST API endpoint didn't apply object-level permissions
+- [#1004](https://github.com/netboxlabs/netbox-custom-objects/issues/1004) - Saving a table configuration for a custom object list failed with "Unknown table", and its column selectors were empty (a `TypeError` before NetBox 4.6.3)
+
+---
+
 ## 0.7.1
 
 ### Enhancements
