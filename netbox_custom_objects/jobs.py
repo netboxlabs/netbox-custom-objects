@@ -1,12 +1,12 @@
+from django.db import transaction
+
 from core.choices import JobIntervalChoices
 from core.models import ObjectType
-from django.db import transaction
 from extras.choices import CustomFieldTypeChoices
 from extras.models import CachedValue
 from netbox.jobs import JobRunner, system_job
 from netbox.search import FieldTypes
 from netbox.search.backends import CachedValueSearchBackend, get_backend
-
 from netbox_custom_objects.constants import DISPLAY_EXPRESSION_SEARCH_WEIGHT
 
 _RELATED_FIELD_TYPES = (CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT)
@@ -64,6 +64,7 @@ class ReindexCustomObjectTypeJob(JobRunner):
     def run(self, *args, **kwargs):
         # Deferred to avoid circular import: models.py imports this module at the top level
         from netbox_custom_objects.models import CustomObjectType
+
         cot_id = kwargs.get('cot_id')
         if not cot_id:
             raise ValueError('cot_id is required to run ReindexCustomObjectTypeJob')
@@ -90,6 +91,7 @@ class RefreshDisplayExpressionSearchJob(JobRunner):
     def run(self, *args, **kwargs):
         # Deferred to avoid circular import: models.py imports this module at the top level
         from netbox_custom_objects.models import CustomObjectType
+
         for cot in CustomObjectType.objects.exclude(display_expression=''):
             related = [f for f in cot.get_display_expression_fields() if f.type in _RELATED_FIELD_TYPES]
             refresh_display_search_cache(cot, related, missing_only=not related)
@@ -115,9 +117,7 @@ def refresh_display_search_cache(cot, related_fields, missing_only=False):
     direct = [f for f in related_fields if not f.is_polymorphic]
     queryset = queryset.select_related(
         *(f.name for f in direct if f.type == CustomFieldTypeChoices.TYPE_OBJECT)
-    ).prefetch_related(
-        *(f.name for f in direct if f.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT)
-    )
+    ).prefetch_related(*(f.name for f in direct if f.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT))
 
     object_type = ObjectType.objects.get_for_model(model)
     cached_rows = CachedValue.objects.filter(object_type=object_type, field='_display')
@@ -133,14 +133,16 @@ def refresh_display_search_cache(cot, related_fields, missing_only=False):
             continue
         changed.append(instance.pk)
         if value:
-            new_values.append(CachedValue(
-                object_type=object_type,
-                object_id=instance.pk,
-                field='_display',
-                type=FieldTypes.STRING,
-                weight=DISPLAY_EXPRESSION_SEARCH_WEIGHT,
-                value=value,
-            ))
+            new_values.append(
+                CachedValue(
+                    object_type=object_type,
+                    object_id=instance.pk,
+                    field='_display',
+                    type=FieldTypes.STRING,
+                    weight=DISPLAY_EXPRESSION_SEARCH_WEIGHT,
+                    value=value,
+                )
+            )
 
     with transaction.atomic():
         if changed and not missing_only:

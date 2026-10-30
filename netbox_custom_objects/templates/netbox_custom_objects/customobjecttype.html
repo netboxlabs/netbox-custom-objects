@@ -6,20 +6,37 @@
 {% load render_table from django_tables2 %}
 {% load i18n %}
 {% load custom_object_utils %}
-
 {% block extra_controls %}
-    {% if perms.netbox_custom_objects.change_customobjecttype %}
-        <a href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_add' %}?custom_object_type={{ object.pk }}&return_url={% url 'plugins:netbox_custom_objects:customobjecttype' pk=object.pk %}" class="btn btn-primary">
-            <i class="mdi mdi-plus-thick" aria-hidden="true"></i> {% trans "Add Field" %}
-        </a>
-    {% endif %}
+  {% if perms.netbox_custom_objects.change_customobjecttype %}
+    <div class="dropdown">
+      <button type="button"
+              class="btn btn-primary dropdown-toggle"
+              data-bs-toggle="dropdown"
+              aria-expanded="false">
+        <i class="mdi mdi-plus-thick" aria-hidden="true"></i> {% trans "Add" %}
+      </button>
+      <ul class="dropdown-menu">
+        {% if perms.netbox_custom_objects.add_customobjecttypefield %}
+          <li>
+            <a class="dropdown-item"
+               href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_add' %}?custom_object_type={{ object.pk }}&return_url={% url 'plugins:netbox_custom_objects:customobjecttype_fields' pk=object.pk %}">{% trans "Field" %}</a>
+          </li>
+        {% endif %}
+        {% if perms.netbox_custom_objects.add_customobjecttypeconstraint %}
+          <li>
+            <a class="dropdown-item"
+               href="{% url 'plugins:netbox_custom_objects:customobjecttypeconstraint_add' %}?custom_object_type={{ object.pk }}&return_url={% url 'plugins:netbox_custom_objects:customobjecttype_constraints' pk=object.pk %}">{% trans "Constraint" %}</a>
+          </li>
+        {% endif %}
+      </ul>
+    </div>
+  {% endif %}
 {% endblock %}
-
 {% block content %}
   <div class="row">
-	  <div class="col col-md-6">
+    <div class="col col-md-6">
       <div class="card">
-        <h5 class="card-header">{% trans "Custom Object Type" %}</h5>
+        <h2 class="card-header">{% trans "Custom Object Type" %}</h2>
         <table class="table table-hover attr-table">
           <tr>
             <th scope="row">{% trans "Name" %}</th>
@@ -38,23 +55,16 @@
             <td>{{ object.description|placeholder }}</td>
           </tr>
           {% if object.display_expression %}
-          <tr>
-            <th scope="row">{% trans "Display expression" %}</th>
-            <td><code>{{ object.display_expression }}</code></td>
-          </tr>
+            <tr>
+              <th scope="row">{% trans "Display expression" %}</th>
+              <td>
+                <code>{{ object.display_expression }}</code>
+              </td>
+            </tr>
           {% endif %}
           <tr>
             <th scope="row">{% trans "Config context support" %}</th>
             <td>{% checkmark object.config_context_enabled %}</td>
-          </tr>
-          <tr>
-            <th scope="row">{% trans "Last activity" %}</th>
-            <td>
-              {{ latest_change.time|isodatetime|placeholder }}
-              {% if latest_change %}
-                <div class="small text-muted">{{ latest_change.time|timesince }} {% trans "ago" %}</div>
-              {% endif %}
-            </td>
           </tr>
         </table>
       </div>
@@ -66,62 +76,88 @@
       {% include 'inc/panels/comments.html' %}
       {% plugin_right_page object %}
       <div class="card">
-        <h2 class="card-header">Fields</h2>
+        <h2 class="card-header">{% trans "Fields" %}</h2>
         <table class="table table-hover attr-table">
-            {% for group_name, group_fields in field_groups.items %}
-              {% if group_name %}
-                <tr class="table-group-header">
-                  <th scope="row" colspan="7" class="fw-bold">{{ group_name }}</th>
-                </tr>
-              {% endif %}
-              {% for field in group_fields %}
+          {% for group_name, group_fields in field_groups.items %}
+            {% if group_name %}
+              <tr class="table-group-header">
+                <th scope="row" colspan="7" class="fw-bold">{{ group_name }}</th>
+              </tr>
+            {% endif %}
+            {% for field in group_fields %}
               <tr>
-                  <th scope="row">{{ field }}</th>
-                  <td>{{ field|get_field_type_verbose_name }}</td>
-                  <td>{% if field.type == "object" or field.type == "multiobject" %}{{ field|get_field_object_type }}{% endif %}</td>
-                  <td>
-                      {% if field.required %}
-                          <i
-                            class="mdi mdi-asterisk text-primary"
-                            data-bs-toggle="tooltip"
-                            data-bs-placement="right"
-                            title="Required"
-                          ></i>
-                      {% endif %}
-                  </td>
-                  <td>
-                      {% if field.unique %}
-                          <i
-                            class="mdi mdi-snowflake text-primary"
-                            data-bs-toggle="tooltip"
-                            data-bs-placement="right"
-                            title="Unique"
-                          ></i>
-                      {% endif %}
-                  </td>
-                  <td>
-                      {% if field.primary %}
-                          <i
-                            class="mdi mdi-text-short text-primary"
-                            data-bs-toggle="tooltip"
-                            data-bs-placement="right"
-                            title="Primary name field"
-                          ></i>
-                      {% endif %}
-                  </td>
-                  <td>
-                  <span class="btn-group dropdown">
-                      <a class="btn btn-sm btn-warning" href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_edit' pk=field.pk %}?return_url={{ object.get_absolute_url }}" type="button"
+                <th scope="row">{{ field }}</th>
+                <td>{{ field|get_field_type_verbose_name }}</td>
+                <td>
+                  {% if field.type == "object" or field.type == "multiobject" %}{{ field|get_field_object_type }}{% endif %}
+                </td>
+                <td>
+                  {% if field.required %}
+                    <i class="mdi mdi-asterisk text-primary"
+                       data-bs-toggle="tooltip"
+                       data-bs-placement="right"
+                       title="{% trans "Required" %}"></i>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if field.unique %}
+                    <i class="mdi mdi-snowflake text-primary"
+                       data-bs-toggle="tooltip"
+                       data-bs-placement="right"
+                       title="{% trans "Unique" %}"></i>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if field.primary %}
+                    <i class="mdi mdi-text-short text-primary"
+                       data-bs-toggle="tooltip"
+                       data-bs-placement="right"
+                       title="{% trans "Primary name field" %}"></i>
+                  {% endif %}
+                </td>
+                <td>
+                  {% with can_change=request.user|can_change:field can_delete=request.user|can_delete:field %}
+                    {% if can_change and can_delete %}
+                      <span class="btn-group dropdown">
+                        <a class="btn btn-sm btn-warning"
+                           href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_edit' pk=field.pk %}?return_url={{ object.get_absolute_url }}"
+                           type="button"
+                           aria-label="{% trans 'Edit' %}"><i class="mdi mdi-pencil"></i></a>
+                        <a class="btn btn-sm btn-warning dropdown-toggle"
+                           type="button"
+                           data-bs-toggle="dropdown"
+                           style="padding-left: 2px">
+                          <span class="visually-hidden">{% trans 'Toggle Dropdown' %}</span></a>
+                        <ul class="dropdown-menu">
+                          <li>
+                            <a class="dropdown-item"
+                               href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_delete' pk=field.pk %}?return_url={{ object.get_absolute_url }}">
+                              <i class="mdi mdi-trash-can-outline"></i> {% trans "Delete" %}</a>
+                          </li>
+                        </ul>
+                      </span>
+                    {% elif can_change %}
+                      <a class="btn btn-sm btn-warning"
+                         href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_edit' pk=field.pk %}?return_url={{ object.get_absolute_url }}"
+                         type="button"
                          aria-label="{% trans 'Edit' %}"><i class="mdi mdi-pencil"></i></a>
-                      <a class="btn btn-sm btn-warning dropdown-toggle" type="button" data-bs-toggle="dropdown"
-                      style="padding-left: 2px">
-                      <span class="visually-hidden">{% trans 'Toggle Dropdown' %}</span></a>
-                      <ul class="dropdown-menu">
-                          <li><a class="dropdown-item" href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_delete' pk=field.pk %}?return_url={{ object.get_absolute_url }}">
-                          <i class="mdi mdi-trash-can-outline"></i> Delete</a></li>
-                      </ul>
-                  </span>
-                  </td>
+                    {% elif can_delete %}
+                      <span class="btn-group dropdown">
+                        <a class="btn btn-sm btn-secondary dropdown-toggle"
+                           type="button"
+                           data-bs-toggle="dropdown">
+                          <span class="visually-hidden">{% trans 'Toggle Dropdown' %}</span></a>
+                        <ul class="dropdown-menu">
+                          <li>
+                            <a class="dropdown-item"
+                               href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_delete' pk=field.pk %}?return_url={{ object.get_absolute_url }}">
+                              <i class="mdi mdi-trash-can-outline"></i> {% trans "Delete" %}</a>
+                          </li>
+                        </ul>
+                      </span>
+                    {% endif %}
+                  {% endwith %}
+                </td>
               </tr>
             {% endfor %}
           {% endfor %}
@@ -130,8 +166,6 @@
     </div>
   </div>
   <div class="row mb-3">
-    <div class="col col-md-12">
-      {% plugin_full_width_page object %}
-    </div>
+    <div class="col col-md-12">{% plugin_full_width_page object %}</div>
   </div>
 {% endblock %}

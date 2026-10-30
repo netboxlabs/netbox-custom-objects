@@ -1,3 +1,7 @@
+__author__ = 'NetBox Labs'
+__email__ = 'support@netboxlabs.com'
+__version__ = '0.7.1'
+
 import contextvars
 import logging
 import sys
@@ -6,8 +10,9 @@ import warnings
 from django.db import connection, transaction
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.recorder import MigrationRecorder
-from django.db.models.signals import pre_migrate, post_migrate
+from django.db.models.signals import post_migrate, pre_delete, pre_migrate
 from django.db.utils import OperationalError, ProgrammingError
+
 from netbox.plugins import PluginConfig
 
 from .constants import APP_LABEL as APP_LABEL
@@ -70,6 +75,7 @@ def _reset_deferred_co_field_data(sender, **kwargs):
     repeat ``ready()`` invocations (a closure would have a fresh id each call).
     """
     from netbox_custom_objects.models import _deferred_co_field_data
+
     _deferred_co_field_data.set(None)
 
 
@@ -88,12 +94,13 @@ def _heal_branch_on_migrate(sender, branch, **kwargs):
     alongside a schema change.
     """
     try:
-        from netbox_custom_objects.mixin_migration import heal_branch  # noqa: PLC0415
-        heal_branch(branch, verbosity=kwargs.get("verbosity", 1))
+        from netbox_custom_objects.mixin_migration import heal_branch
+
+        heal_branch(branch, verbosity=kwargs.get('verbosity', 1))
     except Exception:
         logging.getLogger(__name__).exception(
-            "netbox_custom_objects: unexpected error healing branch %s after migrate",
-            getattr(branch, "pk", branch),
+            'netbox_custom_objects: unexpected error healing branch %s after migrate',
+            getattr(branch, 'pk', branch),
         )
 
 
@@ -116,16 +123,22 @@ def _register_branching_hooks_once():
     # Unguarded: netbox-branching >= 1.0.4 is required (checks.E002), and an
     # older release should fail loudly rather than silently skip every hook.
     from netbox_branching.signals import (
-        pre_merge, post_merge,
-        pre_sync, post_sync,
-        pre_revert, post_revert,
-        post_migrate as branching_post_migrate,
+        post_merge,
+        post_revert,
+        post_sync,
+        pre_merge,
+        pre_revert,
+        pre_sync,
         squash_dependency_graph_built,
+    )
+    from netbox_branching.signals import (
+        post_migrate as branching_post_migrate,
     )
     from netbox_branching.utilities import (
         register_branching_resolver,
         register_objectchange_field_migrator,
     )
+
     from .branching import (
         add_custom_object_dependencies,
         objectchange_field_migrator,
@@ -172,20 +185,20 @@ def _heal_mixin_columns(sender, **kwargs):
     if _heal_ran:
         return
 
-    if any(cmd in sys.argv for cmd in ("makemigrations", "collectstatic")):
+    if any(cmd in sys.argv for cmd in ('makemigrations', 'collectstatic')):
         return
 
     try:
-        from netbox_custom_objects.mixin_migration import heal_all_branches, heal_all_cots  # noqa: PLC0415
-        heal_all_cots(verbosity=kwargs.get("verbosity", 1))
+        from netbox_custom_objects.mixin_migration import heal_all_branches, heal_all_cots
+
+        heal_all_cots(verbosity=kwargs.get('verbosity', 1))
         # No-ops (zero-result) when netbox-branching isn't installed -- see
         # heal_all_branches()'s own apps.is_installed() check.
-        heal_all_branches(verbosity=kwargs.get("verbosity", 1))
+        heal_all_branches(verbosity=kwargs.get('verbosity', 1))
     except Exception:
-        import logging  # noqa: PLC0415
-        logging.getLogger(__name__).exception(
-            "upgrade_custom_objects: unexpected error during mixin drift check"
-        )
+        import logging
+
+        logging.getLogger(__name__).exception('upgrade_custom_objects: unexpected error during mixin drift check')
         # Leave _heal_ran False so a subsequent post_migrate firing (or a
         # manual 'manage.py upgrade_custom_objects') gets another attempt.
         return
@@ -217,12 +230,14 @@ def _patch_object_selector_view():
     def _patched_get_form_class(self, model):
         if model._meta.app_label == APP_LABEL:
             from netbox_custom_objects.dynamic_forms import build_filterset_form_class
+
             return build_filterset_form_class(model)
         return _original_get_form_class(self, model)
 
     def _patched_get_filterset_class(self, model):
         if model._meta.app_label == APP_LABEL:
             from netbox_custom_objects.filtersets import get_filterset_class
+
             return get_filterset_class(model)
         return _original_get_filterset_class(self, model)
 
@@ -245,7 +260,6 @@ def _patch_choice_set_clean():
         return
 
     from extras.models import CustomFieldChoiceSet
-
     from netbox_custom_objects import models
 
     _original_clean = CustomFieldChoiceSet.clean
@@ -283,6 +297,7 @@ def _patch_graphql_view():
         return
 
     from django.views.decorators.csrf import csrf_exempt
+
     from netbox.graphql.views import NetBoxGraphQLView
 
     _original_dispatch = NetBoxGraphQLView.dispatch
@@ -299,8 +314,9 @@ def _patch_graphql_view():
         # Core authenticates API tokens inside dispatch(), but the schema depends on the
         # user, so do it first, as core does; core then sees an authenticated request.
         if not request.user.is_authenticated:
-            from netbox.api.authentication import TokenAuthentication
             from rest_framework.exceptions import AuthenticationFailed
+
+            from netbox.api.authentication import TokenAuthentication
 
             try:
                 auth_info = TokenAuthentication().authenticate(request)
@@ -313,8 +329,8 @@ def _patch_graphql_view():
             live_schema = get_live_schema(request.user)
             if live_schema is not None:
                 self.schema = live_schema
-        except Exception:  # noqa: BLE001 - fall back to the static schema
-            logger.warning("Failed to load live GraphQL schema; using static schema", exc_info=True)
+        except Exception:  # fall back to the static schema
+            logger.warning('Failed to load live GraphQL schema; using static schema', exc_info=True)
         return _original_dispatch(self, request, *args, **kwargs)
 
     NetBoxGraphQLView.dispatch = _patched_dispatch
@@ -323,16 +339,17 @@ def _patch_graphql_view():
 
 # Plugin Configuration
 class CustomObjectsPluginConfig(PluginConfig):
-    name = "netbox_custom_objects"
-    verbose_name = "Custom Objects"
-    description = "A plugin to manage custom objects in NetBox"
-    version = "0.7.2"
-    author = 'Netbox Labs'
-    author_email = 'support@netboxlabs.com'
-    base_url = "custom-objects"
+    name = 'netbox_custom_objects'
+    label = 'netbox_custom_objects'
+    verbose_name = 'Custom Objects'
+    description = 'A plugin to manage custom objects in NetBox'
+    version = __version__
+    author = __author__
+    author_email = __email__
+    base_url = 'custom-objects'
     # Remember to update COMPATIBILITY.md when modifying the minimum/maximum supported NetBox versions.
-    min_version = "4.5.2"
-    max_version = "4.7.99"
+    min_version = '4.5.2'
+    max_version = '4.7.99'
     default_settings = {
         # The maximum number of Custom Object Types that may be created
         'max_custom_object_types': 50,
@@ -347,13 +364,12 @@ class CustomObjectsPluginConfig(PluginConfig):
     # Surfaced as a system check warning (checks.check_related_tabs_registration)
     # so the swallowed exception isn't invisible outside the logs.
     _register_tabs_error = None
-    template_extensions = "template_content.template_extensions"
     # Registers the custom_objects Jinja filter (jinja_env.filters).
     # COMPAT(netbox<4.7): older NetBox never reads this attribute (see ready()).
-    jinja_filters = "jinja_env.filters"
+    jinja_filters = 'jinja_env.filters'
     # Resolves dynamic CO models (table{n}model) to on-the-fly serializers —
     # they have no importable path at the conventional location.
-    serializer_resolver = "api.serializers.serializer_resolver"
+    serializer_resolver = 'api.serializers.serializer_resolver'
     # Registers the plugin's GraphQL schema contribution with NetBox.  The export
     # is intentionally an empty list: custom object types are created/deleted at
     # runtime, so a query class built once at startup would be immediately stale.
@@ -362,7 +378,7 @@ class CustomObjectsPluginConfig(PluginConfig):
     # docstrings).  The path resolves as module ``graphql.schema`` + attribute
     # ``schema`` (NetBox loads resources via ``import_string``, which treats the
     # final component as an attribute).
-    graphql_schema = "graphql.schema.schema"
+    graphql_schema = 'graphql.schema.schema'
 
     @staticmethod
     def _dynamic_model_creation_unsafe():
@@ -381,11 +397,10 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         skip_commands = (
             # Running migrations should skip.
-            "makemigrations",
-            "migrate",
-
+            'makemigrations',
+            'migrate',
             # The database isn't accessible during collect static so should skip.
-            "collectstatic",
+            'collectstatic',
         )
 
         if any(cmd in sys.argv for cmd in skip_commands):
@@ -407,10 +422,7 @@ class CustomObjectsPluginConfig(PluginConfig):
             loader = MigrationLoader(connection)
 
             # Get all migrations for our app from the migration graph
-            app_migrations = [
-                key[1] for key in loader.graph.nodes
-                if key[0] == APP_LABEL
-            ]
+            app_migrations = [key[1] for key in loader.graph.nodes if key[0] == APP_LABEL]
 
             if not app_migrations:
                 result = True
@@ -420,10 +432,7 @@ class CustomObjectsPluginConfig(PluginConfig):
                 recorder = MigrationRecorder(connection)
                 applied_migrations = recorder.applied_migrations()
 
-                if (APP_LABEL, last_migration) not in applied_migrations:
-                    result = True
-                else:
-                    result = False
+                result = (APP_LABEL, last_migration) not in applied_migrations
 
             # Cache the result
             _migrations_checked = result
@@ -452,7 +461,7 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         Returns False if it's safe to proceed with dynamic model creation.
         """
-        if "test" in sys.argv:
+        if 'test' in sys.argv:
             return True
         return CustomObjectsPluginConfig._dynamic_model_creation_unsafe()
 
@@ -483,16 +492,18 @@ class CustomObjectsPluginConfig(PluginConfig):
         # troubleshooting why 'custom_objects' isn't resolving, not a startup notice
         # every install should see by default.
         from netbox.registry import registry
+
         if 'custom_objects' not in registry.get('plugins', {}).get('jinja_filters', {}):
             logger.debug(
-                "NetBox Jinja config template hooks (jinja_filters / get_jinja_context) "
+                'NetBox Jinja config template hooks (jinja_filters / get_jinja_context) '
                 "are not available in this version of NetBox. The 'custom_objects' filter "
-                "and context variable will not be active in config templates. Upgrade to "
-                "NetBox 4.7+ to enable this feature."
+                'and context variable will not be active in config templates. Upgrade to '
+                'NetBox 4.7+ to enable this feature.'
             )
 
     def get_jinja_context(self):
         from netbox_custom_objects.jinja_env import CustomObjectsNamespace
+
         return {'custom_objects': CustomObjectsNamespace()}
 
     def ready(self):
@@ -506,10 +517,19 @@ class CustomObjectsPluginConfig(PluginConfig):
         # Register Django system checks (import triggers @register).  These
         # enforce the conditional NetBox/netbox-branching version floors that
         # PluginConfig's static min_version/max_version can't express.
-        from . import checks  # noqa: F401
-
-        from .models import CustomObjectType
+        # Run core's pre_delete handler after apply_polymorphic_on_delete(), so what a
+        # polymorphic field's on-delete behaviour deletes or clears is logged before the
+        # deletion that caused it.  Django logs a real foreign key's dependents first too, and
+        # a branch revert relies on it: it restores the referenced object before the
+        # custom objects pointing at it.
+        from core.signals import handle_deleted_object
         from netbox_custom_objects.api.serializers import get_serializer_class
+
+        from . import checks  # noqa: F401
+        from .models import CustomObjectType
+
+        pre_delete.disconnect(handle_deleted_object)
+        pre_delete.connect(handle_deleted_object)
 
         # Connect migration signals to track migration state
         pre_migrate.connect(_migration_started)
@@ -532,10 +552,12 @@ class CustomObjectsPluginConfig(PluginConfig):
         # event-driven, so the per-request hot path reads the cache instead of
         # polling the database.
         from .graphql.live import connect_signature_invalidation
+
         connect_signature_invalidation()
 
         # Evict models of Custom Object Types deleted in another worker process.
         from .stale_models import connect_stale_model_eviction
+
         connect_stale_model_eviction()
 
         # Register netbox-branching integration hooks (deferred-data reset
@@ -554,12 +576,14 @@ class CustomObjectsPluginConfig(PluginConfig):
         # django.db.backends.utils.
         with warnings.catch_warnings():
             warnings.filterwarnings(
-                "ignore", category=RuntimeWarning,
-                module=r"django\.db\.backends\..*",
+                'ignore',
+                category=RuntimeWarning,
+                module=r'django\.db\.backends\..*',
             )
             warnings.filterwarnings(
-                "ignore", category=UserWarning,
-                module=r"netbox_branching\..*",
+                'ignore',
+                category=UserWarning,
+                module=r'netbox_branching\..*',
             )
 
             # Skip database calls if dynamic models can't be created yet
@@ -582,6 +606,7 @@ class CustomObjectsPluginConfig(PluginConfig):
                     # any LazyForeignKey fields that were deferred in Pass 1 due to
                     # startup ordering (issue #408).
                     from netbox_custom_objects.field_types import LazyForeignKey
+
                     for obj in qs:
                         model = CustomObjectType.get_cached_model(obj.id)
                         if model is None:
@@ -613,6 +638,7 @@ class CustomObjectsPluginConfig(PluginConfig):
         global _app_ready
         _app_ready = True
         from django.apps import apps as django_apps
+
         django_apps.clear_cache()
 
         # Must precede register_tabs(): super().ready() populates registry['views'],
@@ -633,12 +659,14 @@ class CustomObjectsPluginConfig(PluginConfig):
             # this plugin), as for the model registration above.
             with warnings.catch_warnings():
                 warnings.filterwarnings(
-                    "ignore", category=RuntimeWarning,
-                    module=r"django\.db\.backends\..*",
+                    'ignore',
+                    category=RuntimeWarning,
+                    module=r'django\.db\.backends\..*',
                 )
                 warnings.filterwarnings(
-                    "ignore", category=UserWarning,
-                    module=r"netbox_branching\..*",
+                    'ignore',
+                    category=UserWarning,
+                    module=r'netbox_branching\..*',
                 )
                 register_tabs()
             self._register_tabs_error = None
@@ -646,8 +674,8 @@ class CustomObjectsPluginConfig(PluginConfig):
             # Surface the failure both in the logs and via a system check
             # (checks.check_related_tabs_registration) so a missing tab is
             # diagnosable in `manage.py check`, not silently swallowed.
-            logger.exception("related_tabs.register_tabs() failed; continuing without tabs")
-            self._register_tabs_error = f"{type(exc).__name__}: {exc}"
+            logger.exception('related_tabs.register_tabs() failed; continuing without tabs')
+            self._register_tabs_error = f'{type(exc).__name__}: {exc}'
 
     def get_model(self, model_name, require_ready=True):
         self.apps.check_apps_ready()
@@ -667,6 +695,7 @@ class CustomObjectsPluginConfig(PluginConfig):
             if getattr(model, '_registered_in', None) is None:
                 return model
             from .models import CustomObjectType, _registration_rolled_back
+
             cot_id = getattr(model, 'custom_object_type_id', None)
             if cot_id is None or not _registration_rolled_back(model) or self._dynamic_model_creation_unsafe():
                 return model
@@ -679,15 +708,11 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         cot_id_str = extract_cot_id_from_model_name(model_name)
         if cot_id_str is None:
-            raise LookupError(
-                "App '%s' doesn't have a '%s' model." % (self.label, model_name)
-            )
+            raise LookupError(f"App '{self.label}' doesn't have a '{model_name}' model.")
 
         # Guard against querying the DB when migrations haven't run yet
         if self.should_skip_dynamic_model_creation():
-            raise LookupError(
-                "App '%s' doesn't have a '%s' model." % (self.label, model_name)
-            )
+            raise LookupError(f"App '{self.label}' doesn't have a '{model_name}' model.")
 
         from .models import CustomObjectType
 
@@ -703,14 +728,15 @@ class CustomObjectsPluginConfig(PluginConfig):
             # error that would abort manage.py migrate.  obj.get_model() is
             # inside the block because it also queries CustomObjectTypeField,
             # which could be missing or have an absent column.
-            raise LookupError(
-                "App '%s' doesn't have a '%s' model." % (self.label, model_name)
-            )
+            raise LookupError(f"App '{self.label}' doesn't have a '{model_name}' model.")
 
     def get_models(self, include_auto_created=False, include_swapped=False):
         """Return all models for this plugin, including custom object type models."""
-        # Get the regular Django models first
+        # Get the regular Django models first. Generated models are registered with the
+        # app too, so remember them and don't yield them twice below.
+        seen = set()
         for model in super().get_models(include_auto_created, include_swapped):
+            seen.add(model)
             yield model
 
         # Re-entrant call (issues #685/#686): generate_model() registers a COT's
@@ -727,12 +753,14 @@ class CustomObjectsPluginConfig(PluginConfig):
             # module-based filtering instead of message-content matching.
             with warnings.catch_warnings():
                 warnings.filterwarnings(
-                    "ignore", category=RuntimeWarning,
-                    module=r"django\.db\.backends\..*",
+                    'ignore',
+                    category=RuntimeWarning,
+                    module=r'django\.db\.backends\..*',
                 )
                 warnings.filterwarnings(
-                    "ignore", category=UserWarning,
-                    module=r"netbox_branching\..*",
+                    'ignore',
+                    category=UserWarning,
+                    module=r'netbox_branching\..*',
                 )
 
                 # Skip dynamic model generation until ready() has completed.
@@ -758,12 +786,14 @@ class CustomObjectsPluginConfig(PluginConfig):
                         for custom_type in custom_object_types:
                             model = custom_type.get_model()
                             if model:
-                                yield model
+                                if model not in seen:
+                                    yield model
 
                                 # If include_auto_created is True, also yield through models
                                 if include_auto_created and hasattr(model, '_through_models'):
                                     for through_model in model._through_models:
-                                        yield through_model
+                                        if through_model not in seen:
+                                            yield through_model
                 except (ProgrammingError, OperationalError):
                     # DB schema is incomplete (unapplied migrations). Yield nothing —
                     # dynamic models will be available once migrations have run.

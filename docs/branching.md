@@ -1,50 +1,65 @@
 # Using NetBox Custom Objects with NetBox Branching
 
-When using Custom Objects together with NetBox Branching, the following minimum versions are required:
-
-- NetBox >= 4.6.2
-- netbox-branching >= 1.0.4
-
-These requirements are only enforced when `netbox_branching` is present in `PLUGINS`. If you do not use branching, the standard compatibility matrix in `COMPATIBILITY.md` applies. A Django system check (`netbox_custom_objects.E001` / `E002`) will fail at startup if the combination is misconfigured.
-
-As of version 0.4.0, Custom Objects is _compatible_ with [NetBox Branching](https://netboxlabs.com/docs/extensions/branching/), but not yet fully supported. Users can safely run both plugins together, but there are some caveats to be aware of. See below for how each Custom Objects model interacts with NetBox Branching.
-
-!!! note
-    We are working towards full support for Custom Objects on branches. Keep an eye on the GitHub issues for updates ahead of future releases.
+Custom Objects fully supports [NetBox Branching](https://netboxlabs.com/docs/extensions/branching/). Custom Object Types, their fields and constraints, and the custom objects themselves can all be created, changed and deleted in a branch, then synced, merged and reverted like any other NetBox object.
 
 !!! tip
     If you have any questions, the best place to start is the GitHub [discussions](https://github.com/netboxlabs/netbox-custom-objects/discussions). If you are a NetBox Labs customer, you can also contact support.
 
+## Requirements
+
+Using Custom Objects together with NetBox Branching requires:
+
+- NetBox 4.6.2 or later
+- netbox-branching 1.0.4 or later (published on PyPI as `netboxlabs-netbox-branching`)
+
+These requirements apply only when `netbox_branching` is in `PLUGINS`. Without it, the standard [compatibility matrix](https://github.com/netboxlabs/netbox-custom-objects/blob/main/COMPATIBILITY.md) applies.
+
+NetBox runs these system checks at startup:
+
+| Check | Level | Meaning |
+|-------|-------|---------|
+| `netbox_custom_objects.E001` | Error | NetBox is older than 4.6.2. |
+| `netbox_custom_objects.E002` | Error | netbox-branching is older than 1.0.4. |
+| `netbox_custom_objects.W001` | Warning | netbox-branching is installed, but its version can't be determined (for example, an editable checkout without package metadata), so the 1.0.4 requirement can't be verified. |
+
 ## Setup
 
-To use Custom Objects alongside NetBox Branching, add the following to your `configuration.py`. This exempts Custom Object Types and their fields from branch tracking, which is the supported operating mode:
+1. Install and configure netbox-branching as described in its [installation guide](https://netboxlabs.com/docs/extensions/branching/), including its `DATABASES` and `DATABASE_ROUTERS` settings.
 
-```python
-PLUGINS_CONFIG = {
-    'netbox_branching': {
-        'exempt_models': [
-            'netbox_custom_objects.customobjecttype',
-            'netbox_custom_objects.customobjecttypefield',
-        ],
-    },
-}
-```
+    You can install both plugins at compatible versions with the `branching` extra:
 
-## Custom Object Types & Fields
+    ```no-highlight
+    pip install "netboxlabs-netbox-custom-objects[branching]"
+    ```
 
-Custom Object Types and Custom Object Type Fields can be created, updated, and deleted while a branch is active. However, those changes are applied directly to the main database — they do not appear in the branch diff or the "Changes Ahead" view.
+2. Add both plugins to `PLUGINS` in `configuration.py`:
 
-- When you are in an activated branch, any creates, updates, and deletes you perform on Custom Object Types and Custom Object Type Fields will not show up in the Diff or Changes Ahead views.
-- Although you are in an activated branch, these changes are made directly to main.
-- Typically it will be NetBox administrators who alter Custom Object Types and Custom Object Type Fields. We recommend experimenting in a staging instance until you are satisfied with the modelling, and then moving your schemas to production using the [portable schema](portable-schema.md) feature.
+    ```python
+    PLUGINS = [
+        'netbox_custom_objects',
+        'netbox_branching',
+    ]
+    ```
 
-## Custom Objects
+Custom Objects needs no branching-specific configuration.
 
-Changes to Custom Objects on branches are disallowed.
+!!! warning
+    If your configuration adds the Custom Object Type models to netbox-branching's `exempt_models`, as earlier versions of these docs recommended, remove them.
 
-- When in an activated branch, users can still see the available Custom Object Types and any Custom Objects that existed when the branch was created, but cannot create, edit, or delete Custom Objects within the branch.
-- This approach ensures users can safely combine Custom Objects and Branching while full support is being developed.
+## How It Works
 
-## Portable Schema
+Custom Object Types, their fields and constraints, and custom objects work in branches like any other NetBox object: create, change and delete them in a branch, then sync, merge and revert it as described in the [netbox-branching documentation](https://netboxlabs.com/docs/extensions/branching/). What's specific to Custom Objects:
 
-A [portable schema document](portable-schema.md) can be applied while a branch is active. The Custom Object Type and field changes are made in the branch and the DDL runs against the branch's schema, so main is unchanged until the branch is merged.
+- **Schema changes stay in the branch.** Creating or deleting a Custom Object Type, and adding, renaming, retyping or deleting a field, change the database tables in the branch's own schema. Main's tables are unchanged until the branch is merged.
+- **Field renames.** If a field is renamed in both main and the branch, merging keeps the branch's name.
+- **Portable schema.** A [portable schema document](portable-schema.md) can be applied in a branch. Over the REST API, select the branch with the `X-NetBox-Branch` header.
+- **GraphQL.** The GraphQL API follows the active branch, so its custom object types and fields match the branch's Custom Object Types.
+
+## Upgrades
+
+When an upgrade adds columns to Custom Object Type tables, `manage.py migrate` updates every active branch as well as main. Running `manage.py upgrade_custom_objects` with no `--cot` option does the same. Branches that are missing their schema or have migrations pending are skipped, and you can run the command again once those branches are migrated. With `--cot`, only main is updated.
+
+## Known Limitations
+
+- **Reverting a deleted Custom Object Type doesn't restore its objects.** If a Custom Object Type is deleted in a branch and the branch is merged and then reverted, the type, its fields and its table come back with their original IDs, but its objects don't. Deleting the type drops its table directly, so there is no change record for each object to replay.
+- **Reverse relations for polymorphic fields.** For a polymorphic field added in a branch, its reverse relation on the target models (the field's **Related name**) isn't available until the branch is merged.

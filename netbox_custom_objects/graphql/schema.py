@@ -17,23 +17,27 @@ query here would be immediately shadowed by that live rebuild.  ``live`` reuses
 """
 
 import logging
-from typing import List
 
 import strawberry
 import strawberry_django
 
 from .types import (
-    build_object_type, clear_type_cache, graphql_safe_name, reset_build_state, set_cot_map, set_visible_cot_ids,
+    build_object_type,
+    clear_type_cache,
+    graphql_safe_name,
+    reset_build_state,
+    set_cot_map,
+    set_visible_cot_ids,
 )
 
-logger = logging.getLogger("netbox_custom_objects.graphql")
+logger = logging.getLogger('netbox_custom_objects.graphql')
 
 # All custom-object root query fields are namespaced with this prefix so they
 # cannot collide with NetBox's own (or another plugin's) root query fields — every
 # plugin's query class is mixed into the single global ``Query`` type, so bare,
 # slug-derived names like ``site``/``group`` would otherwise be shadowed by core.
 # The prefix mirrors the ``custom_objects_<id>`` table-naming convention.
-QUERY_FIELD_PREFIX = "custom_objects_"
+QUERY_FIELD_PREFIX = 'custom_objects_'
 
 
 def _query_field_name(custom_object_type, used_names):
@@ -45,10 +49,10 @@ def _query_field_name(custom_object_type, used_names):
     ``[_A-Za-z][_0-9A-Za-z]*``; slugs may contain hyphens.  Collisions among custom
     object types (after sanitisation) are disambiguated with the type id.
     """
-    slug = graphql_safe_name((custom_object_type.slug or "").lower())
+    slug = graphql_safe_name((custom_object_type.slug or '').lower())
     # The prefix guarantees a valid leading character, so no digit/empty guard is
     # needed on the slug portion.
-    base = f"{QUERY_FIELD_PREFIX}{slug}"
+    base = f'{QUERY_FIELD_PREFIX}{slug}'
 
     def _taken(candidate):
         # Reserve the singular field name *and* its ``_list`` companion together.
@@ -56,7 +60,7 @@ def _query_field_name(custom_object_type, used_names):
         # with another type's singular field — e.g. slug 'foo' yields foo/foo_list
         # while slug 'foo-list' sanitises to foo_list/foo_list_list, and the bare
         # 'foo_list' would otherwise clobber the first type's list field.
-        return candidate in used_names or f"{candidate}_list" in used_names
+        return candidate in used_names or f'{candidate}_list' in used_names
 
     name = base
     if _taken(name):
@@ -65,13 +69,13 @@ def _query_field_name(custom_object_type, used_names):
         # happens to end in this id — so keep extending until both the singular
         # name and its ``_list`` companion are genuinely free.  Without this loop
         # the colliding field would silently overwrite the earlier type's field.
-        name = f"{base}_{custom_object_type.id}"
+        name = f'{base}_{custom_object_type.id}'
         counter = 2
         while _taken(name):
-            name = f"{base}_{custom_object_type.id}_{counter}"
+            name = f'{base}_{custom_object_type.id}_{counter}'
             counter += 1
     used_names.add(name)
-    used_names.add(f"{name}_list")
+    used_names.add(f'{name}_list')
     return name
 
 
@@ -127,16 +131,12 @@ def build_query_classes(visible_cot_ids=None):
         # joined/prefetched, so the per-type build issues no per-field queries:
         # without this the inner loop hits the DB for each type's fields and again
         # for each field's related object type(s) — O(N + N·M) queries per rebuild.
-        fields_qs = (
-            CustomObjectTypeField.objects
-            .select_related("related_object_type")
-            .prefetch_related("related_object_types")
+        fields_qs = CustomObjectTypeField.objects.select_related('related_object_type').prefetch_related(
+            'related_object_types'
         )
-        custom_object_types = list(
-            CustomObjectType.objects.prefetch_related(Prefetch("fields", queryset=fields_qs))
-        )
-    except Exception:  # noqa: BLE001 - DB may be unavailable at import time
-        logger.debug("Could not load custom object types for GraphQL schema", exc_info=True)
+        custom_object_types = list(CustomObjectType.objects.prefetch_related(Prefetch('fields', queryset=fields_qs)))
+    except Exception:  # DB may be unavailable at import time
+        logger.debug('Could not load custom object types for GraphQL schema', exc_info=True)
         return []
 
     # Register the preloaded types by pk so a relationship field pointing at another
@@ -154,9 +154,9 @@ def build_query_classes(visible_cot_ids=None):
     for cot in custom_object_types:
         try:
             gql_type = build_object_type(cot)
-        except Exception:  # noqa: BLE001 - never break the whole schema for one type
+        except Exception:  # never break the whole schema for one type
             logger.warning(
-                "Failed to build GraphQL type for custom object type %r (id=%s); skipping",
+                'Failed to build GraphQL type for custom object type %r (id=%s); skipping',
                 cot.name,
                 cot.id,
                 exc_info=True,
@@ -166,23 +166,23 @@ def build_query_classes(visible_cot_ids=None):
             continue
 
         field_name = _query_field_name(cot, used_names)
-        list_name = f"{field_name}_list"
+        list_name = f'{field_name}_list'
 
         annotations[field_name] = gql_type
         attrs[field_name] = strawberry_django.field()
-        annotations[list_name] = List[gql_type]
+        annotations[list_name] = list[gql_type]
         attrs[list_name] = strawberry_django.field()
 
     if not attrs:
         return []
 
-    attrs["__annotations__"] = annotations
+    attrs['__annotations__'] = annotations
     # The GraphQL type name must be "Query": strawberry-django only attaches the
     # single-object ``id`` lookup argument to fields whose origin type is named
     # "Query" (see strawberry_django.filters: ``is_root_query``).  NetBox names
     # every per-app query class "Query" for the same reason; our contributed class
     # is mixed into NetBox's real Query as a base, so it must do likewise.
-    query_cls = strawberry.type(type("CustomObjectsQuery", (), attrs), name="Query")
+    query_cls = strawberry.type(type('CustomObjectsQuery', (), attrs), name='Query')
     # Marker so live schema rebuilds can find and replace a stale instance of
     # this class among NetBox's Query bases.
     query_cls._nco_query = True

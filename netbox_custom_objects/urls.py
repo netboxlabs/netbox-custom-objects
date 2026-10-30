@@ -1,4 +1,5 @@
 from django.urls import include, path
+
 from utilities.urls import get_model_urls
 
 from . import views
@@ -9,84 +10,95 @@ app_name = APP_LABEL
 urlpatterns = [
     path('custom-object-types/', include(get_model_urls(APP_LABEL, 'customobjecttype', detail=False))),
     path('custom-object-types/<int:pk>/', include(get_model_urls(APP_LABEL, 'customobjecttype'))),
-
     # Custom Object Type Fields
     path(
-        "custom-object-type-fields/<int:pk>/",
-        include(get_model_urls(APP_LABEL, "customobjecttypefield")),
+        'custom-object-type-fields/<int:pk>/',
+        include(get_model_urls(APP_LABEL, 'customobjecttypefield')),
     ),
     path(
-        "custom-object-type-fields/add/",
+        'custom-object-type-fields/add/',
         views.CustomObjectTypeFieldEditView.as_view(),
-        name="customobjecttypefield_add",
+        name='customobjecttypefield_add',
     ),
-
+    # Custom Object Type Constraints
+    path(
+        'custom-object-type-constraints/',
+        include(get_model_urls(APP_LABEL, 'customobjecttypeconstraint', detail=False)),
+    ),
+    path(
+        'custom-object-type-constraints/<int:pk>/',
+        include(get_model_urls(APP_LABEL, 'customobjecttypeconstraint')),
+    ),
+    path(
+        'custom-object-type-constraints/add/',
+        views.CustomObjectTypeConstraintEditView.as_view(),
+        name='customobjecttypeconstraint_add',
+    ),
     # Journal Entries (must come before custom object patterns)
     path(
-        "journal-entries/add/",
+        'journal-entries/add/',
         views.CustomJournalEntryEditView.as_view(),
-        name="custom_journalentry_add",
+        name='custom_journalentry_add',
     ),
-
     # Custom Objects
     path(
-        "<str:custom_object_type>/",
+        '<str:custom_object_type>/',
         views.CustomObjectListView.as_view(),
-        name="customobject_list",
+        name='customobject_list',
     ),
     path(
-        "<str:custom_object_type>/add/",
+        '<str:custom_object_type>/add/',
         views.CustomObjectEditView.as_view(),
-        name="customobject_add",
+        name='customobject_add',
     ),
     path(
-        "<str:custom_object_type>/bulk-edit/",
+        '<str:custom_object_type>/bulk-edit/',
         views.CustomObjectBulkEditView.as_view(),
-        name="customobject_bulk_edit",
+        name='customobject_bulk_edit',
     ),
     path(
-        "<str:custom_object_type>/bulk-delete/",
+        '<str:custom_object_type>/bulk-delete/',
         views.CustomObjectBulkDeleteView.as_view(),
-        name="customobject_bulk_delete",
+        name='customobject_bulk_delete',
     ),
     path(
-        "<str:custom_object_type>/bulk-import/",
+        '<str:custom_object_type>/bulk-import/',
         views.CustomObjectBulkImportView.as_view(),
-        name="customobject_bulk_import",
+        name='customobject_bulk_import',
     ),
     path(
-        "<str:custom_object_type>/<int:pk>/",
+        '<str:custom_object_type>/<int:pk>/',
         views.CustomObjectView.as_view(),
-        name="customobject",
+        name='customobject',
     ),
     path(
-        "<str:custom_object_type>/<int:pk>/edit/",
+        '<str:custom_object_type>/<int:pk>/edit/',
         views.CustomObjectEditView.as_view(),
-        name="customobject_edit",
+        name='customobject_edit',
     ),
     path(
-        "<str:custom_object_type>/<int:pk>/delete/",
+        '<str:custom_object_type>/<int:pk>/delete/',
         views.CustomObjectDeleteView.as_view(),
-        name="customobject_delete",
+        name='customobject_delete',
     ),
     path(
-        "<str:custom_object_type>/<int:pk>/journal/",
+        '<str:custom_object_type>/<int:pk>/journal/',
         views.CustomObjectJournalView.as_view(),
-        name="customobject_journal",
+        name='customobject_journal',
     ),
     path(
-        "<str:custom_object_type>/<int:pk>/changelog/",
+        '<str:custom_object_type>/<int:pk>/changelog/',
         views.CustomObjectChangeLogView.as_view(),
-        name="customobject_changelog",
+        name='customobject_changelog',
     ),
     path(
-        "<str:custom_object_type>/<int:pk>/contacts/",
+        '<str:custom_object_type>/<int:pk>/contacts/',
         views.CustomObjectContactsView.as_view(),
-        name="customobject_contacts",
+        name='customobject_contacts',
     ),
     path(
-        "<str:custom_object_type>/<int:pk>/config-context/",
+        '<str:custom_object_type>/<int:pk>/config-context/',
         views.CustomObjectConfigContextView.as_view(),
-        name="customobject_configcontext",
+        name='customobject_configcontext',
     ),
 ]

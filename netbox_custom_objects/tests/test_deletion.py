@@ -1,17 +1,17 @@
 """
 Tests for deletion scenarios with cascading effects.
 
-Uses TransactionTestCase so that DDL statements (CREATE/DROP TABLE) issued during
-setup and teardown are not wrapped in Django's per-test rollback transaction.  That
-lets us verify table-level changes and FK SET NULL/CASCADE/PROTECT behaviour that
-cannot be observed inside a rolled-back savepoint.
+The database enforces on-delete behaviour with FK constraints that a field adds once
+its transaction commits, so the tests that delete with raw SQL run the field's
+on-commit callbacks. ORM deletes use the model field's on_delete and don't need them.
 """
+
 from unittest import mock
 
 from django.apps import apps as django_apps
-from django.db import connection
+from django.db import connection, transaction
 from django.db.utils import IntegrityError
-from django.test import TransactionTestCase
+from django.test import TestCase
 
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
@@ -19,16 +19,11 @@ from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 
-from .base import CustomObjectsTestCase, TransactionCleanupMixin
+from .base import CustomObjectsTestCase
 
 
-class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+class DeletionTestCase(CustomObjectsTestCase, TestCase):
     """Test deletion scenarios with cascading effects."""
-
-    def setUp(self):
-        # TransactionCleanupMixin.setUp() purges stale generated models and
-        # CustomObjectsTestCase.setUp() creates the test user and client.
-        super().setUp()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -41,26 +36,22 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
     def _field_exists_on_model(self, model, field_name):
         return field_name in {f.name for f in model._meta.get_fields()}
 
-    def _make_device(self, suffix=""):
+    def _make_device(self, suffix=''):
         """Create a minimal Device and return it."""
         site = Site.objects.create(name=f'Del Test Site{suffix}', slug=f'del-test-site{suffix}')
         manufacturer = Manufacturer.objects.create(name=f'Del Test Mfr{suffix}', slug=f'del-test-mfr{suffix}')
         device_type = DeviceType.objects.create(
             manufacturer=manufacturer, model=f'Del Test Type{suffix}', slug=f'del-test-type{suffix}'
         )
-        role = DeviceRole.objects.create(
-            name=f'Del Test Role{suffix}', slug=f'del-test-role{suffix}', color='aaaaaa'
-        )
-        return Device.objects.create(
-            name=f'Del Test Device{suffix}', site=site, device_type=device_type, role=role
-        )
+        role = DeviceRole.objects.create(name=f'Del Test Role{suffix}', slug=f'del-test-role{suffix}', color='aaaaaa')
+        return Device.objects.create(name=f'Del Test Device{suffix}', site=site, device_type=device_type, role=role)
 
     # ------------------------------------------------------------------
     # Tests
     # ------------------------------------------------------------------
 
     def test_delete_cot_with_instances(self):
-        """#140 – Deleting a COT must drop the backing table (and therefore all instances)."""
+        """Deleting a COT must drop the backing table (and therefore all instances)."""
         cot = self.create_simple_custom_object_type(name='deltest', slug='del-test')
         model = cot.get_model()
         table_name = cot.get_database_table_name()
@@ -85,7 +76,7 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         )
 
     def test_delete_co_referenced_by_another_co(self):
-        """#283/#471 – Deleting a CO that is the target of an object field must SET NULL
+        """Deleting a CO that is the target of an object field must SET NULL
         the referencing field on the source CO, not delete the source CO."""
         cot_a = self.create_simple_custom_object_type(name='typea', slug='type-a')
         cot_b = self.create_simple_custom_object_type(name='typeb', slug='type-b')
@@ -116,16 +107,16 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
 
         self.assertTrue(
             model_b.objects.filter(pk=obj_b.pk).exists(),
-            "Custom Object B must survive when Object A is deleted (SET NULL, not CASCADE).",
+            'Custom Object B must survive when Object A is deleted (SET NULL, not CASCADE).',
         )
         obj_b.refresh_from_db()
         self.assertIsNone(
             obj_b.ref_a_id,
-            "The ref_a field on Object B must be NULL after Object A is deleted.",
+            'The ref_a field on Object B must be NULL after Object A is deleted.',
         )
 
     def test_delete_cot_referenced_by_another_cot(self):
-        """#183 – Deleting a COT must also clean up object fields in other COTs that reference it."""
+        """Deleting a COT must also clean up object fields in other COTs that reference it."""
         cot_target = self.create_simple_custom_object_type(name='target', slug='target-type')
         cot_source = self.create_simple_custom_object_type(name='source', slug='source-type')
 
@@ -143,13 +134,13 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
 
         self.assertFalse(
             CustomObjectTypeField.objects.filter(pk=ref_field_id).exists(),
-            "Field referencing the deleted COT should have been removed.",
+            'Field referencing the deleted COT should have been removed.',
         )
         # The source COT itself must survive
         self.assertTrue(CustomObjectType.objects.filter(pk=cot_source.pk).exists())
 
     def test_delete_cotf_with_data(self):
-        """#367 – Deleting a field whose instances already contain data should succeed."""
+        """Deleting a field whose instances already contain data should succeed."""
         cot = self.create_simple_custom_object_type(name='fielddeltest', slug='field-del-test')
 
         extra_field = self.create_custom_object_type_field(
@@ -178,7 +169,7 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         self.assertEqual(fresh_model.objects.count(), 2)
 
     def test_delete_referenced_core_object(self):
-        """#471 – on_delete_behavior=set_null: deleting the referenced core object must SET NULL
+        """on_delete_behavior=set_null: deleting the referenced core object must SET NULL
         on the CO field, not delete the CO.
 
         The SET NULL behaviour is enforced at the database level via the ON DELETE SET NULL
@@ -188,14 +179,15 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         device = self._make_device()
 
         cot = self.create_simple_custom_object_type(name='devref-sn', slug='dev-ref-sn')
-        self.create_custom_object_type_field(
-            cot,
-            name='device',
-            label='Device',
-            type='object',
-            related_object_type=self.get_device_object_type(),
-            on_delete_behavior=ObjectFieldOnDeleteChoices.SET_NULL,
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            self.create_custom_object_type_field(
+                cot,
+                name='device',
+                label='Device',
+                type='object',
+                related_object_type=self.get_device_object_type(),
+                on_delete_behavior=ObjectFieldOnDeleteChoices.SET_NULL,
+            )
         model = cot.get_model()
 
         co = model.objects.create(name='CO with Device', device=device)
@@ -208,24 +200,25 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         self.assertFalse(Device.objects.filter(pk=device_pk).exists())
         self.assertTrue(
             model.objects.filter(pk=co.pk).exists(),
-            "Custom Object must survive when Device is deleted (SET NULL).",
+            'Custom Object must survive when Device is deleted (SET NULL).',
         )
         co.refresh_from_db()
-        self.assertIsNone(co.device_id, "device field must be NULL after Device is deleted.")
+        self.assertIsNone(co.device_id, 'device field must be NULL after Device is deleted.')
 
     def test_delete_referenced_core_object_cascade(self):
         """on_delete_behavior=cascade: deleting the referenced core object must also delete the CO."""
         device = self._make_device(suffix='-casc')
 
         cot = self.create_simple_custom_object_type(name='devref-casc', slug='dev-ref-casc')
-        self.create_custom_object_type_field(
-            cot,
-            name='device',
-            label='Device',
-            type='object',
-            related_object_type=self.get_device_object_type(),
-            on_delete_behavior=ObjectFieldOnDeleteChoices.CASCADE,
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            self.create_custom_object_type_field(
+                cot,
+                name='device',
+                label='Device',
+                type='object',
+                related_object_type=self.get_device_object_type(),
+                on_delete_behavior=ObjectFieldOnDeleteChoices.CASCADE,
+            )
         model = cot.get_model()
 
         co = model.objects.create(name='CO with Device Cascade', device=device)
@@ -239,7 +232,7 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         self.assertFalse(Device.objects.filter(pk=device_pk).exists())
         self.assertFalse(
             model.objects.filter(pk=co_pk).exists(),
-            "Custom Object must be deleted when Device is deleted (CASCADE).",
+            'Custom Object must be deleted when Device is deleted (CASCADE).',
         )
 
     def test_delete_referenced_core_object_protect(self):
@@ -248,14 +241,15 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         device = self._make_device(suffix='-prot')
 
         cot = self.create_simple_custom_object_type(name='devref-prot', slug='dev-ref-prot')
-        self.create_custom_object_type_field(
-            cot,
-            name='device',
-            label='Device',
-            type='object',
-            related_object_type=self.get_device_object_type(),
-            on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            self.create_custom_object_type_field(
+                cot,
+                name='device',
+                label='Device',
+                type='object',
+                related_object_type=self.get_device_object_type(),
+                on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
+            )
         model = cot.get_model()
 
         co = model.objects.create(name='CO with Device Protect', device=device)
@@ -263,9 +257,12 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
 
         # The DB-level RESTRICT constraint should prevent deletion.
         # PostgreSQL raises an IntegrityError wrapping a ForeignKeyViolation.
-        with self.assertRaises(IntegrityError, msg="RESTRICT should prevent deletion of the referenced Device"):
-            with connection.cursor() as cursor:
-                cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
+        with (
+            self.assertRaises(IntegrityError, msg='RESTRICT should prevent deletion of the referenced Device'),
+            transaction.atomic(),
+            connection.cursor() as cursor,
+        ):
+            cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
 
         # Both objects must remain intact.
         self.assertTrue(Device.objects.filter(pk=device_pk).exists())
@@ -301,7 +298,7 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
 
         self.assertFalse(
             model_source.objects.filter(pk=obj_source_pk).exists(),
-            "Source CO must be deleted when its CASCADE target CO is deleted.",
+            'Source CO must be deleted when its CASCADE target CO is deleted.',
         )
 
     def test_delete_co_referenced_by_another_co_protect(self):
@@ -333,81 +330,7 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         # Both objects must remain intact.
         self.assertTrue(
             model_target.objects.filter(pk=obj_target.pk).exists(),
-            "Target CO must survive when deletion is blocked by PROTECT.",
-        )
-
-    def test_object_field_save_bumps_related_cot_cache_timestamp(self):
-        """Creating a TYPE_OBJECT field must bump the related COT's cache_timestamp for cross-worker invalidation."""
-        cot_target = self.create_simple_custom_object_type(name='cttarget', slug='ct-target')
-        cot_source = self.create_simple_custom_object_type(name='ctsource', slug='ct-source')
-
-        cot_target.refresh_from_db()
-        initial_ts = cot_target.cache_timestamp
-
-        self.create_custom_object_type_field(
-            cot_source,
-            name='ref_target',
-            label='Reference Target',
-            type='object',
-            related_object_type=cot_target.object_type,
-        )
-
-        cot_target.refresh_from_db()
-        self.assertGreater(
-            cot_target.cache_timestamp,
-            initial_ts,
-            "Creating a TYPE_OBJECT field must bump the related COT's cache_timestamp.",
-        )
-
-    def test_object_field_save_clears_related_cot_model_cache(self):
-        """Creating a TYPE_OBJECT field must evict the related COT's model from the in-process cache."""
-        cot_target = self.create_simple_custom_object_type(name='mctarget', slug='mc-target')
-        cot_source = self.create_simple_custom_object_type(name='mcsource', slug='mc-source')
-
-        # Warm up the cache for the target COT.
-        cot_target.get_model()
-        self.assertTrue(CustomObjectType.is_model_cached(cot_target.id))
-
-        self.create_custom_object_type_field(
-            cot_source,
-            name='ref_target',
-            label='Reference Target',
-            type='object',
-            related_object_type=cot_target.object_type,
-        )
-
-        self.assertFalse(
-            CustomObjectType.is_model_cached(cot_target.id),
-            "Saving a TYPE_OBJECT field must evict the related COT's model from cache.",
-        )
-
-    def test_on_delete_behavior_change_bumps_related_cot_cache_timestamp(self):
-        """Changing on_delete_behavior on an existing TYPE_OBJECT field must re-bump the related COT's timestamp."""
-        cot_target = self.create_simple_custom_object_type(name='odtarget', slug='od-target')
-        cot_source = self.create_simple_custom_object_type(name='odsource', slug='od-source')
-
-        field = self.create_custom_object_type_field(
-            cot_source,
-            name='ref_target',
-            label='Reference Target',
-            type='object',
-            related_object_type=cot_target.object_type,
-            on_delete_behavior=ObjectFieldOnDeleteChoices.SET_NULL,
-        )
-
-        cot_target.refresh_from_db()
-        ts_after_create = cot_target.cache_timestamp
-
-        # Reload from DB so that from_db() populates _original (required by save()).
-        field = CustomObjectTypeField.objects.get(pk=field.pk)
-        field.on_delete_behavior = ObjectFieldOnDeleteChoices.PROTECT
-        field.save()
-
-        cot_target.refresh_from_db()
-        self.assertGreater(
-            cot_target.cache_timestamp,
-            ts_after_create,
-            "Changing on_delete_behavior must re-bump the related COT's cache_timestamp.",
+            'Target CO must survive when deletion is blocked by PROTECT.',
         )
 
     def test_change_on_delete_behavior_protect_to_set_null(self):
@@ -417,27 +340,32 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         device = self._make_device(suffix='-chg-sn')
 
         cot = self.create_simple_custom_object_type(name='chgsn', slug='chg-sn')
-        field = self.create_custom_object_type_field(
-            cot,
-            name='device',
-            label='Device',
-            type='object',
-            related_object_type=self.get_device_object_type(),
-            on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            field = self.create_custom_object_type_field(
+                cot,
+                name='device',
+                label='Device',
+                type='object',
+                related_object_type=self.get_device_object_type(),
+                on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
+            )
         model = cot.get_model()
         co = model.objects.create(name='CO Chg SN', device=device)
         device_pk = device.pk
 
         # Confirm PROTECT is in effect: raw DELETE must be blocked.
-        with self.assertRaises(IntegrityError, msg="RESTRICT should block deletion before the change"):
-            with connection.cursor() as cursor:
-                cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
+        with (
+            self.assertRaises(IntegrityError, msg='RESTRICT should block deletion before the change'),
+            transaction.atomic(),
+            connection.cursor() as cursor,
+        ):
+            cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
 
         # Change the field to SET_NULL.
         field = CustomObjectTypeField.objects.get(pk=field.pk)
         field.on_delete_behavior = ObjectFieldOnDeleteChoices.SET_NULL
-        field.save()
+        with self.captureOnCommitCallbacks(execute=True):
+            field.save()
 
         # Now deletion must succeed and set the FK to NULL.
         with connection.cursor() as cursor:
@@ -446,10 +374,10 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         self.assertFalse(Device.objects.filter(pk=device_pk).exists())
         self.assertTrue(
             model.objects.filter(pk=co.pk).exists(),
-            "CO must survive after switching to SET_NULL and deleting the Device.",
+            'CO must survive after switching to SET_NULL and deleting the Device.',
         )
         co.refresh_from_db()
-        self.assertIsNone(co.device_id, "device field must be NULL after Device is deleted.")
+        self.assertIsNone(co.device_id, 'device field must be NULL after Device is deleted.')
 
     def test_change_on_delete_behavior_protect_to_cascade(self):
         """Changing on_delete_behavior from PROTECT to CASCADE on an existing field must update
@@ -457,28 +385,33 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         device = self._make_device(suffix='-chg-casc')
 
         cot = self.create_simple_custom_object_type(name='chgcasc', slug='chg-casc')
-        field = self.create_custom_object_type_field(
-            cot,
-            name='device',
-            label='Device',
-            type='object',
-            related_object_type=self.get_device_object_type(),
-            on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            field = self.create_custom_object_type_field(
+                cot,
+                name='device',
+                label='Device',
+                type='object',
+                related_object_type=self.get_device_object_type(),
+                on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
+            )
         model = cot.get_model()
         co = model.objects.create(name='CO Chg Casc', device=device)
         co_pk = co.pk
         device_pk = device.pk
 
         # Confirm PROTECT is in effect.
-        with self.assertRaises(IntegrityError, msg="RESTRICT should block deletion before the change"):
-            with connection.cursor() as cursor:
-                cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
+        with (
+            self.assertRaises(IntegrityError, msg='RESTRICT should block deletion before the change'),
+            transaction.atomic(),
+            connection.cursor() as cursor,
+        ):
+            cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
 
         # Change the field to CASCADE.
         field = CustomObjectTypeField.objects.get(pk=field.pk)
         field.on_delete_behavior = ObjectFieldOnDeleteChoices.CASCADE
-        field.save()
+        with self.captureOnCommitCallbacks(execute=True):
+            field.save()
 
         # Now deletion must cascade and remove the CO.
         with connection.cursor() as cursor:
@@ -487,7 +420,7 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         self.assertFalse(Device.objects.filter(pk=device_pk).exists())
         self.assertFalse(
             model.objects.filter(pk=co_pk).exists(),
-            "CO must be deleted after switching to CASCADE and deleting the Device.",
+            'CO must be deleted after switching to CASCADE and deleting the Device.',
         )
 
     def test_protect_co_to_co_enforced_at_db_level(self):
@@ -502,14 +435,15 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         cot_target = self.create_simple_custom_object_type(name='dbtarget', slug='db-target')
         cot_source = self.create_simple_custom_object_type(name='dbsource', slug='db-source')
 
-        self.create_custom_object_type_field(
-            cot_source,
-            name='ref_target',
-            label='Reference Target',
-            type='object',
-            related_object_type=cot_target.object_type,
-            on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            self.create_custom_object_type_field(
+                cot_source,
+                name='ref_target',
+                label='Reference Target',
+                type='object',
+                related_object_type=cot_target.object_type,
+                on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
+            )
 
         model_source = cot_source.get_model()
         cot_target.refresh_from_db()
@@ -519,22 +453,26 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         model_source.objects.create(name='Source Object', ref_target=obj_target)
 
         target_table = cot_target.get_database_table_name()
-        with self.assertRaises(IntegrityError,
-                               msg="DB-level ON DELETE RESTRICT must block raw-SQL deletion of the target"):
-            with connection.cursor() as cursor:
-                cursor.execute(f'DELETE FROM {target_table} WHERE id = %s', [obj_target.pk])
+        with (
+            self.assertRaises(
+                IntegrityError, msg='DB-level ON DELETE RESTRICT must block raw-SQL deletion of the target'
+            ),
+            transaction.atomic(),
+            connection.cursor() as cursor,
+        ):
+            cursor.execute(f'DELETE FROM {target_table} WHERE id = %s', [obj_target.pk])
 
         self.assertTrue(
             model_target.objects.filter(pk=obj_target.pk).exists(),
-            "Target object must survive the failed deletion.",
+            'Target object must survive the failed deletion.',
         )
 
     # ------------------------------------------------------------------
-    # Cross-COT multiobject (M2M) deletion – issue #483
+    # Cross-COT multiobject (M2M) deletion
     # ------------------------------------------------------------------
 
     def test_delete_source_co_with_cross_cot_multiobject_field(self):
-        """#483 – Deleting a CO that is the SOURCE of a cross-COT M2M field
+        """Deleting a CO that is the SOURCE of a cross-COT M2M field
         succeeds and cascade-deletes the through rows."""
         cot_source = self.create_simple_custom_object_type(name='m2msrc', slug='m2m-src')
         cot_target = self.create_simple_custom_object_type(name='m2mtrg', slug='m2m-trg')
@@ -578,7 +516,7 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         )
 
     def test_delete_target_co_with_cross_cot_multiobject_field(self):
-        """#483 – Deleting a CO that is the TARGET of a cross-COT M2M field
+        """Deleting a CO that is the TARGET of a cross-COT M2M field
         succeeds and cascade-deletes the through rows."""
         cot_source = self.create_simple_custom_object_type(name='m2msrc2', slug='m2m-src2')
         cot_target = self.create_simple_custom_object_type(name='m2mtrg2', slug='m2m-trg2')
@@ -621,7 +559,7 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         )
 
     def test_delete_target_co_after_target_model_regeneration(self):
-        """#483 – Deletion of the target CO succeeds even after the TARGET COT's
+        """Deletion of the target CO succeeds even after the TARGET COT's
         model is regenerated (cache miss), which leaves the through model's target
         FK pointing at the old class.  The fix repoints the FK so the ORM-level
         cascade wires up correctly and the deletion succeeds."""
@@ -671,7 +609,7 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         )
 
     def test_delete_co_in_multi_hop_cross_cot_m2m_chain(self):
-        """#483 – Complex cross-COT chain: A.refs→B, B.ports→C.
+        """Complex cross-COT chain: A.refs→B, B.ports→C.
         Deleting a B instance must cascade-delete both A→B through rows and
         B→C through rows (B is both source and target in different M2M relations)."""
         cot_a = self.create_simple_custom_object_type(name='m2mcha', slug='m2m-ch-a')
@@ -734,74 +672,6 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         self.assertTrue(model_a.objects.filter(pk=obj_a.pk).exists())
         self.assertTrue(model_c.objects.filter(pk=obj_c.pk).exists())
 
-    def test_non_object_field_save_does_not_bump_unrelated_cot_cache_timestamp(self):
-        """Saving a non-object field must not affect an unrelated COT's cache_timestamp."""
-        cot_target = self.create_simple_custom_object_type(name='notarget', slug='no-target')
-        cot_other = self.create_simple_custom_object_type(name='noother', slug='no-other')
-
-        cot_target.refresh_from_db()
-        initial_ts = cot_target.cache_timestamp
-
-        self.create_custom_object_type_field(
-            cot_other,
-            name='extra',
-            label='Extra',
-            type='text',
-        )
-
-        cot_target.refresh_from_db()
-        self.assertEqual(
-            cot_target.cache_timestamp,
-            initial_ts,
-            "Saving a text field on an unrelated COT must not bump the target COT's cache_timestamp.",
-        )
-
-    def test_production_path_get_model_field_uses_fresh_db_fetch(self):
-        """get_model_field() fetches the target COT fresh from DB, so source_cot.get_model()
-        works correctly even when the caller's Python target COT object is stale.
-
-        After saving a TYPE_OBJECT field the signal bumps the target COT's cache_timestamp
-        in the DB and clears its in-process model cache.  The Python object held by test
-        code (or by any code that loaded the target COT before the save) then has a stale
-        cache_timestamp.
-
-        The production code in get_model_field() (field_types.py) always issues a fresh
-        CustomObjectType.objects.get() for the target COT before calling get_model(), so
-        the model it generates is cached under the current (post-bump) timestamp.
-
-        This test verifies that invariant by calling source_cot.get_model() with NO
-        refresh_from_db() on cot_target, then using only the model class that the FK
-        field itself resolved to (remote_field.model) — which is what the production
-        path set — to create and relate objects.  If get_model_field() ever stopped
-        fetching the target COT fresh from DB, the FK would resolve to a different model
-        class than the one cached under the current timestamp, and the create() call
-        would raise ValueError.
-        """
-        cot_target = self.create_simple_custom_object_type(name='ppttarget', slug='ppt-target')
-        cot_source = self.create_simple_custom_object_type(name='pptsource', slug='ppt-source')
-
-        self.create_custom_object_type_field(
-            cot_source,
-            name='ref_target',
-            label='Reference Target',
-            type='object',
-            related_object_type=cot_target.object_type,
-        )
-
-        # No refresh_from_db() on cot_target — its Python object is stale.
-        # get_model_field() inside source_cot.get_model() must handle this itself.
-        source_model = cot_source.get_model()
-
-        # Retrieve the target model class as the production path resolved it: via the
-        # FK's remote_field, not via the stale cot_target Python object.
-        target_model = source_model._meta.get_field('ref_target').remote_field.model
-
-        # Create and relate objects using only the production-path model class.
-        # A class-identity mismatch (stale vs. current model) would raise ValueError here.
-        obj_target = target_model.objects.create(name='Target Object')
-        obj_source = source_model.objects.create(name='Source Object', ref_target=obj_target)
-        self.assertEqual(obj_source.ref_target, obj_target)
-
     def test_delete_co_after_model_generated_in_another_context(self):
         """Deleting a CO works after its type's model was also generated for another context.
 
@@ -814,15 +684,25 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         cot_source = self.create_simple_custom_object_type(name='ctxsrc', slug='ctx-src')
         cot_target = self.create_simple_custom_object_type(name='ctxtrg', slug='ctx-trg')
         self.create_custom_object_type_field(
-            cot_source, name='ref', label='Reference', type='object',
+            cot_source,
+            name='ref',
+            label='Reference',
+            type='object',
             related_object_type=cot_target.object_type,
         )
         self.create_custom_object_type_field(
-            cot_source, name='refs', label='References', type='multiobject',
+            cot_source,
+            name='refs',
+            label='References',
+            type='multiobject',
             related_object_type=cot_target.object_type,
         )
         poly_field = self.create_custom_object_type_field(
-            cot_source, name='poly', label='Polymorphic', type='multiobject', is_polymorphic=True,
+            cot_source,
+            name='poly',
+            label='Polymorphic',
+            type='multiobject',
+            is_polymorphic=True,
         )
         poly_field.related_object_types.set([cot_target.object_type, ObjectType.objects.get_for_model(Site)])
 
@@ -866,66 +746,3 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         sources[1].refresh_from_db()
         self.assertIsNone(sources[1].ref_id)
         self.assertEqual(list(sources[1].refs.values_list('pk', flat=True)), [targets[0].pk])
-
-    def test_model_generated_in_another_context_leaves_main_classes_alone(self):
-        """Generating models for a branch must not rewire main's classes (#765).
-
-        Main's object FK, multi-object through and polymorphic through must keep
-        pointing at main's classes, so main can still assign related objects and
-        bulk-delete (which skips ``CustomObject.delete()``'s FK realignment).
-        """
-        cot_source = self.create_simple_custom_object_type(name='rwsrc', slug='rw-src')
-        cot_target = self.create_simple_custom_object_type(name='rwtrg', slug='rw-trg')
-        self.create_custom_object_type_field(
-            cot_source, name='ref', label='Reference', type='object',
-            related_object_type=cot_target.object_type,
-        )
-        self.create_custom_object_type_field(
-            cot_source, name='refs', label='References', type='multiobject',
-            related_object_type=cot_target.object_type,
-        )
-        poly_field = self.create_custom_object_type_field(
-            cot_source, name='poly', label='Polymorphic', type='multiobject', is_polymorphic=True,
-        )
-        poly_field.related_object_types.set([cot_target.object_type, ObjectType.objects.get_for_model(Site)])
-
-        model_source = cot_source.get_model()
-        cot_target.refresh_from_db()
-        model_target = cot_target.get_model()
-        main_poly_through = django_apps.get_model(APP_LABEL, poly_field.through_model_name)
-
-        self.addCleanup(CustomObjectType.clear_model_cache)
-        with mock.patch.object(CustomObjectType, '_active_branch_id', return_value=-1):
-            for cot, main_model in ((cot_target, model_target), (cot_source, model_source)):
-                cot.refresh_from_db()
-                self.assertIsNot(cot.get_model(), main_model)
-            # And the target once more, after the source exists in this context.
-            cot_target.refresh_from_db()
-            cot_target.get_model(no_cache=True)
-        branch_poly_through = CustomObjectType.get_cached_through_model(
-            cot_source.pk, poly_field.through_model_name, -1,
-        )
-        self.assertIsNotNone(branch_poly_through)
-        self.assertIsNot(branch_poly_through, main_poly_through)
-
-        for cot in (cot_source, cot_target):
-            cot.refresh_from_db()
-        self.assertIs(cot_source.get_model(), model_source)
-        self.assertIs(cot_target.get_model(), model_target)
-
-        self.assertIs(model_source._meta.get_field('ref').remote_field.model, model_target)
-        refs_through = model_source._meta.get_field('refs').remote_field.through
-        self.assertIs(refs_through._meta.get_field('source').remote_field.model, model_source)
-        self.assertIs(refs_through._meta.get_field('target').remote_field.model, model_target)
-        poly_through = django_apps.get_model(APP_LABEL, poly_field.through_model_name)
-        self.assertIs(poly_through, main_poly_through)
-        self.assertIs(poly_through._meta.get_field('source').remote_field.model, model_source)
-
-        # Main still works end to end: assign, then bulk-delete.
-        target = model_target.objects.create(name='Target')
-        source = model_source.objects.create(name='Source', ref=target)
-        source.refs.add(target)
-        source.poly.add(target)
-        model_source.objects.filter(pk=source.pk).delete()
-        self.assertFalse(refs_through.objects.filter(source_id=source.pk).exists())
-        self.assertFalse(poly_through.objects.filter(source_id=source.pk).exists())

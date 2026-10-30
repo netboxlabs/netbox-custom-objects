@@ -1,16 +1,20 @@
 {% load form_helpers %}
+{% load helpers %}
 {% load i18n %}
 {% load custom_object_utils %}
-
 {# Render all custom object form fields with group headings and poly groupings. #}
 {# Used by both customobject_edit.html and the htmx/edit_fields.html partial. #}
 <div class="field-group mb-5">
   {% for group, fields in form.custom_object_type_field_groups.items %}
-    {% if group %}
     <div class="row">
-      <h2 class="col-9 offset-3">{{ group }}</h2>
+      <h2 class="col-9 offset-3">
+        {% if group %}
+          {{ group }}
+        {% else %}
+          {{ form.instance|meta:"verbose_name" }}
+        {% endif %}
+      </h2>
     </div>
-    {% endif %}
     {% for name in fields %}
       {% if name in form.custom_object_type_poly_obj_ct_names %}
         {# Polymorphic single-object pair: heading + type selector + object picker #}
@@ -36,7 +40,6 @@
       {% endif %}
     {% endfor %}
   {% endfor %}
-
   {# Render regular model fields (non-custom) that are not in any group #}
   {% for field in form %}
     {% if field.name not in form.custom_object_type_rendered_names %}

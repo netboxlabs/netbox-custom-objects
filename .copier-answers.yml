@@ -1,0 +1,34 @@
+# Changes here will be overwritten by Copier; NEVER EDIT MANUALLY.
+_commit: bcfa4b9
+_src_path: git@github.com:netboxlabs/netbox-plugin-scaffold.git
+author_email: support@netboxlabs.com
+author_name: NetBox Labs
+branching_support: true
+commercial: false
+current_year: 2026
+default_model_name: ''
+dev_status: 4 - Beta
+django_version: '5.2'
+filtersets_layout: flat
+forms_layout: type_files
+github_org: netboxlabs
+layout_style: custom
+models_layout: flat
+netbox_max_version: 4.7.99
+netbox_min_version: 4.5.2
+netbox_test_max_ref: v4.7.3
+netbox_test_min_ref: v4.5.2
+package_name: netbox_custom_objects
+plugin_name: Custom Objects
+python_version: '3.12'
+python_versions:
+- '3.12'
+- '3.13'
+- '3.14'
+repo_slug: netbox-custom-objects
+ruff_version: 0.15.14
+serializers_layout: flat
+short_description: A plugin to manage custom objects in NetBox
+tables_layout: flat
+version: 0.7.1
+views_layout: flat

@@ -33,13 +33,14 @@ The view patch in ``__init__.py`` calls :func:`get_live_schema` per request and
 assigns the result to the view before it executes the operation.
 """
 
+import contextlib
 import logging
 import threading
 from collections import OrderedDict
 
 from netbox_custom_objects.utilities import is_branching_enabled
 
-logger = logging.getLogger("netbox_custom_objects.graphql")
+logger = logging.getLogger('netbox_custom_objects.graphql')
 
 # Single-flight rebuild lock.  Two roles:
 #   1. Correctness (required): build_query_classes() clears and repopulates the
@@ -80,6 +81,7 @@ def _active_branch_key():
     if not is_branching_enabled():
         return None
     from netbox_branching.contextvars import active_branch
+
     branch = active_branch.get()
     return branch.pk if branch is not None else None
 
@@ -99,9 +101,9 @@ def schema_signature():
 
     from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 
-    cot = CustomObjectType.objects.aggregate(n=Count("id"), t=Max("cache_timestamp"))
-    fields = CustomObjectTypeField.objects.aggregate(n=Count("id"), t=Max("last_updated"))
-    return (cot["n"], cot["t"], fields["n"], fields["t"])
+    cot = CustomObjectType.objects.aggregate(n=Count('id'), t=Max('cache_timestamp'))
+    fields = CustomObjectTypeField.objects.aggregate(n=Count('id'), t=Max('last_updated'))
+    return (cot['n'], cot['t'], fields['n'], fields['t'])
 
 
 # Sentinel signature for a best-effort first build made when the signature query
@@ -109,7 +111,7 @@ def schema_signature():
 # signature, so the next request with a working DB rebuilds.
 _UNKNOWN_SIGNATURE = object()
 
-_SIGNATURE_CACHE_KEY = "netbox_custom_objects.graphql.schema_signature"
+_SIGNATURE_CACHE_KEY = 'netbox_custom_objects.graphql.schema_signature'
 # Backstop TTL only — invalidation is event-driven (connect_signature_invalidation).
 # It bounds staleness if an invalidation is ever lost (e.g. a cache blip during a
 # write) without making the steady state poll the database.
@@ -120,7 +122,7 @@ def _signature_cache_key(branch_key):
     """Per-branch cache key for the schema signature (``None`` = main)."""
     if branch_key is None:
         return _SIGNATURE_CACHE_KEY
-    return f"{_SIGNATURE_CACHE_KEY}:{branch_key}"
+    return f'{_SIGNATURE_CACHE_KEY}:{branch_key}'
 
 
 def cached_schema_signature(branch_key=None):
@@ -143,7 +145,7 @@ def cached_schema_signature(branch_key=None):
     _signature_keys_seen.add(key)
     try:
         cached = cache.get(key)
-    except Exception:  # noqa: BLE001 - cache down: fall back to the DB
+    except Exception:  # cache down: fall back to the DB
         cached = None
     if cached is not None:
         # Cache backends may round-trip the tuple as a list; normalise so the
@@ -151,10 +153,8 @@ def cached_schema_signature(branch_key=None):
         return tuple(cached)
 
     signature = schema_signature()
-    try:
+    with contextlib.suppress(Exception):  # cache down: just skip memoisation
         cache.set(key, signature, _SIGNATURE_CACHE_TIMEOUT)
-    except Exception:  # noqa: BLE001 - cache down: just skip memoisation
-        pass
     return signature
 
 
@@ -169,8 +169,8 @@ def _invalidate_signature_cache(**kwargs):
 
     try:
         cache.delete(_signature_cache_key(_active_branch_key()))
-    except Exception:  # noqa: BLE001 - cache down: the TTL backstop still bounds staleness
-        logger.debug("Could not invalidate GraphQL schema signature cache", exc_info=True)
+    except Exception:  # cache down: the TTL backstop still bounds staleness
+        logger.debug('Could not invalidate GraphQL schema signature cache', exc_info=True)
 
 
 def _evict_branch_schema(sender, instance, **kwargs):
@@ -190,7 +190,7 @@ def _evict_branch_schema(sender, instance, **kwargs):
     _signature_keys_seen.discard(key)
     try:
         cache.delete(key)
-    except Exception:  # noqa: BLE001 - cache down: the TTL backstop still bounds it
+    except Exception:  # cache down: the TTL backstop still bounds it
         logger.debug("Could not evict deleted branch's schema signature", exc_info=True)
 
 
@@ -209,12 +209,12 @@ def connect_signature_invalidation():
 
     from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 
-    for signal, label in ((post_save, "save"), (post_delete, "delete")):
+    for signal, label in ((post_save, 'save'), (post_delete, 'delete')):
         for model in (CustomObjectType, CustomObjectTypeField):
             signal.connect(
                 _invalidate_signature_cache,
                 sender=model,
-                dispatch_uid=f"nco_graphql_sig_{label}_{model.__name__}",
+                dispatch_uid=f'nco_graphql_sig_{label}_{model.__name__}',
                 weak=False,
             )
 
@@ -223,10 +223,11 @@ def connect_signature_invalidation():
     if not is_branching_enabled():
         return
     from netbox_branching.models import Branch
+
     post_delete.connect(
         _evict_branch_schema,
         sender=Branch,
-        dispatch_uid="nco_graphql_evict_branch",
+        dispatch_uid='nco_graphql_evict_branch',
         weak=False,
     )
 
@@ -251,7 +252,7 @@ def _get_static_query_parts():
         # These bases never include our own contribution (our startup
         # ``graphql_schema`` export is empty and we never write back to
         # ``ngs.Query``); the ``_nco_query`` guard is belt-and-braces.
-        bases = tuple(b for b in ngs.Query.__bases__ if not getattr(b, "_nco_query", False))
+        bases = tuple(b for b in ngs.Query.__bases__ if not getattr(b, '_nco_query', False))
         _static_query_parts = (bases, ngs.schema.config)
     return _static_query_parts
 
@@ -265,7 +266,7 @@ def _schema_extensions():
     """
     import netbox.graphql.schema as ngs
 
-    get_schema_extensions = getattr(ngs, "get_schema_extensions", None)
+    get_schema_extensions = getattr(ngs, 'get_schema_extensions', None)
     if get_schema_extensions is not None:
         return get_schema_extensions()
 
@@ -307,7 +308,7 @@ def build_full_schema(visible_cot_ids=None):
     # (test_live_schema_drops_deleted_type, test_get_live_schema_rebuilds_on_new_type).
     # If a future Strawberry raised on cross-schema name reuse, get_live_schema would
     # log the rebuild failure and keep serving the prior schema (not silently break).
-    query_cls = strawberry.type(type("Query", bases, {}))
+    query_cls = strawberry.type(type('Query', bases, {}))
     return strawberry.Schema(
         query=query_cls,
         config=config,
@@ -351,15 +352,15 @@ def get_live_schema(user):
     branch_key = _active_branch_key()
     try:
         visible_key = visible_custom_object_type_ids(user)
-    except Exception:  # noqa: BLE001 - DB hiccup: expose no custom object types
+    except Exception:  # DB hiccup: expose no custom object types
         logger.warning("Could not determine the user's visible custom object types", exc_info=True)
         visible_key = frozenset()
     branch_schemas = _schema_cache.setdefault(branch_key, {})
 
     try:
         signature = cached_schema_signature(branch_key)
-    except Exception:  # noqa: BLE001 - DB hiccup
-        logger.warning("Could not compute GraphQL schema signature", exc_info=True)
+    except Exception:  # DB hiccup
+        logger.warning('Could not compute GraphQL schema signature', exc_info=True)
         cached = branch_schemas.get(visible_key)
         if cached is not None and cached[1] is not None:
             # We already have a (possibly slightly stale) schema for this branch.
@@ -399,8 +400,8 @@ def get_live_schema(user):
             return schema
         try:
             new_schema = build_full_schema(visible_key)
-        except Exception:  # noqa: BLE001 - never break the endpoint
-            logger.exception("Failed to rebuild live GraphQL schema")
+        except Exception:  # never break the endpoint
+            logger.exception('Failed to rebuild live GraphQL schema')
             return schema
         branch_schemas[visible_key] = (signature, new_schema)
         _schema_order.pop((branch_key, visible_key), None)
@@ -422,10 +423,8 @@ def reset_cache():
     from django.core.cache import cache
 
     for key in list(_signature_keys_seen):
-        try:
+        with contextlib.suppress(Exception):  # cache down: nothing to clear
             cache.delete(key)
-        except Exception:  # noqa: BLE001 - cache down: nothing to clear
-            pass
     _signature_keys_seen.clear()
 
     from .types import clear_type_cache, reset_build_state

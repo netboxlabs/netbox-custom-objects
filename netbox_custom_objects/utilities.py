@@ -10,15 +10,15 @@ from django.db.models.deletion import Collector
 from netbox_custom_objects.constants import APP_LABEL
 
 __all__ = (
-    "AppsProxy",
-    "build_map_url",
-    "extract_cot_id_from_model_name",
-    "generate_model",
-    "get_viewname",
-    "install_clear_cache_suppressor",
-    "install_collector_patch",
-    "is_branching_enabled",
-    "restrict_to_viewable",
+    'build_map_url',
+    'extract_cot_id_from_model_name',
+    'generate_model',
+    'get_viewname',
+    'install_clear_cache_suppressor',
+    'install_collector_patch',
+    'is_branching_enabled',
+    'predicate_field_ref',
+    'restrict_to_viewable',
 )
 
 
@@ -30,7 +30,7 @@ def is_branching_enabled():
     registers its request processor, which then runs on every request and job and fails
     when the plugin isn't enabled.
     """
-    return apps.is_installed("netbox_branching")
+    return apps.is_installed('netbox_branching')
 
 
 def build_map_url(latitude, longitude):
@@ -53,7 +53,7 @@ def build_map_url(latitude, longitude):
 
         maps_url = get_config().MAPS_URL
     except (ImportError, AttributeError):
-        maps_url = "https://maps.google.com/?q="
+        maps_url = 'https://maps.google.com/?q='
 
     if not maps_url:
         return None
@@ -63,9 +63,27 @@ def build_map_url(latitude, longitude):
 
         return build_coords_url(maps_url, latitude, longitude)
     except ImportError:
-        if "{lat}" in maps_url or "{lon}" in maps_url:
-            return maps_url.replace("{lat}", str(latitude)).replace("{lon}", str(longitude))
-        return f"{maps_url}{latitude},{longitude}"
+        if '{lat}' in maps_url or '{lon}' in maps_url:
+            return maps_url.replace('{lat}', str(latitude)).replace('{lon}', str(longitude))
+        return f'{maps_url}{latitude},{longitude}'
+
+
+def polymorphic_m2m_field_names(model):
+    """
+    Names of *model*'s polymorphic multi-object fields.
+
+    A custom manager backs these, not a registered Django relation, so they aren't in
+    ``_meta`` and NetBox's automatic prefetching (by tables and serializers) misses them.
+    ``prefetch_related()`` handles them, so callers add them themselves.
+    """
+    from extras.choices import CustomFieldTypeChoices
+
+    return [
+        info['name']
+        for info in getattr(model, '_field_objects', {}).values()
+        if info['field'].type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and info['field'].is_polymorphic
+    ]
+
 
 # ---------------------------------------------------------------------------
 # Thread-safe apps.clear_cache suppression
@@ -83,13 +101,13 @@ def build_map_url(latitude, longitude):
 # ---------------------------------------------------------------------------
 
 
-_suppress_tl = threading.local()   # thread-local suppression depth counter
-_real_clear_cache = None           # set by install_clear_cache_suppressor()
+_suppress_tl = threading.local()  # thread-local suppression depth counter
+_real_clear_cache = None  # set by install_clear_cache_suppressor()
 
 
 def _wrapped_clear_cache():
     """apps.clear_cache replacement — skips if this thread is suppressing."""
-    if getattr(_suppress_tl, "depth", 0) > 0:
+    if getattr(_suppress_tl, 'depth', 0) > 0:
         return
     _real_clear_cache()
 
@@ -139,30 +157,64 @@ def _related_objects(self, related_model, related_fields, objs):
         return [getattr(obj, attname) for obj in objs]
 
     predicate = Q.create(
-        [(f"{field.name}__in", keys(field)) for field in related_fields],
+        [(f'{field.name}__in', keys(field)) for field in related_fields],
         connector=Q.OR,
     )
     return related_model._base_manager.using(self.using).filter(predicate)
 
 
+def _check_protection_first(real_delete):
+    """
+    Wrap a collector's ``delete()`` in ``polymorphic_on_delete()``.  That refuses the deletion if
+    a polymorphic Object field protects one of the objects, at the same point Django refuses a
+    deletion that a real foreign key protects: before any signal is sent or the deletion's
+    transaction starts.  It also looks up, once, the polymorphic fields the deletion's
+    ``pre_delete`` handler needs.
+    """
+
+    def delete(self):
+        if getattr(self, '_polymorphic_on_delete_prepared', False):
+            return real_delete(self)
+        from netbox_custom_objects.models import polymorphic_on_delete
+
+        self._polymorphic_on_delete_prepared = True
+        with polymorphic_on_delete(self.data):
+            return real_delete(self)
+
+    delete.checks_polymorphic_protection = True
+    return delete
+
+
 def install_collector_patch():
-    """Install the custom-object-aware ``Collector.related_objects`` (idempotent).
+    """Install the custom-object-aware ``Collector.related_objects``, and the polymorphic
+    protection check in ``Collector.delete()`` (idempotent).
+
+    NetBox's own collector opens its transaction in its ``delete()`` before calling Django's, so
+    the check wraps that one too where it exists.
 
     Like ``install_clear_cache_suppressor()``, called once from AppConfig.ready().
     """
     global _real_related_objects
-    if Collector.related_objects is _related_objects:
-        return  # already installed
-    _real_related_objects = Collector.related_objects
-    Collector.related_objects = _related_objects
+    if Collector.related_objects is not _related_objects:
+        _real_related_objects = Collector.related_objects
+        Collector.related_objects = _related_objects
+
+    collectors = [Collector]
+    try:
+        from netbox.models.deletion import CustomCollector
+
+        collectors.append(CustomCollector)
+    except ImportError:
+        pass
+    for collector in collectors:
+        real_delete = collector.__dict__.get('delete')
+        if real_delete is not None and not getattr(real_delete, 'checks_polymorphic_protection', False):
+            collector.delete = _check_protection_first(real_delete)
 
 
 def _is_custom_object_model(model):
     """True if *model* is a generated custom object model (``Table<id>Model``)."""
-    return (
-        model._meta.app_label == APP_LABEL
-        and extract_cot_id_from_model_name(model._meta.model_name) is not None
-    )
+    return model._meta.app_label == APP_LABEL and extract_cot_id_from_model_name(model._meta.model_name) is not None
 
 
 @contextmanager
@@ -175,7 +227,7 @@ def _suppress_clear_cache():
     Private: callers outside this module should use generate_model() or
     install_clear_cache_suppressor() rather than reaching for this directly.
     """
-    _suppress_tl.depth = getattr(_suppress_tl, "depth", 0) + 1
+    _suppress_tl.depth = getattr(_suppress_tl, 'depth', 0) + 1
     try:
         yield
     finally:
@@ -184,55 +236,17 @@ def _suppress_clear_cache():
 
 # Internal model names for custom object types follow the pattern "table<id>model"
 # (e.g. "table3model" for CustomObjectType with pk=3).
-_COT_MODEL_RE = re.compile(r"^table(\d+)model$")
+_COT_MODEL_RE = re.compile(r'^table(\d+)model$')
 
 
-class AppsProxy:
-
-    def __init__(self, dynamic_models=None, app_label=None):
-        self.dynamic_models = dynamic_models or {}
-        self.dynamic_app_label = app_label or "database_table"
-
-    def get_models(self, *args, **kwargs):
-        return apps.get_models(*args, **kwargs) + list(self.dynamic_models.values())
-
-    def register_model(self, app_label, model):
-        with self._lock:
-            model_name = model._meta.model_name.lower()
-            if not hasattr(model, "_generated_table_model"):
-                if not hasattr(self, "dynamic_models"):
-                    self.dynamic_models = model._meta.auto_created.dynamic_models
-
-            self.dynamic_models[model_name] = model
-            self.do_all_pending_operations()
-            self._clear_dynamic_models_cache()
-
-            try:
-                del apps.all_models[self.dynamic_app_label]
-            except KeyError:
-                pass
-
-    def _clear_dynamic_models_cache(self):
-        for model in self.dynamic_models.values():
-            model._meta._expire_cache()
-
-    def do_all_pending_operations(self):
-        max_iterations = 3
-        for _ in range(max_iterations):
-            pending_operations_for_app_label = [
-                (app_label, model_name)
-                for app_label, model_name in list(apps._pending_operations.keys())
-                if app_label == self.dynamic_app_label
-            ]
-            for _, model_name in list(pending_operations_for_app_label):
-                model = self.dynamic_models[model_name]
-                apps.do_pending_operations(model)
-
-            if not pending_operations_for_app_label:
-                break
-
-    def __getattr__(self, attr):
-        return getattr(apps, attr)
+def predicate_field_ref(value):
+    """
+    Return the field a constraint predicate's value refers to (``{"field": <field>}``),
+    or None for a literal value.
+    """
+    if isinstance(value, dict) and value.keys() == {'field'}:
+        return value['field']
+    return None
 
 
 def extract_cot_id_from_model_name(model_name: str) -> str | None:
@@ -260,21 +274,21 @@ def get_viewname(model, action=None, rest_api=False):
     """
     is_plugin = True
     app_label = APP_LABEL
-    model_name = "customobject"
+    model_name = 'customobject'
 
     if rest_api:
-        viewname = f"{app_label}-api:{model_name}"
+        viewname = f'{app_label}-api:{model_name}'
         if is_plugin:
-            viewname = f"plugins-api:{viewname}"
+            viewname = f'plugins-api:{viewname}'
         if action:
-            viewname = f"{viewname}-{action}"
+            viewname = f'{viewname}-{action}'
 
     else:
-        viewname = f"{app_label}:{model_name}"
+        viewname = f'{app_label}:{model_name}'
         if is_plugin:
-            viewname = f"plugins:{viewname}"
+            viewname = f'plugins:{viewname}'
         if action:
-            viewname = f"{viewname}_{action}"
+            viewname = f'{viewname}_{action}'
 
     return viewname
 
@@ -286,9 +300,7 @@ def generate_model(*args, **kwargs):
     # Suppress RuntimeWarning about model already being registered
     # TODO: Remove this once we have a better way to handle model registration
     with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore", category=RuntimeWarning, message=".*was already registered.*"
-        )
+        warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*was already registered.*')
 
         # Suppress apps.clear_cache during model type() creation to avoid
         # invalidating the app registry cache on every dynamic model build.
@@ -313,13 +325,13 @@ def visible_custom_object_type_ids(user):
     from netbox_custom_objects.models import CustomObjectType
 
     user = user or AnonymousUser()
-    all_ids = set(CustomObjectType.objects.values_list("pk", flat=True))
-    if getattr(user, "is_superuser", False):
+    all_ids = set(CustomObjectType.objects.values_list('pk', flat=True))
+    if getattr(user, 'is_superuser', False):
         return frozenset(all_ids)
-    visible = set(CustomObjectType.objects.restrict(user, "view").values_list("pk", flat=True))
+    visible = set(CustomObjectType.objects.restrict(user, 'view').values_list('pk', flat=True))
     for pk in all_ids - visible:
         model_name = CustomObjectType.get_table_model_name(pk).lower()
-        if user.has_perm(f"{APP_LABEL}.view_{model_name}"):
+        if user.has_perm(f'{APP_LABEL}.view_{model_name}'):
             visible.add(pk)
     return frozenset(visible)
 
@@ -346,7 +358,7 @@ def restrict_to_viewable(user, objects):
     objects = [obj for obj in objects if obj is not None]
     if not objects:
         return []
-    if getattr(user, "is_superuser", False):
+    if getattr(user, 'is_superuser', False):
         return objects
 
     # sentinel meaning "model isn't permission-aware → all allowed".
@@ -355,17 +367,11 @@ def restrict_to_viewable(user, objects):
     for obj in objects:
         by_model.setdefault(type(obj), []).append(obj)
     for model, model_objs in by_model.items():
-        manager = getattr(model, "_default_manager", None)
-        if manager is None or not hasattr(manager, "restrict"):
+        manager = getattr(model, '_default_manager', None)
+        if manager is None or not hasattr(manager, 'restrict'):
             allowed_by_model[model] = None
             continue
         pks = [obj.pk for obj in model_objs]
-        allowed_by_model[model] = set(
-            manager.restrict(user, "view").filter(pk__in=pks).values_list("pk", flat=True)
-        )
+        allowed_by_model[model] = set(manager.restrict(user, 'view').filter(pk__in=pks).values_list('pk', flat=True))
 
-    return [
-        obj
-        for obj in objects
-        if (allowed_by_model[type(obj)] is None or obj.pk in allowed_by_model[type(obj)])
-    ]
+    return [obj for obj in objects if (allowed_by_model[type(obj)] is None or obj.pk in allowed_by_model[type(obj)])]

@@ -1,0 +1,12 @@
+# Mechanical reformatting and autofix commits from adopting the plugin scaffold.
+# Use with: git blame --ignore-revs-file .git-blame-ignore-revs
+# (or: git config blame.ignoreRevsFile .git-blame-ignore-revs)
+
+# Reformat Python with ruff format
+5f3dd7977ee1c014126fc4029a134ea4136bacd1
+# Reformat templates with djLint
+44022055e462415984666f9499d682f696ecac1a
+# Apply ruff's safe automatic lint fixes
+2d8034341d869b10c629f8285fd4b8c908a1c7db
+# Apply django-upgrade's rewrites
+00629c783c49bc192699925997ab5c01188ba98e

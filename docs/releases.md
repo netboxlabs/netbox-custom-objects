@@ -1,25 +1,6 @@
 # Releases
 
-## 0.7.2
-
-### Enhancements
-
-- [#758](https://github.com/netboxlabs/netbox-custom-objects/issues/758) - A display expression can now include the object's ID
-
-### Bug Fixes
-
-- [#769](https://github.com/netboxlabs/netbox-custom-objects/issues/769) - Align decimal fields and validation with NetBox (16 digits, 4 decimal places), and allow multi-select values up to 100 characters
-- [#770](https://github.com/netboxlabs/netbox-custom-objects/issues/770) - Coordinates columns were dropped when a branch was squash-merged, and missed when a coordinates field was renamed
-- [#771](https://github.com/netboxlabs/netbox-custom-objects/issues/771) - Fix conflicts between blank values in nullable unique text fields
-- [#776](https://github.com/netboxlabs/netbox-custom-objects/issues/776) - Prevent the multi-object form field from registering an incomplete model
-- [#865](https://github.com/netboxlabs/netbox-custom-objects/issues/865) - Exporting a Custom Object Type with a Coordinates field raised `KeyError`
-- [#900](https://github.com/netboxlabs/netbox-custom-objects/issues/900) - Custom Object Type definitions were visible to users without permission to view them
-- [#903](https://github.com/netboxlabs/netbox-custom-objects/issues/903) - A Custom Object Type REST API endpoint didn't apply object-level permissions
-- [#1004](https://github.com/netboxlabs/netbox-custom-objects/issues/1004) - Saving a table configuration for a custom object list failed with "Unknown table", and its column selectors were empty (a `TypeError` before NetBox 4.6.3)
-
----
-
-## 0.7.1
+## v0.7.1 (2026-10-21)
 
 ### Enhancements
 
@@ -71,7 +52,7 @@
 
 ---
 
-## 0.7.0
+## v0.7.0 (2026-09-15)
 
 ### New Features
 
@@ -95,7 +76,7 @@ Any NetBox object referenced by a Custom Object — via an Object or Multi-objec
 
 ---
 
-## 0.6.1
+## v0.6.1 (2026-08-26)
 
 ### Enhancements
 
@@ -127,7 +108,7 @@ Any NetBox object referenced by a Custom Object — via an Object or Multi-objec
 
 ---
 
-## 0.6.0
+## v0.6.0 (2026-07-02)
 
 ### New Features
 
@@ -159,7 +140,7 @@ Custom Object Types and their instances are now queryable and mutable via the Ne
 
 ---
 
-## 0.5.3
+## v0.5.3 (2026-07-02)
 
 ### Bug Fixes
 
@@ -173,7 +154,7 @@ Custom Object Types and their instances are now queryable and mutable via the Ne
 
 ---
 
-## 0.5.2
+## v0.5.2 (2026-06-08)
 
 ### New Features
 
@@ -207,7 +188,7 @@ Polymorphic Object and MultiObject fields now support a `related_name` that expo
 
 ---
 
-## 0.5.1
+## v0.5.1 (2026-05-19)
 
 ### Bug Fixes
 
@@ -227,7 +208,7 @@ Polymorphic Object and MultiObject fields now support a `related_name` that expo
 
 ---
 
-## 0.5.0
+## v0.5.0 (2026-05-08)
 
 ### New Features
 
@@ -264,7 +245,7 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 
 ---
 
-## 0.4.10
+## v0.4.10 (2026-04-13)
 
 ### Bug Fixes
 
@@ -272,7 +253,7 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 
 ---
 
-## 0.4.9
+## v0.4.9 (2026-04-08)
 
 ### Bug Fixes
 
@@ -280,7 +261,7 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 
 ---
 
-## 0.4.8
+## v0.4.8 (2026-04-07)
 
 **Note:** See also v0.4.7 for recent bug fixes and enhancements, as this release is a fast-follow.
 
@@ -290,7 +271,7 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 
 ---
 
-## 0.4.7
+## v0.4.7 (2026-04-07)
 
 ### Enhancements
 
@@ -313,7 +294,7 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 
 ---
 
-## 0.4.6
+## v0.4.6 (2026-01-28)
 
 ### Bug Fixes
 
@@ -322,7 +303,7 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 
 ---
 
-## 0.4.5
+## v0.4.5 (2026-01-15)
 
 ### Bug Fixes
 
@@ -333,7 +314,7 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 
 ---
 
-## 0.4.4
+## v0.4.4 (2025-12-18)
 
 ### Bug Fixes
 
@@ -345,7 +326,7 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 
 ---
 
-## 0.4.3
+## v0.4.3 (2025-12-12)
 
 ### Bug Fixes
 
@@ -355,7 +336,7 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 
 ---
 
-## 0.4.2
+## v0.4.2 (2025-12-09)
 
 ### Enhancements
 
@@ -372,7 +353,7 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 
 ---
 
-## 0.4.1
+## v0.4.1 (2025-11-10)
 
 ### Bug Fixes
 
@@ -382,7 +363,7 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 
 ---
 
-## 0.4.0
+## v0.4.0 (2025-10-15)
 
 ### New Features
 

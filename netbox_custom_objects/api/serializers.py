@@ -2,32 +2,42 @@ import logging
 import re
 import sys
 
-from core.models import ObjectType
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.urls import NoReverseMatch
 from django.utils.translation import gettext_lazy as _
 from drf_spectacular.extensions import OpenApiSerializerExtension
 from drf_spectacular.utils import extend_schema_field
-from extras.choices import CustomFieldTypeChoices
-from extras.models import ConfigContextModel
-from netbox.api.fields import ChoiceField as NetBoxChoiceField
-from netbox.api.serializers import NetBoxModelSerializer
-from netbox.api.serializers.nested import NestedTagSerializer
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework.reverse import reverse
 from rest_framework.utils import model_meta
 
+from core.models import ObjectType
+from dcim.fields import MACAddressField
+from extras.choices import CustomFieldTypeChoices
+from extras.models import ConfigContextModel
+from netbox.api.fields import ChoiceField as NetBoxChoiceField
+from netbox.api.serializers import NetBoxModelSerializer
+from netbox.api.serializers.nested import NestedTagSerializer
+from netbox_custom_objects import constants, field_types
+from netbox_custom_objects.choices import (
+    ConstraintLookupChoices,
+    ConstraintTypeChoices,
+    CustomObjectFieldTypeChoices,
+)
+from netbox_custom_objects.models import (
+    ConfigContextRenderer,
+    CustomObject,
+    CustomObjectType,
+    CustomObjectTypeConstraint,
+    CustomObjectTypeField,
+)
+from netbox_custom_objects.utilities import predicate_field_ref
 from users.api.serializers_.owners import OwnerSerializer
 
-from netbox_custom_objects import constants, field_types
-from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
-from netbox_custom_objects.models import (ConfigContextRenderer, CustomObject, CustomObjectType,
-                                          CustomObjectTypeField)
-
 # Public URL slug used in API paths (e.g. /api/plugins/custom-objects/)
-_PUBLIC_APP_LABEL = "custom-objects"
+_PUBLIC_APP_LABEL = 'custom-objects'
 # Pattern for internally generated model names like "table3model"
 _TABLE_MODEL_PATTERN = re.compile(r'^table\d+model$', re.IGNORECASE)
 
@@ -35,8 +45,8 @@ logger = logging.getLogger('netbox_custom_objects.api.serializers')
 
 
 __all__ = (
-    "CustomObjectTypeSerializer",
-    "CustomObjectSerializer",
+    'CustomObjectSerializer',
+    'CustomObjectTypeSerializer',
 )
 
 
@@ -44,9 +54,9 @@ class ContentTypeSerializer(NetBoxModelSerializer):
     class Meta:
         model = ContentType
         fields = (
-            "id",
-            "app_label",
-            "model",
+            'id',
+            'app_label',
+            'model',
         )
 
 
@@ -64,7 +74,7 @@ class SafeChoiceField(NetBoxChoiceField):
         if data == '':
             if self.allow_blank:
                 return data
-            raise ValidationError(_("This field may not be blank."))
+            raise ValidationError(_('This field may not be blank.'))
 
         if isinstance(data, (dict, list)):
             raise ValidationError(
@@ -77,7 +87,7 @@ class SafeChoiceField(NetBoxChoiceField):
         except TypeError:
             pass
 
-        raise ValidationError(_("{value} is not a valid choice.").format(value=data))
+        raise ValidationError(_('{value} is not a valid choice.').format(value=data))
 
 
 class PolymorphicObjectSerializerField(serializers.Field):
@@ -105,54 +115,49 @@ class PolymorphicObjectSerializerField(serializers.Field):
             return None
         ct = ContentType.objects.get_for_model(value)
         return {
-            "_content_type": f"{ct.app_label}.{ct.model}",
-            "id": value.pk,
-            "display": str(value),
+            '_content_type': f'{ct.app_label}.{ct.model}',
+            'id': value.pk,
+            'display': str(value),
         }
 
     def to_internal_value(self, data):
         if not isinstance(data, dict):
-            raise serializers.ValidationError(_("Expected a dict with object reference."))
+            raise serializers.ValidationError(_('Expected a dict with object reference.'))
 
         # Resolve ContentType
         try:
-            if "content_type_id" in data:
-                ct = ContentType.objects.get(pk=data["content_type_id"])
-            elif "app_label" in data and "model" in data:
-                ct = ContentType.objects.get(app_label=data["app_label"], model=data["model"])
+            if 'content_type_id' in data:
+                ct = ContentType.objects.get(pk=data['content_type_id'])
+            elif 'app_label' in data and 'model' in data:
+                ct = ContentType.objects.get(app_label=data['app_label'], model=data['model'])
             else:
-                raise serializers.ValidationError(
-                    _("Must provide content_type_id or (app_label + model).")
-                )
+                raise serializers.ValidationError(_('Must provide content_type_id or (app_label + model).'))
         except (ContentType.DoesNotExist, ValueError, TypeError):
-            raise serializers.ValidationError(_("Invalid content type.")) from None
+            raise serializers.ValidationError(_('Invalid content type.')) from None
 
-        if (
-            self.allowed_content_type_ids is not None
-            and ct.id not in self.allowed_content_type_ids
-        ):
+        if self.allowed_content_type_ids is not None and ct.id not in self.allowed_content_type_ids:
             raise serializers.ValidationError(
                 _("Object type '%(app_label)s.%(model)s' is not allowed for this field.")
-                % {"app_label": ct.app_label, "model": ct.model}
+                % {'app_label': ct.app_label, 'model': ct.model}
             )
 
         model_class = ct.model_class()
         if model_class is None:
-            raise serializers.ValidationError(_("Cannot resolve the specified object type."))
+            raise serializers.ValidationError(_('Cannot resolve the specified object type.'))
 
-        obj_id = data.get("object_id") if "object_id" in data else data.get("id")
+        obj_id = data.get('object_id') if 'object_id' in data else data.get('id')
         if obj_id is None:
-            raise serializers.ValidationError(_("Must provide object_id."))
+            raise serializers.ValidationError(_('Must provide object_id.'))
 
         try:
             return model_class.objects.get(pk=obj_id)
         except (model_class.DoesNotExist, ValueError, TypeError, OverflowError):
-            raise serializers.ValidationError(_("No matching object found.")) from None
+            raise serializers.ValidationError(_('No matching object found.')) from None
 
 
 class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
-        view_name="plugins-api:netbox_custom_objects-api:customobjecttypefield-detail"
+        view_name='plugins-api:netbox_custom_objects-api:customobjecttypefield-detail'
     )
     app_label = serializers.CharField(required=False, write_only=True)
     model = serializers.CharField(required=False, write_only=True)
@@ -165,51 +170,55 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
         child=serializers.DictField(),
         required=False,
         write_only=True,
-        help_text="List of {app_label, model} dicts for polymorphic field types",
+        help_text='List of {app_label, model} dicts for polymorphic field types',
     )
 
     class Meta:
         model = CustomObjectTypeField
         fields = (
-            "id",
-            "url",
-            "name",
-            "label",
-            "custom_object_type",
-            "description",
-            "type",
-            "primary",
-            "context",
-            "required",
-            "unique",
-            "default",
-            "choice_set",
-            "validation_regex",
-            "validation_minimum",
-            "validation_maximum",
-            "is_polymorphic",
-            "related_object_type",
-            "related_object_types",
-            "related_object_filter",
-            "related_name",
-            "on_delete_behavior",
-            "app_label",
-            "model",
-            "related_object_types_input",
-            "group_name",
-            "search_weight",
-            "filter_logic",
-            "ui_visible",
-            "ui_editable",
-            "weight",
-            "is_cloneable",
-            "comments",
-            "schema_id",
-            "deprecated",
-            "deprecated_since",
-            "scheduled_removal",
+            'id',
+            'url',
+            'name',
+            'label',
+            'custom_object_type',
+            'description',
+            'type',
+            'primary',
+            'context',
+            'required',
+            'unique',
+            'default',
+            'choice_set',
+            'validation_regex',
+            'validation_minimum',
+            'validation_maximum',
+            'array_element_type',
+            'array_tuple_size',
+            'array_min_length',
+            'array_max_length',
+            'is_polymorphic',
+            'related_object_type',
+            'related_object_types',
+            'related_object_filter',
+            'related_name',
+            'on_delete_behavior',
+            'app_label',
+            'model',
+            'related_object_types_input',
+            'group_name',
+            'search_weight',
+            'filter_logic',
+            'ui_visible',
+            'ui_editable',
+            'weight',
+            'is_cloneable',
+            'comments',
+            'schema_id',
+            'deprecated',
+            'deprecated_since',
+            'scheduled_removal',
         )
-        read_only_fields = ("schema_id",)
+        read_only_fields = ('schema_id',)
 
     def _resolve_object_type(self, app_label, model):
         """Resolve a single app_label+model pair to an ObjectType, handling aliases."""
@@ -220,22 +229,18 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                 cot = CustomObjectType.objects.get(slug=model)
                 model = CustomObjectType.get_table_model_name(cot.id).lower()
             except CustomObjectType.DoesNotExist:
-                raise ValidationError(_("Invalid custom object type slug."))
+                raise ValidationError(_('Invalid custom object type slug.'))
         try:
             return ObjectType.objects.get(app_label=app_label, model=model)
         except ObjectType.DoesNotExist:
-            raise ValidationError(
-                _("Must provide a valid app_label and model for the object field type.")
-            )
+            raise ValidationError(_('Must provide a valid app_label and model for the object field type.'))
 
     def validate(self, attrs):
         # Guard immutable fields on existing instances.
         if self.instance and self.instance.pk:
-            if "is_polymorphic" in attrs and bool(attrs["is_polymorphic"]) != bool(self.instance.is_polymorphic):
-                raise ValidationError(
-                    {"is_polymorphic": _("Cannot change the polymorphic flag after field creation.")}
-                )
-            if attrs.get("related_object_types_input") is not None:
+            if 'is_polymorphic' in attrs and bool(attrs['is_polymorphic']) != bool(self.instance.is_polymorphic):
+                raise ValidationError({'is_polymorphic': _('Cannot change the polymorphic flag after field creation.')})
+            if attrs.get('related_object_types_input') is not None:
                 # Resolve aliases (public app_label, COT slug as model name) before
                 # comparing so that a PUT/PATCH round-tripping the same logical types
                 # using alias forms is not rejected as a change.
@@ -243,36 +248,25 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                 # of immutability; re-raise immediately rather than deferring to the
                 # normal validation path (which would surface a different error message).
                 resolved_incoming = [
-                    self._resolve_object_type(
-                        entry.get("app_label", ""), entry.get("model", "")
-                    )
-                    for entry in attrs["related_object_types_input"]
+                    self._resolve_object_type(entry.get('app_label', ''), entry.get('model', ''))
+                    for entry in attrs['related_object_types_input']
                 ]
 
-                incoming = frozenset(
-                    (ot.app_label, ot.model) for ot in resolved_incoming
-                )
-                existing = frozenset(
-                    (ot.app_label, ot.model)
-                    for ot in self.instance.related_object_types.all()
-                )
+                incoming = frozenset((ot.app_label, ot.model) for ot in resolved_incoming)
+                existing = frozenset((ot.app_label, ot.model) for ot in self.instance.related_object_types.all())
                 if incoming != existing:
                     raise ValidationError(
-                        {"related_object_types_input": _(
-                            "Cannot change allowed object types after field creation."
-                        )}
+                        {'related_object_types_input': _('Cannot change allowed object types after field creation.')}
                     )
-            if attrs.get("app_label") or attrs.get("model"):
-                raise ValidationError(
-                    _("Cannot change the related object type after field creation.")
-                )
+            if attrs.get('app_label') or attrs.get('model'):
+                raise ValidationError(_('Cannot change the related object type after field creation.'))
 
-        app_label = attrs.pop("app_label", None)
-        model = attrs.pop("model", None)
-        related_object_types_input = attrs.pop("related_object_types_input", None)
-        is_polymorphic = attrs.get("is_polymorphic", False)
+        app_label = attrs.pop('app_label', None)
+        model = attrs.pop('model', None)
+        related_object_types_input = attrs.pop('related_object_types_input', None)
+        is_polymorphic = attrs.get('is_polymorphic', False)
 
-        field_type = attrs.get("type")
+        field_type = attrs.get('type')
 
         if field_type in [
             CustomFieldTypeChoices.TYPE_OBJECT,
@@ -283,39 +277,38 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                 if related_object_types_input:
                     resolved = []
                     for entry in related_object_types_input:
-                        al = entry.get("app_label", "")
-                        m = entry.get("model", "")
+                        al = entry.get('app_label', '')
+                        m = entry.get('model', '')
                         resolved.append(self._resolve_object_type(al, m))
-                    attrs["related_object_types"] = resolved
-                elif not attrs.get("related_object_types"):
+                    attrs['related_object_types'] = resolved
+                elif not attrs.get('related_object_types'):
                     raise ValidationError(
-                        _("Polymorphic object fields require related_object_types_input or related_object_types.")
+                        _('Polymorphic object fields require related_object_types_input or related_object_types.')
                     )
             else:
                 # Non-polymorphic: resolve single type from app_label+model or related_object_type
                 if app_label or model:
-                    attrs["related_object_type"] = self._resolve_object_type(
-                        app_label or "", model or ""
-                    )
-                elif not attrs.get("related_object_type"):
+                    attrs['related_object_type'] = self._resolve_object_type(app_label or '', model or '')
+                elif not attrs.get('related_object_type'):
                     raise ValidationError(
-                        _("Must provide app_label and model (or related_object_type) for object field type.")
+                        _('Must provide app_label and model (or related_object_type) for object field type.')
                     )
 
         if field_type in [
             CustomFieldTypeChoices.TYPE_SELECT,
             CustomFieldTypeChoices.TYPE_MULTISELECT,
         ]:
-            if not attrs.get("choice_set", None):
-                raise ValidationError(
-                    _("Must provide choice_set with valid PK for select field type.")
-                )
-        on_delete = attrs.get("on_delete_behavior")
+            if not attrs.get('choice_set', None):
+                raise ValidationError(_('Must provide choice_set with valid PK for select field type.'))
+        on_delete = attrs.get('on_delete_behavior')
         if on_delete and field_type and field_type != CustomFieldTypeChoices.TYPE_OBJECT:
-            raise ValidationError(
-                {"on_delete_behavior": "on_delete_behavior can only be set for Object-type fields."}
-            )
-        return super().validate(attrs)
+            raise ValidationError({'on_delete_behavior': 'on_delete_behavior can only be set for Object-type fields.'})
+        attrs = super().validate(attrs)
+        # NetBox's serializer saves the default as submitted, not as clean() normalized it.
+        field_type = attrs.get('type') or getattr(self.instance, 'type', None)
+        if field_type == CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS and attrs.get('default') is not None:
+            attrs['default'] = str(MACAddressField().to_python(attrs['default']))
+        return attrs
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -325,18 +318,15 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
 
     def get_related_object_type(self, obj):
         if obj.related_object_type:
-            return dict(
-                id=obj.related_object_type.id,
-                app_label=obj.related_object_type.app_label,
-                model=obj.related_object_type.model,
-            )
+            return {
+                'id': obj.related_object_type.id,
+                'app_label': obj.related_object_type.app_label,
+                'model': obj.related_object_type.model,
+            }
         return None
 
     def get_related_object_types(self, obj):
-        return [
-            dict(id=ot.id, app_label=ot.app_label, model=ot.model)
-            for ot in obj.related_object_types.all()
-        ]
+        return [{'id': ot.id, 'app_label': ot.app_label, 'model': ot.model} for ot in obj.related_object_types.all()]
 
     def create(self, validated_data):
         # Wrap save() + related_object_types.set() in an atomic block so that if
@@ -346,9 +336,228 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             return super().create(validated_data)
 
 
+def _brief_constraint_field(field, request):
+    return {
+        'id': field.pk,
+        'url': reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttypefield-detail',
+            kwargs={'pk': field.pk},
+            request=request,
+        ),
+        'name': field.name,
+        'schema_id': field.schema_id,
+    }
+
+
+_BRIEF_CONSTRAINT_FIELD_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'id': {'type': 'integer'},
+        'url': {'type': 'string', 'format': 'uri'},
+        'name': {'type': 'string'},
+        'schema_id': {'type': 'integer'},
+    },
+}
+
+
+@extend_schema_field(
+    {
+        'type': 'array',
+        'items': _BRIEF_CONSTRAINT_FIELD_SCHEMA,
+        'description': 'Field IDs on write; brief field objects on read.',
+    }
+)
+class ConstraintFieldsField(serializers.Field):
+    """
+    The fields a constraint covers: written as a list of field IDs, read as brief field objects.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(source='*', **kwargs)
+
+    def to_representation(self, constraint):
+        request = self.context.get('request')
+        return [_brief_constraint_field(field, request) for field in constraint.get_fields()]
+
+    def to_internal_value(self, data):
+        if not isinstance(data, list):
+            raise ValidationError(_('Expected a list of field IDs.'))
+        try:
+            pks = [int(pk) for pk in data]
+        except (TypeError, ValueError):
+            raise ValidationError(_('Expected a list of field IDs.'))
+        by_pk = CustomObjectTypeField.objects.in_bulk(pks)
+        missing = [pk for pk in pks if pk not in by_pk]
+        if missing:
+            raise ValidationError(_('Unknown field ID(s): {ids}').format(ids=', '.join(map(str, missing))))
+        return {'_constraint_fields': [by_pk[pk] for pk in pks]}
+
+
+_CONSTRAINT_PREDICATES_SCHEMA = {
+    'type': 'array',
+    'items': {
+        'type': 'object',
+        'properties': {
+            'field': _BRIEF_CONSTRAINT_FIELD_SCHEMA,
+            'lookup': {'type': 'string', 'enum': ConstraintLookupChoices.values()},
+            'value': {
+                'description': 'A value, or {"field": <field>} to compare with another field.',
+            },
+        },
+    },
+}
+
+
+class ConstraintPredicatesField(serializers.Field):
+    """
+    A constraint's condition or rule: predicates that name fields (including a value
+    naming another field) by ID on write and as brief field objects on read.
+    """
+
+    def __init__(self, attr, **kwargs):
+        self.attr = attr
+        super().__init__(source='*', **kwargs)
+
+    def to_representation(self, constraint):
+        request = self.context.get('request')
+        by_schema_id = {f.schema_id: f for f in constraint.custom_object_type.fields.all()}
+
+        def brief(schema_id):
+            field = by_schema_id.get(schema_id)
+            return _brief_constraint_field(field, request) if field else None
+
+        result = []
+        for predicate in getattr(constraint, self.attr) or ():
+            predicate = {**predicate, 'field': brief(predicate.get('field'))}
+            other = predicate_field_ref(predicate.get('value'))
+            if other is not None:
+                predicate['value'] = {'field': brief(other)}
+            result.append(predicate)
+        return result
+
+    def to_internal_value(self, data):
+        key = f'_{self.attr}'
+        if data is None:
+            return {key: []}
+        if not isinstance(data, list):
+            raise ValidationError(_('Expected a list of predicates.'))
+        if not all(isinstance(p, dict) and 'field' in p for p in data):
+            raise ValidationError(_('Each predicate needs a field ID.'))
+        refs = [p['field'] for p in data] + [
+            ref for p in data if (ref := predicate_field_ref(p.get('value'))) is not None
+        ]
+        try:
+            pks = [int(ref) for ref in refs]
+        except (TypeError, ValueError):
+            raise ValidationError(_('Each predicate needs a field ID.'))
+        by_pk = CustomObjectTypeField.objects.in_bulk(pks)
+        missing = [pk for pk in pks if pk not in by_pk]
+        if missing:
+            raise ValidationError(_('Unknown field ID(s): {ids}').format(ids=', '.join(map(str, missing))))
+        predicates = []
+        for p in data:
+            predicate = {**p, 'field': by_pk[int(p['field'])]}
+            other = predicate_field_ref(p.get('value'))
+            if other is not None:
+                predicate['value'] = {'field': by_pk[int(other)]}
+            predicates.append(predicate)
+        return {key: predicates}
+
+
+@extend_schema_field(
+    {
+        **_CONSTRAINT_PREDICATES_SCHEMA,
+        'description': 'Predicates that must all hold for the constraint to apply. Field IDs on write; '
+        'brief field objects on read.',
+    }
+)
+class ConstraintConditionField(ConstraintPredicatesField):
+    def __init__(self, **kwargs):
+        super().__init__('condition', **kwargs)
+
+
+@extend_schema_field(
+    {
+        **_CONSTRAINT_PREDICATES_SCHEMA,
+        'description': 'For a check constraint: predicates every object (matching the condition, if any) must '
+        'satisfy. Field IDs on write; brief field objects on read.',
+    }
+)
+class ConstraintRuleField(ConstraintPredicatesField):
+    def __init__(self, **kwargs):
+        super().__init__('rule', **kwargs)
+
+
+class CustomObjectTypeConstraintSerializer(NetBoxModelSerializer):
+    url = serializers.HyperlinkedIdentityField(
+        view_name='plugins-api:netbox_custom_objects-api:customobjecttypeconstraint-detail'
+    )
+    fields = ConstraintFieldsField(required=False)
+    condition = ConstraintConditionField(required=False)
+    rule = ConstraintRuleField(required=False)
+
+    class Meta:
+        model = CustomObjectTypeConstraint
+        fields = (
+            'id',
+            'url',
+            'display',
+            'custom_object_type',
+            'name',
+            'type',
+            'fields',
+            'case_insensitive',
+            'nulls_distinct',
+            'condition',
+            'rule',
+            'error_message',
+            'description',
+            'created',
+            'last_updated',
+        )
+        brief_fields = ('id', 'url', 'display', 'name', 'description')
+
+    def validate(self, data):
+        # The database constraint lives on the type's table; moving it would orphan the old one.
+        new_cot = data.get('custom_object_type')
+        if self.instance is not None and new_cot is not None and new_cot != self.instance.custom_object_type:
+            raise ValidationError({'custom_object_type': _("A constraint can't be moved to another type.")})
+        cot = data.get('custom_object_type') or getattr(self.instance, 'custom_object_type', None)
+        cot_pk = getattr(cot, 'pk', None)
+        members = data.pop('_constraint_fields', None)
+        constraint_type = data.get('type') or getattr(self.instance, 'type', ConstraintTypeChoices.UNIQUE)
+        if members is not None:
+            if any(f.custom_object_type_id != cot_pk for f in members):
+                raise ValidationError({'fields': _('Every field must belong to this custom object type.')})
+            if not members and constraint_type == ConstraintTypeChoices.UNIQUE:
+                raise ValidationError({'fields': _('A unique constraint needs at least one field.')})
+            data['field_schema_ids'] = [f.schema_id for f in members]
+        elif self.instance is None and constraint_type == ConstraintTypeChoices.UNIQUE:
+            raise ValidationError({'fields': _('This field is required.')})
+        for attr in ('condition', 'rule'):
+            predicates = data.pop(f'_{attr}', None)
+            if predicates is None:
+                continue
+            fields = [p['field'] for p in predicates] + [
+                ref for p in predicates if (ref := predicate_field_ref(p.get('value'))) is not None
+            ]
+            if any(f.custom_object_type_id != cot_pk for f in fields):
+                raise ValidationError({attr: _('Every field must belong to this custom object type.')})
+            data[attr] = [_predicate_to_schema_ids(p) for p in predicates]
+        return super().validate(data)
+
+
+def _predicate_to_schema_ids(predicate):
+    predicate = {**predicate, 'field': predicate['field'].schema_id}
+    other = predicate_field_ref(predicate.get('value'))
+    if other is not None:
+        predicate['value'] = {'field': other.schema_id}
+    return predicate
+
+
 class CustomObjectTypeSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
-        view_name="plugins-api:netbox_custom_objects-api:customobjecttype-detail"
+        view_name='plugins-api:netbox_custom_objects-api:customobjecttype-detail'
     )
     fields = CustomObjectTypeFieldSerializer(
         nested=True,
@@ -361,43 +570,41 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
     class Meta:
         model = CustomObjectType
         fields = [
-            "id",
-            "url",
-            "name",
-            "verbose_name",
-            "verbose_name_plural",
-            "slug",
-            "version",
-            "group_name",
-            "display_expression",
-            "description",
-            "config_context_enabled",
-            "tags",
-            "created",
-            "last_updated",
-            "fields",
-            "schema_document",
-            "table_model_name",
-            "object_type_name",
+            'id',
+            'url',
+            'name',
+            'verbose_name',
+            'verbose_name_plural',
+            'slug',
+            'version',
+            'group_name',
+            'display_expression',
+            'description',
+            'config_context_enabled',
+            'tags',
+            'created',
+            'last_updated',
+            'fields',
+            'schema_document',
+            'table_model_name',
+            'object_type_name',
         ]
-        read_only_fields = ("schema_document",)
-        brief_fields = ("id", "url", "name", "slug", "description")
+        read_only_fields = ('schema_document',)
+        brief_fields = ('id', 'url', 'name', 'slug', 'description')
 
     def validate_config_context_enabled(self, value):
         # Settable only at creation: the backing local_context_data column is
         # created once when the type's table is built, so the flag is immutable
         # afterwards (mirrors the disable-on-edit behaviour of the web form).
         if self.instance is not None and value != self.instance.config_context_enabled:
-            raise serializers.ValidationError(
-                _("Config context support cannot be changed after creation.")
-            )
+            raise serializers.ValidationError(_('Config context support cannot be changed after creation.'))
         return value
 
     def get_table_model_name(self, obj):
         return obj.get_table_model_name(obj.id)
 
     def get_object_type_name(self, obj):
-        return f"{constants.APP_LABEL}.{obj.get_table_model_name(obj.id).lower()}"
+        return f'{constants.APP_LABEL}.{obj.get_table_model_name(obj.id).lower()}'
 
 
 class CustomObjectSchemaSerializer(serializers.Serializer):
@@ -420,7 +627,7 @@ class CustomObjectSchemaSerializer(serializers.Serializer):
 
     class Meta:
         # Read by NetBox's bulk-update schema serializers (get_bulk_update_serializer_class).
-        fields = ("id", "url", "display", "owner", "tags", "created", "last_updated")
+        fields = ('id', 'url', 'display', 'owner', 'tags', 'created', 'last_updated')
 
 
 class CustomObjectSchemaSerializerExtension(OpenApiSerializerExtension):
@@ -432,11 +639,11 @@ class CustomObjectSchemaSerializerExtension(OpenApiSerializerExtension):
     def get_name(self, auto_schema, direction):
         # CustomObject, BulkCustomObject, ...: per class, so the bulk variants don't
         # collide with the base component.
-        return type(self.target).__name__.replace("Schema", "")
+        return type(self.target).__name__.replace('Schema', '')
 
     def map_serializer(self, auto_schema, direction):
         schema = auto_schema._map_basic_serializer(self.target, direction)
-        schema["additionalProperties"] = True
+        schema['additionalProperties'] = True
         return schema
 
 
@@ -451,33 +658,33 @@ class CustomObjectSerializer(NetBoxModelSerializer):
     class Meta:
         model = CustomObject
         fields = [
-            "id",
-            "url",
-            "name",
-            "display",
-            "custom_object_type",
-            "tags",
-            "created",
-            "last_updated",
-            "data",
-            "field_data",
+            'id',
+            'url',
+            'name',
+            'display',
+            'custom_object_type',
+            'tags',
+            'created',
+            'last_updated',
+            'data',
+            'field_data',
         ]
         brief_fields = (
-            "id",
-            "url",
-            "name",
-            "custom_object_type",
+            'id',
+            'url',
+            'name',
+            'custom_object_type',
         )
 
     def get_display(self, obj):
-        return f"{obj.custom_object_type}: {obj.name}"
+        return f'{obj.custom_object_type}: {obj.name}'
 
     def update_relation_fields(self, instance):
         # TODO: Implement this
         pass
 
     def create(self, validated_data):
-        model = validated_data["custom_object_type"].get_model()
+        model = validated_data['custom_object_type'].get_model()
         instance = model.objects.create(**validated_data)
 
         return instance
@@ -494,17 +701,17 @@ class CustomObjectSerializer(NetBoxModelSerializer):
         object was serialised, or the URL conf is misconfigured).
         """
         # Unsaved objects will not yet have a valid URL.
-        if hasattr(obj, "pk") and obj.pk in (None, ""):
+        if hasattr(obj, 'pk') and obj.pk in (None, ''):
             return None
 
-        view_name = "plugins-api:netbox_custom_objects-api:customobject-detail"
-        lookup_value = getattr(obj, "pk")
+        view_name = 'plugins-api:netbox_custom_objects-api:customobject-detail'
+        lookup_value = getattr(obj, 'pk')
         kwargs = {
-            "pk": lookup_value,
-            "custom_object_type": obj.custom_object_type.slug,
+            'pk': lookup_value,
+            'custom_object_type': obj.custom_object_type.slug,
         }
-        request = self.context["request"]
-        format = self.context.get("format")
+        request = self.context['request']
+        format = self.context.get('format')
         try:
             return reverse(view_name, kwargs=kwargs, request=request, format=format)
         except NoReverseMatch:
@@ -535,16 +742,13 @@ def get_serializer_class(model, skip_object_fields=False):
     model_field_names = {
         f.name
         for f in (
-            list(model._meta.local_fields)
-            + list(model._meta.local_many_to_many)
-            + list(model._meta.private_fields)
+            list(model._meta.local_fields) + list(model._meta.local_many_to_many) + list(model._meta.private_fields)
         )
     }
     # PolymorphicM2MDescriptor is attached via setattr(), not via _meta, so it does
     # not appear in any _meta.*fields list.  Add descriptor names explicitly.
     model_field_names.update(
-        name for name, attr in model.__dict__.items()
-        if isinstance(attr, field_types.PolymorphicM2MDescriptor)
+        name for name, attr in model.__dict__.items() if isinstance(attr, field_types.PolymorphicM2MDescriptor)
     )
 
     # If a COT field is named 'owner', it shadows the OwnerMixin FK on the dynamic model
@@ -554,25 +758,25 @@ def get_serializer_class(model, skip_object_fields=False):
     has_owner_field_conflict = any(f.name == 'owner' for f in model_fields)
 
     # Create field list including all necessary fields
-    base_fields = ["id", "url", "display", "created", "last_updated", "tags"]
+    base_fields = ['id', 'url', 'display', 'created', 'last_updated', 'tags']
     if not has_owner_field_conflict:
-        base_fields.insert(3, "owner")
+        base_fields.insert(3, 'owner')
 
     # Expose local_context_data and the rendered config_context when the type opted
     # in to config context support (the generated model mixes in ConfigContextModel
     # via CustomObjectConfigContextMixin).  A custom field named "config_context"
     # takes precedence over the rendered context, as with "owner" above.
     has_config_context = issubclass(model, ConfigContextModel)
-    expose_config_context = has_config_context and not any(f.name == "config_context" for f in model_fields)
+    expose_config_context = has_config_context and not any(f.name == 'config_context' for f in model_fields)
     if has_config_context:
-        base_fields.append("local_context_data")
+        base_fields.append('local_context_data')
     if expose_config_context:
-        base_fields.append("config_context")
+        base_fields.append('config_context')
 
     # Include _context field when the model has designated context fields
     has_context_fields = bool(getattr(model, '_context_field_ids', []))
     if has_context_fields:
-        base_fields.insert(base_fields.index("display") + 1, "_context")
+        base_fields.insert(base_fields.index('display') + 1, '_context')
 
     # Only include custom field names that will actually be added to the serializer
     custom_field_names = []
@@ -580,49 +784,50 @@ def get_serializer_class(model, skip_object_fields=False):
         # Coordinates fields expand into two real columns; expose them flat, mirroring
         # NetBox core's Site/Device latitude/longitude serializer fields.
         if field.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
-            custom_field_names += [f"{field.name}_latitude", f"{field.name}_longitude"]
+            custom_field_names += [f'{field.name}_latitude', f'{field.name}_longitude']
             continue
         # URL fields expand into the URL itself plus an optional title column;
         # expose both flat, mirroring the coordinates treatment above.
         if field.type == CustomObjectFieldTypeChoices.TYPE_URL:
-            custom_field_names += [field.name, f"{field.name}_title"]
+            custom_field_names += [field.name, f'{field.name}_title']
             continue
         if field.name not in model_field_names:
             continue  # excluded during model generation (e.g. broken FK)
         if skip_object_fields and field.type in [
-            CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT
+            CustomFieldTypeChoices.TYPE_OBJECT,
+            CustomFieldTypeChoices.TYPE_MULTIOBJECT,
         ]:
             continue
         custom_field_names.append(field.name)
 
     all_fields = base_fields + custom_field_names
 
-    brief_fields = ("id", "url", "display", "_context") if has_context_fields else ("id", "url", "display")
+    brief_fields = ('id', 'url', 'display', '_context') if has_context_fields else ('id', 'url', 'display')
 
     meta = type(
-        "Meta",
+        'Meta',
         (),
         {
-            "model": model,
-            "fields": all_fields,
-            "brief_fields": brief_fields,
+            'model': model,
+            'fields': all_fields,
+            'brief_fields': brief_fields,
         },
     )
 
     def get_url(self, obj):
         """Generate the API URL for this object, or None if the URL cannot be
         resolved (e.g. the COT slug changed since the object was serialized)."""
-        if hasattr(obj, "pk") and obj.pk in (None, ""):
+        if hasattr(obj, 'pk') and obj.pk in (None, ''):
             return None
 
-        view_name = "plugins-api:netbox_custom_objects-api:customobject-detail"
-        lookup_value = getattr(obj, "pk")
+        view_name = 'plugins-api:netbox_custom_objects-api:customobject-detail'
+        lookup_value = getattr(obj, 'pk')
         kwargs = {
-            "pk": lookup_value,
-            "custom_object_type": obj.custom_object_type.slug,
+            'pk': lookup_value,
+            'custom_object_type': obj.custom_object_type.slug,
         }
-        request = self.context["request"]
-        format = self.context.get("format")
+        request = self.context['request']
+        format = self.context.get('format')
         try:
             return reverse(view_name, kwargs=kwargs, request=request, format=format)
         except NoReverseMatch:
@@ -635,16 +840,14 @@ def get_serializer_class(model, skip_object_fields=False):
     # Collect polymorphic field names for special handling in create/update.
     # Derived from the already-evaluated model_fields queryset to avoid extra DB queries.
     _poly_obj_fields = {
-        f.name for f in model_fields
-        if f.type == CustomFieldTypeChoices.TYPE_OBJECT and f.is_polymorphic
+        f.name for f in model_fields if f.type == CustomFieldTypeChoices.TYPE_OBJECT and f.is_polymorphic
     }
     _poly_m2m_fields = {
-        f.name for f in model_fields
-        if f.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and f.is_polymorphic
+        f.name for f in model_fields if f.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and f.is_polymorphic
     }
     # (latitude_column, longitude_column) pairs for coordinates fields.
     _coordinate_fields = [
-        (f"{f.name}_latitude", f"{f.name}_longitude")
+        (f'{f.name}_latitude', f'{f.name}_longitude')
         for f in model_fields
         if f.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES
     ]
@@ -652,9 +855,9 @@ def get_serializer_class(model, skip_object_fields=False):
     @extend_schema_field(serializers.JSONField(allow_null=True))
     def get_config_context(self, obj):
         """Rendered config context, sharing source-context lookups across a response."""
-        if "_config_context_renderer" not in self.context:
-            self.context["_config_context_renderer"] = ConfigContextRenderer()
-        return self.context["_config_context_renderer"].render(obj)
+        if '_config_context_renderer' not in self.context:
+            self.context['_config_context_renderer'] = ConfigContextRenderer()
+        return self.context['_config_context_renderer'].render(obj)
 
     def get__context(self, obj):
         """Return context field values as a nested display object for APISelect secondary text."""
@@ -662,12 +865,12 @@ def get_serializer_class(model, skip_object_fields=False):
         for context_field_id in obj._context_field_ids:
             context_field = obj._field_objects.get(context_field_id)
             if context_field:
-                ctx_field_type = field_types.FIELD_TYPE_CLASS[context_field["field"].type]()
-                context_value = ctx_field_type.get_display_value(obj, context_field["name"])
+                ctx_field_type = field_types.FIELD_TYPE_CLASS[context_field['field'].type]()
+                context_value = ctx_field_type.get_display_value(obj, context_field['name'])
                 if context_value:
                     context_parts.append(str(context_value))
         if context_parts:
-            return {"display": ", ".join(context_parts)}
+            return {'display': ', '.join(context_parts)}
         return None
 
     # Stock DRF create() without raise_errors_on_nested_writes guard
@@ -801,16 +1004,16 @@ def get_serializer_class(model, skip_object_fields=False):
             if field_name in data:
                 obj = data.pop(field_name)
                 poly_obj_originals[field_name] = obj
-                ct_attname = f"{field_name}_content_type_id"
-                oid_attname = f"{field_name}_object_id"
+                ct_attname = f'{field_name}_content_type_id'
+                oid_attname = f'{field_name}_object_id'
                 data[ct_attname] = ContentType.objects.get_for_model(obj).pk if obj is not None else None
                 data[oid_attname] = obj.pk if obj is not None else None
 
         data = NetBoxModelSerializer.validate(self, data)
 
         for field_name, obj in poly_obj_originals.items():
-            data.pop(f"{field_name}_content_type_id", None)
-            data.pop(f"{field_name}_object_id", None)
+            data.pop(f'{field_name}_content_type_id', None)
+            data.pop(f'{field_name}_object_id', None)
             data[field_name] = obj
 
         data.update(saved)
@@ -825,45 +1028,49 @@ def get_serializer_class(model, skip_object_fields=False):
             # For a PATCH that touches only one column, the other is absent from
             # data; fall back to the instance's current DB value so clearing just
             # one half of an already-populated pair is still rejected.
-            latitude = data.get(lat_field) if lat_in_data else (
-                getattr(self.instance, lat_field, None) if self.instance else None
+            latitude = (
+                data.get(lat_field)
+                if lat_in_data
+                else (getattr(self.instance, lat_field, None) if self.instance else None)
             )
-            longitude = data.get(lon_field) if lon_in_data else (
-                getattr(self.instance, lon_field, None) if self.instance else None
+            longitude = (
+                data.get(lon_field)
+                if lon_in_data
+                else (getattr(self.instance, lon_field, None) if self.instance else None)
             )
             if (latitude is None) != (longitude is None):
                 # Pin the error to the empty field rather than non_field_errors,
                 # mirroring the UI form's add_error() behaviour.
                 missing_field = lat_field if latitude is None else lon_field
                 raise serializers.ValidationError(
-                    {missing_field: [_("Latitude and longitude must both be set or both be empty.")]}
+                    {missing_field: [_('Latitude and longitude must both be set or both be empty.')]}
                 )
 
         return data
 
     # Create basic attributes for the serializer
     attrs = {
-        "Meta": meta,
-        "__module__": "netbox_custom_objects.api.serializers",
-        "url": serializers.SerializerMethodField(),
-        "get_url": get_url,
-        "display": serializers.SerializerMethodField(),
-        "get_display": get_display,
-        "create": create,
-        "update": update,
-        "validate": validate,
+        'Meta': meta,
+        '__module__': 'netbox_custom_objects.api.serializers',
+        'url': serializers.SerializerMethodField(),
+        'get_url': get_url,
+        'display': serializers.SerializerMethodField(),
+        'get_display': get_display,
+        'create': create,
+        'update': update,
+        'validate': validate,
     }
 
     if not has_owner_field_conflict:
-        attrs["owner"] = OwnerSerializer(nested=True, required=False, allow_null=True)
+        attrs['owner'] = OwnerSerializer(nested=True, required=False, allow_null=True)
 
     if has_context_fields:
-        attrs["_context"] = serializers.SerializerMethodField()
-        attrs["get__context"] = get__context
+        attrs['_context'] = serializers.SerializerMethodField()
+        attrs['get__context'] = get__context
 
     if expose_config_context:
-        attrs["config_context"] = serializers.SerializerMethodField(read_only=True)
-        attrs["get_config_context"] = get_config_context
+        attrs['config_context'] = serializers.SerializerMethodField(read_only=True)
+        attrs['get_config_context'] = get_config_context
 
     for field in model_fields:
         # Coordinates fields have no column literally named field.name (only the
@@ -874,7 +1081,8 @@ def get_serializer_class(model, skip_object_fields=False):
         if not is_coordinates and field.name not in model_field_names:
             continue  # excluded during model generation (e.g. broken FK)
         if skip_object_fields and field.type in [
-            CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT
+            CustomFieldTypeChoices.TYPE_OBJECT,
+            CustomFieldTypeChoices.TYPE_MULTIOBJECT,
         ]:
             continue
         field_type = field_types.FIELD_TYPE_CLASS[field.type]()
@@ -883,8 +1091,9 @@ def get_serializer_class(model, skip_object_fields=False):
         except NotImplementedError:
             # Field type intentionally has no serializer representation; omit it.
             logger.debug(
-                "serializer: field %r (type %r) has no serializer implementation; skipping",
-                field.name, field.type,
+                'serializer: field %r (type %r) has no serializer implementation; skipping',
+                field.name,
+                field.type,
             )
             continue
         except Exception as exc:
@@ -893,18 +1102,15 @@ def get_serializer_class(model, skip_object_fields=False):
             # serializer remains functional and the error doesn't surface as a
             # 500 to the caller.  Log at WARNING so it's visible in production.
             logger.warning(
-                "serializer: failed to build serializer field for %r (type %r): %s; "
-                "falling back to JSONField",
-                field.name, field.type, exc,
+                'serializer: failed to build serializer field for %r (type %r): %s; falling back to JSONField',
+                field.name,
+                field.type,
+                exc,
             )
             if is_coordinates:
                 # field.name itself is not a backing column for this type (see above).
-                attrs[field_type.latitude_field_name(field)] = serializers.JSONField(
-                    required=False, allow_null=True
-                )
-                attrs[field_type.longitude_field_name(field)] = serializers.JSONField(
-                    required=False, allow_null=True
-                )
+                attrs[field_type.latitude_field_name(field)] = serializers.JSONField(required=False, allow_null=True)
+                attrs[field_type.longitude_field_name(field)] = serializers.JSONField(required=False, allow_null=True)
             else:
                 attrs[field.name] = serializers.JSONField(required=False, allow_null=True)
             continue
@@ -914,7 +1120,7 @@ def get_serializer_class(model, skip_object_fields=False):
         else:
             attrs[field.name] = serializer_field
 
-    serializer_name = f"{model._meta.object_name}Serializer"
+    serializer_name = f'{model._meta.object_name}Serializer'
     serializer = type(
         serializer_name,
         (NetBoxModelSerializer,),

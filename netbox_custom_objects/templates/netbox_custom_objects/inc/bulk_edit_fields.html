@@ -1,12 +1,13 @@
 {% load form_helpers %}
 {% load i18n %}
 {% load custom_object_utils %}
-
 {# Render all visible form fields with poly grouping headings. #}
 {# Used by both the bulk edit page and the HTMX partial reload. #}
 {% for field in form.visible_fields %}
   {% if field.name in form.meta_fields %}
     {# Handled separately in the meta section. #}
+  {% elif field.name == 'owner' or field.name == 'owner_group' %}
+    {# Rendered in the Ownership section below. #}
   {% elif field.name in form.custom_object_type_poly_obj_ct_names %}
     {# Polymorphic single-object pair: heading + type selector + object picker #}
     {% with pair=form.custom_object_type_poly_obj_pairs|dict_get:field.name %}
@@ -39,7 +40,11 @@
       <div class="row mb-3">
         <div class="col offset-3">
           <div class="form-check my-1">
-            <input type="checkbox" class="form-check-input" name="_nullify" value="{{ group_info.2 }}" id="nullify_{{ group_info.2 }}">
+            <input type="checkbox"
+                   class="form-check-input"
+                   name="_nullify"
+                   value="{{ group_info.2 }}"
+                   id="nullify_{{ group_info.2 }}">
             <label for="nullify_{{ group_info.2 }}" class="form-check-label">{% trans "Set Null" %}</label>
           </div>
         </div>
@@ -53,3 +58,14 @@
     {% render_field field %}
   {% endif %}
 {% endfor %}
+{% if form.owner %}
+  <div class="field-group mb-5">
+    <div class="row">
+      <h2 class="col-9 offset-3">{% trans "Ownership" %}</h2>
+    </div>
+    {% if form.owner_group %}
+      {% render_field form.owner_group %}
+    {% endif %}
+    {% render_field form.owner bulk_nullable=True %}
+  </div>
+{% endif %}
