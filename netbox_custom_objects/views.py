@@ -17,7 +17,7 @@ from django.views.generic import View
 from core.models import ObjectChange
 from core.signals import clear_events
 from core.tables import ObjectChangeTable
-from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices, CustomFieldUIVisibleChoices
+from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from extras.forms import JournalEntryForm
 from extras.models import ConfigContext, JournalEntry
 from extras.tables import JournalEntryTable
@@ -34,7 +34,7 @@ from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.dynamic_forms import build_filterset_form_class
 from netbox_custom_objects.filtersets import get_filterset_class
-from netbox_custom_objects.tables import CustomObjectTable, CustomObjectTypeConstraintTable, CustomObjectTypeFieldTable
+from netbox_custom_objects.tables import CustomObjectTypeConstraintTable, CustomObjectTypeFieldTable
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from utilities.exceptions import AbortRequest, PermissionsViolation
 from utilities.forms import DeleteForm, restrict_form_fields
@@ -271,62 +271,7 @@ class BackgroundJobURLKwargsMixin:
 
 class CustomObjectTableMixin(TableMixin):
     def get_table(self, data, request, bulk_actions=True):
-        model_fields = self.custom_object_type.fields.all()
-        visible_fields = [field for field in model_fields if field.ui_visible != CustomFieldUIVisibleChoices.HIDDEN]
-        fields = ['pk', 'id', *(field.name for field in visible_fields), 'tags', 'created', 'last_updated']
-        # Fields shown only when set are left out of the defaults but stay selectable.
-        default_columns = [
-            'pk',
-            'id',
-            *(field.name for field in visible_fields if field.ui_visible == CustomFieldUIVisibleChoices.ALWAYS),
-            'tags',
-        ]
-
-        meta = type(
-            'Meta',
-            (),
-            {
-                'model': data.model,
-                'fields': fields,
-                'default_columns': default_columns,
-                'attrs': {
-                    'class': 'table table-hover object-list',
-                },
-            },
-        )
-
-        attrs = {
-            'Meta': meta,
-            '__module__': 'database.tables',
-        }
-
-        for field in model_fields:
-            if field.ui_visible == CustomFieldUIVisibleChoices.HIDDEN:
-                continue
-            field_type = field_types.FIELD_TYPE_CLASS[field.type]()
-            try:
-                attrs[field.name] = field_type.get_table_column_field(field)
-            except NotImplementedError:
-                logger.debug('table mixin: {} field is not implemented; using a default column'.format(field.name))
-            # Primary field (if text-based) is linkified to the target Custom Object. Other fields may be
-            # rendered via field-specific "render_foo" methods as supported by django-tables2.
-            linkable_field_types = [
-                CustomFieldTypeChoices.TYPE_TEXT,
-                CustomFieldTypeChoices.TYPE_LONGTEXT,
-            ]
-            if field.primary and field.type in linkable_field_types:
-                attrs[f'render_{field.name}'] = field_type.render_table_column_linkified
-            else:
-                # Define a method "render_table_column" method on any FieldType to customize output
-                # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
-                with contextlib.suppress(AttributeError):
-                    attrs[f'render_{field.name}'] = field_type.render_table_column
-
-        self.table = type(
-            f'{data.model._meta.object_name}Table',
-            (CustomObjectTable,),
-            attrs,
-        )
+        self.table = tables.get_custom_object_table(self.custom_object_type, data.model)
         return super().get_table(data, request, bulk_actions=bulk_actions)
 
 
