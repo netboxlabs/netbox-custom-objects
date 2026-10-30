@@ -287,7 +287,7 @@ def get_custom_object_table(custom_object_type, model=None):
         try:
             attrs[field.name] = field_type.get_table_column_field(field)
         except NotImplementedError:
-            logger.debug('table mixin: {} field is not implemented; using a default column'.format(field.name))
+            logger.debug('{} field is not implemented; using a default column'.format(field.name))
         # Primary field (if text-based) is linkified to the target Custom Object. Other fields may be
         # rendered via field-specific "render_foo" methods as supported by django-tables2.
         linkable_field_types = [
