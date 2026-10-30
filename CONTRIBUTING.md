@@ -221,8 +221,7 @@ A PR is reviewed only if:
 - Include short examples or screenshots for UI-adjacent changes.
 - Keep docstrings current for public methods, models, and utilities.
 - Build the docs locally with `zensical build --strict` before submitting
-  documentation changes. CI also checks that they build with
-  `mkdocs build --strict`.
+  documentation changes.
 
 ---
 

@@ -74,11 +74,6 @@ jobs:
           done
       - name: Build the docs site
         run: zensical build -s
-      # Compatibility build, as in the plugin scaffold. Same pins as the docs extra in pyproject.toml.
-      - name: Build the docs site with MkDocs
-        run: |
-          pip install 'mkdocs==1.6.1' 'mkdocs-material==9.8.0'
-          mkdocs build --strict
 
   test:
     name: >-
