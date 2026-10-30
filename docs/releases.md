@@ -32,7 +32,7 @@ Expanded the documentation with model references and guides for setup, administr
 - [#670](https://github.com/netboxlabs/netbox-custom-objects/issues/670) - Portable schema documents now carry an object field's reverse relation name (`related_name`)
 - [#758](https://github.com/netboxlabs/netbox-custom-objects/issues/758) - A display expression can now include the object's ID
 - [#773](https://github.com/netboxlabs/netbox-custom-objects/issues/773) - Avoid database queries when retrieving cached Custom Object Type models
-- [#775](https://github.com/netboxlabs/netbox-custom-objects/issues/775) - Polymorphic multi-object columns are prefetched in list views
+- [#775](https://github.com/netboxlabs/netbox-custom-objects/issues/775) - Faster list views for types with polymorphic multi-object columns
 - [#856](https://github.com/netboxlabs/netbox-custom-objects/issues/856) - Custom object pages now match core NetBox 4.7, including other plugins' buttons on detail pages
 - [#857](https://github.com/netboxlabs/netbox-custom-objects/issues/857) - Make remaining button labels, tooltips and headings translatable
 - [#970](https://github.com/netboxlabs/netbox-custom-objects/issues/970) - Adopt the NetBox Labs plugin scaffold for packaging, linting and CI
@@ -44,7 +44,7 @@ Expanded the documentation with model references and guides for setup, administr
 - [#770](https://github.com/netboxlabs/netbox-custom-objects/issues/770) - Coordinates columns were dropped when a branch was squash-merged, and missed when a coordinates field was renamed
 - [#771](https://github.com/netboxlabs/netbox-custom-objects/issues/771) - Fix conflicts between blank values in nullable unique text fields
 - [#774](https://github.com/netboxlabs/netbox-custom-objects/issues/774) - The REST API accepted a display expression with invalid syntax, and database errors raised while rendering one were hidden
-- [#776](https://github.com/netboxlabs/netbox-custom-objects/issues/776) - The multi-object form field could register a partial model and repoint other types' foreign keys to it
+- [#776](https://github.com/netboxlabs/netbox-custom-objects/issues/776) - Prevent the multi-object form field from registering an incomplete model
 - [#854](https://github.com/netboxlabs/netbox-custom-objects/issues/854) - Custom object list buttons, menu buttons and detail tabs ignored the user's permissions
 - [#855](https://github.com/netboxlabs/netbox-custom-objects/issues/855) - The Fields and Constraints tabs didn't behave like core child-object tabs, and "Create & Add Another" failed for constraints
 - [#865](https://github.com/netboxlabs/netbox-custom-objects/issues/865) - Exporting a Custom Object Type with a Coordinates field raised `KeyError`
