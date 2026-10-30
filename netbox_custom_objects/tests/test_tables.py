@@ -96,7 +96,7 @@ class PolymorphicColumnPrefetchTestCase(CustomObjectsTestCase, TestCase):
 
 
 class TableConfigTestCase(CustomObjectsTestCase, TestCase):
-    """A saved table configuration works for a custom object list, as it does for NetBox's own lists."""
+    """Test saved table configurations for custom object lists."""
 
     def setUp(self):
         super().setUp()

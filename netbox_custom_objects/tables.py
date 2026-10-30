@@ -288,8 +288,7 @@ def get_custom_object_table(custom_object_type, model=None):
             attrs[field.name] = field_type.get_table_column_field(field)
         except NotImplementedError:
             logger.debug('{} field is not implemented; using a default column'.format(field.name))
-        # Primary field (if text-based) is linkified to the target Custom Object. Other fields may be
-        # rendered via field-specific "render_foo" methods as supported by django-tables2.
+        # Link text-based primary fields to their custom objects.
         linkable_field_types = [
             CustomFieldTypeChoices.TYPE_TEXT,
             CustomFieldTypeChoices.TYPE_LONGTEXT,
@@ -297,7 +296,7 @@ def get_custom_object_table(custom_object_type, model=None):
         if field.primary and field.type in linkable_field_types:
             attrs[f'render_{field.name}'] = field_type.render_table_column_linkified
         else:
-            # Define a method "render_table_column" method on any FieldType to customize output
+            # Use the field type's custom renderer, if available.
             # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
             with contextlib.suppress(AttributeError):
                 attrs[f'render_{field.name}'] = field_type.render_table_column
@@ -358,10 +357,9 @@ class CustomObjectTypeConstraintTable(NetBoxTable):
 
 def __getattr__(name):
     """
-    Resolve a Custom Object Type's list table by name, e.g. "Table3ModelTable".
+    Resolve dynamic list tables, e.g. "Table3ModelTable", for NetBox's saved table configurations.
 
-    NetBox finds a model's table by importing "<app_label>.tables.<name>", for example to build
-    and validate saved table configurations. The tables are built on demand, so look them up here.
+    NetBox imports table classes from "<app_label>.tables.<name>".
     """
     if match := _TABLE_NAME_RE.match(name):
         try:
