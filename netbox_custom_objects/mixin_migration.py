@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _expected_base_fields(cot, model=None):
     """
     Return {db_column_name: Django field instance} for every concrete column
@@ -73,12 +74,8 @@ def _expected_base_fields(cot, model=None):
     """
     if model is None:
         model = cot.get_model()
-    user_field_names = set(cot.fields.values_list("name", flat=True))
-    return {
-        f.column: f
-        for f in model._meta.concrete_fields
-        if f.name not in user_field_names
-    }
+    user_field_names = set(cot.fields.values_list('name', flat=True))
+    return {f.column: f for f in model._meta.concrete_fields if f.name not in user_field_names}
 
 
 def _actual_column_names(table_name, using=DEFAULT_DB_ALIAS):
@@ -90,10 +87,7 @@ def _actual_column_names(table_name, using=DEFAULT_DB_ALIAS):
     """
     conn = connections[using]
     with conn.cursor() as cursor:
-        return {
-            col.name
-            for col in conn.introspection.get_table_description(cursor, table_name)
-        }
+        return {col.name for col in conn.introspection.get_table_description(cursor, table_name)}
 
 
 def _branch_schema_exists(schema_name, using=DEFAULT_DB_ALIAS):
@@ -108,9 +102,7 @@ def _branch_schema_exists(schema_name, using=DEFAULT_DB_ALIAS):
     schema is actually live.
     """
     with connections[using].cursor() as cursor:
-        cursor.execute(
-            "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s", [schema_name]
-        )
+        cursor.execute('SELECT 1 FROM information_schema.schemata WHERE schema_name = %s', [schema_name])
         return cursor.fetchone() is not None
 
 
@@ -131,6 +123,7 @@ def _can_auto_add(field):
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def heal_unmasked_fields(cot, model, schema_conn):
     """
     Add missing columns for CustomObject mixin fields unmasked by renaming or
@@ -143,8 +136,7 @@ def heal_unmasked_fields(cot, model, schema_conn):
     expected = _expected_base_fields(cot, model)
     with schema_conn.cursor() as cursor:
         actual_cols = {
-            col.name
-            for col in schema_conn.introspection.get_table_description(cursor, model._meta.db_table)
+            col.name for col in schema_conn.introspection.get_table_description(cursor, model._meta.db_table)
         }
 
     missing = []
@@ -153,10 +145,12 @@ def heal_unmasked_fields(cot, model, schema_conn):
             continue
         if not _can_auto_add(field):
             logger.warning(
-                "heal_unmasked_fields: unmasked base column %r (field %r) on %s is not "
-                "nullable and has no default — cannot auto-add. Run "
+                'heal_unmasked_fields: unmasked base column %r (field %r) on %s is not '
+                'nullable and has no default — cannot auto-add. Run '
                 "'manage.py upgrade_custom_objects'.",
-                col_name, field.name, model._meta.db_table,
+                col_name,
+                field.name,
+                model._meta.db_table,
             )
             continue
         missing.append(field)
@@ -201,25 +195,28 @@ def heal_cot(cot, verbosity=1, dry_run=False, using=DEFAULT_DB_ALIAS):
     # so it runs even if the table itself can't be introspected below.
     # Imported locally: models.py imports heal_unmasked_fields from this module
     # at its own top level, so a top-level import here would be circular.
-    from netbox_custom_objects.models import detect_backing_column_collisions  # noqa: PLC0415
+    from netbox_custom_objects.models import detect_backing_column_collisions
+
     for collision in detect_backing_column_collisions(cot):
         entry = {
-            "type": "backing_column_collision",
-            "field": collision["field"],
-            "safe_to_rename": collision["safe_to_rename"],
-            "message": collision["message"],
+            'type': 'backing_column_collision',
+            'field': collision['field'],
+            'safe_to_rename': collision['safe_to_rename'],
+            'message': collision['message'],
         }
         warned.append(entry)
-        logger.warning(entry["message"])
+        logger.warning(entry['message'])
 
     try:
         actual_names = _actual_column_names(table_name, using=using)
     except Exception as exc:
         logger.warning(
-            "upgrade_custom_objects: cannot introspect table %r (COT %s): %s",
-            table_name, cot.pk, exc,
+            'upgrade_custom_objects: cannot introspect table %r (COT %s): %s',
+            table_name,
+            cot.pk,
+            exc,
         )
-        return {"added": added, "warned": warned}
+        return {'added': added, 'warned': warned}
 
     # Resolve model once; pass it through to avoid a duplicate get_model() call.
     model = cot.get_model()
@@ -228,10 +225,7 @@ def heal_cot(cot, verbosity=1, dry_run=False, using=DEFAULT_DB_ALIAS):
     # Build a lookup of what was stored in the last snapshot for type comparison.
     # schema_document["base_columns"] stores column names as f.column (DB column
     # name), consistent with expected's f.column keys.
-    stored_col_info = {
-        c["name"]: c
-        for c in (cot.schema_document or {}).get("base_columns", [])
-    }
+    stored_col_info = {c['name']: c for c in (cot.schema_document or {}).get('base_columns', [])}
 
     # ── New columns in expected but missing from actual ──────────────────────
     for col_name, field in expected.items():
@@ -240,17 +234,17 @@ def heal_cot(cot, verbosity=1, dry_run=False, using=DEFAULT_DB_ALIAS):
 
         if not _can_auto_add(field):
             entry = {
-                "type": "new_non_nullable",
-                "field": col_name,
-                "message": (
-                    f"Table {table_name!r}: new base column {col_name!r} "
-                    f"({field.__class__.__name__}) is NOT NULL with no default — "
-                    f"cannot be added automatically. Add a default or make it "
+                'type': 'new_non_nullable',
+                'field': col_name,
+                'message': (
+                    f'Table {table_name!r}: new base column {col_name!r} '
+                    f'({field.__class__.__name__}) is NOT NULL with no default — '
+                    f'cannot be added automatically. Add a default or make it '
                     f"nullable upstream, then re-run 'manage.py upgrade_custom_objects'."
                 ),
             }
             warned.append(entry)
-            logger.warning(entry["message"])
+            logger.warning(entry['message'])
             continue
 
         if dry_run:
@@ -266,55 +260,54 @@ def heal_cot(cot, verbosity=1, dry_run=False, using=DEFAULT_DB_ALIAS):
             added.append(col_name)
             if verbosity >= 1:
                 logger.info(
-                    "upgrade_custom_objects: added column %r to table %r",
-                    col_name, table_name,
+                    'upgrade_custom_objects: added column %r to table %r',
+                    col_name,
+                    table_name,
                 )
         except Exception as exc:
             entry = {
-                "type": "add_failed",
-                "field": col_name,
-                "message": (
-                    f"Failed to ADD COLUMN {col_name!r} to {table_name!r}: {exc}"
-                ),
+                'type': 'add_failed',
+                'field': col_name,
+                'message': (f'Failed to ADD COLUMN {col_name!r} to {table_name!r}: {exc}'),
             }
             warned.append(entry)
-            logger.error(entry["message"])
+            logger.error(entry['message'])
 
     # ── Type changes on columns present in both expected and actual ──────────
     for col_name, field in expected.items():
         if col_name not in actual_names:
             continue  # already handled above as a new column
         stored = stored_col_info.get(col_name)
-        if not stored or not stored.get("field_class"):
+        if not stored or not stored.get('field_class'):
             continue  # no prior snapshot to compare against
-        if stored["field_class"] != field.__class__.__name__:
+        if stored['field_class'] != field.__class__.__name__:
             entry = {
-                "type": "type_changed",
-                "field": col_name,
-                "message": (
-                    f"Table {table_name!r}: column {col_name!r} type may have changed "
-                    f"(was {stored['field_class']!r}, now {field.__class__.__name__!r}). "
-                    f"Manual inspection and migration required."
+                'type': 'type_changed',
+                'field': col_name,
+                'message': (
+                    f'Table {table_name!r}: column {col_name!r} type may have changed '
+                    f'(was {stored["field_class"]!r}, now {field.__class__.__name__!r}). '
+                    f'Manual inspection and migration required.'
                 ),
             }
             warned.append(entry)
-            logger.warning(entry["message"])
+            logger.warning(entry['message'])
 
     # ── Columns removed from base class but still in DB ─────────────────────
     stored_base_names = set(stored_col_info)
     for col_name in sorted(stored_base_names - set(expected)):
         if col_name in actual_names:
             entry = {
-                "type": "removed_from_model",
-                "field": col_name,
-                "message": (
-                    f"Table {table_name!r}: column {col_name!r} still exists in the "
-                    f"database but is no longer in the CustomObject base class. "
-                    f"Manual cleanup may be required."
+                'type': 'removed_from_model',
+                'field': col_name,
+                'message': (
+                    f'Table {table_name!r}: column {col_name!r} still exists in the '
+                    f'database but is no longer in the CustomObject base class. '
+                    f'Manual cleanup may be required.'
                 ),
             }
             warned.append(entry)
-            logger.warning(entry["message"])
+            logger.warning(entry['message'])
 
     # ── Refresh snapshot after successful additions ──────────────────────────
     if added and not dry_run:
@@ -323,19 +316,19 @@ def heal_cot(cot, verbosity=1, dry_run=False, using=DEFAULT_DB_ALIAS):
         # and does not include columns added directly to the DB by this heal pass.
         # Instead, merge the newly-added field info into the existing snapshot.
         doc = cot.schema_document or {}
-        current_cols = {c["name"]: c for c in doc.get("base_columns", [])}
+        current_cols = {c['name']: c for c in doc.get('base_columns', [])}
         for col_name in added:
             field = expected[col_name]
             current_cols[col_name] = {
-                "name": col_name,
-                "field_class": field.__class__.__name__,
-                "null": field.null,
+                'name': col_name,
+                'field_class': field.__class__.__name__,
+                'null': field.null,
             }
-        doc["base_columns"] = list(current_cols.values())
+        doc['base_columns'] = list(current_cols.values())
         cot.__class__.objects.using(using).filter(pk=cot.pk).update(schema_document=doc)
         cot.schema_document = doc
 
-    return {"added": added, "warned": warned}
+    return {'added': added, 'warned': warned}
 
 
 def heal_all_cots(verbosity=1, dry_run=False, using=DEFAULT_DB_ALIAS):
@@ -354,29 +347,32 @@ def heal_all_cots(verbosity=1, dry_run=False, using=DEFAULT_DB_ALIAS):
       "healed"   : number of COTs that had columns added
       "warnings" : total number of non-auto-fixable issues
     """
-    from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+    from netbox_custom_objects.models import CustomObjectType
 
     total = healed = warnings = 0
 
     for cot in CustomObjectType.objects.using(using).all():
         total += 1
         result = heal_cot(cot, verbosity=verbosity, dry_run=dry_run, using=using)
-        if result["added"]:
+        if result['added']:
             healed += 1
-        warnings += len(result["warned"])
+        warnings += len(result['warned'])
 
     if verbosity >= 2:
         logger.info(
-            "upgrade_custom_objects: %d COT(s) checked, %d healed, %d warning(s)",
-            total, healed, warnings,
+            'upgrade_custom_objects: %d COT(s) checked, %d healed, %d warning(s)',
+            total,
+            healed,
+            warnings,
         )
     elif verbosity >= 1 and (healed > 0 or warnings > 0):
         logger.info(
-            "upgrade_custom_objects: %d COT(s) healed, %d warning(s)",
-            healed, warnings,
+            'upgrade_custom_objects: %d COT(s) healed, %d warning(s)',
+            healed,
+            warnings,
         )
 
-    return {"total": total, "healed": healed, "warnings": warnings}
+    return {'total': total, 'healed': healed, 'warnings': warnings}
 
 
 def heal_branch(branch, verbosity=1, dry_run=False):
@@ -400,7 +396,7 @@ def heal_branch(branch, verbosity=1, dry_run=False):
     main); using=branch.connection_name makes the actual introspection/DDL
     target the branch's own schema, not main's. Both are required together.
     """
-    from netbox_branching.utilities import activate_branch  # noqa: PLC0415
+    from netbox_branching.utilities import activate_branch
 
     with activate_branch(branch):
         return heal_all_cots(verbosity=verbosity, dry_run=dry_run, using=branch.connection_name)
@@ -462,10 +458,10 @@ def heal_all_branches(verbosity=1, dry_run=False):
       "warnings" : total number of non-auto-fixable issues across all branches
     """
     if not is_branching_enabled():
-        return {"total": 0, "healed": 0, "warnings": 0}
+        return {'total': 0, 'healed': 0, 'warnings': 0}
 
-    from netbox_branching.choices import BranchStatusChoices  # noqa: PLC0415
-    from netbox_branching.models import Branch  # noqa: PLC0415
+    from netbox_branching.choices import BranchStatusChoices
+    from netbox_branching.models import Branch
 
     no_schema_statuses = (
         BranchStatusChoices.NEW,
@@ -479,10 +475,13 @@ def heal_all_branches(verbosity=1, dry_run=False):
 
         if not _branch_schema_exists(branch.schema_name):
             logger.warning(
-                "upgrade_custom_objects: skipping branch %r (id=%s, status=%s) -- schema %r "
-                "does not exist (likely a failed or interrupted provision); it will be healed "
-                "once it has a live schema.",
-                branch.name, branch.pk, branch.status, branch.schema_name,
+                'upgrade_custom_objects: skipping branch %r (id=%s, status=%s) -- schema %r '
+                'does not exist (likely a failed or interrupted provision); it will be healed '
+                'once it has a live schema.',
+                branch.name,
+                branch.pk,
+                branch.status,
+                branch.schema_name,
             )
             warnings += 1
             continue
@@ -498,36 +497,41 @@ def heal_all_branches(verbosity=1, dry_run=False):
             if branch.pending_migrations:
                 if verbosity >= 2:
                     logger.info(
-                        "upgrade_custom_objects: skipping branch %r (id=%s) -- has pending "
-                        "migrations; will be healed by its own post_migrate hook once migrated.",
-                        branch.name, branch.pk,
+                        'upgrade_custom_objects: skipping branch %r (id=%s) -- has pending '
+                        'migrations; will be healed by its own post_migrate hook once migrated.',
+                        branch.name,
+                        branch.pk,
                     )
                 continue
 
             result = heal_branch(branch, verbosity=verbosity, dry_run=dry_run)
         except Exception:
             logger.exception(
-                "upgrade_custom_objects: unexpected error healing branch %r (id=%s)",
-                branch.name, branch.pk,
+                'upgrade_custom_objects: unexpected error healing branch %r (id=%s)',
+                branch.name,
+                branch.pk,
             )
             warnings += 1
             continue
         finally:
             connections[branch.connection_name].close()
 
-        if result["healed"]:
+        if result['healed']:
             healed += 1
-        warnings += result["warnings"]
+        warnings += result['warnings']
 
     if verbosity >= 2:
         logger.info(
-            "upgrade_custom_objects: %d branch(es) checked, %d healed, %d warning(s)",
-            total, healed, warnings,
+            'upgrade_custom_objects: %d branch(es) checked, %d healed, %d warning(s)',
+            total,
+            healed,
+            warnings,
         )
     elif verbosity >= 1 and (healed > 0 or warnings > 0):
         logger.info(
-            "upgrade_custom_objects: %d branch(es) healed, %d warning(s)",
-            healed, warnings,
+            'upgrade_custom_objects: %d branch(es) healed, %d warning(s)',
+            healed,
+            warnings,
         )
 
-    return {"total": total, "healed": healed, "warnings": warnings}
+    return {'total': total, 'healed': healed, 'warnings': warnings}

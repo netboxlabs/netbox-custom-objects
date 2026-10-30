@@ -15,31 +15,32 @@ must do one of two things:
 
 This test does not require database access.
 """
+
 from django.test import SimpleTestCase
 
 from netbox_custom_objects.models import CustomObjectTypeField
 from netbox_custom_objects.schema.format import FIELD_BASE_ATTRS, FIELD_TYPE_ATTRS
 
-
 # Fields that are intentionally NOT part of the portable schema format.
 # Each comment explains why.
-_SCHEMA_EXCLUDED_ATTRS = frozenset({
-    # ── Infrastructure / identity ────────────────────────────────────────────
-    "id",                  # DB primary key — meaningless across installations
-    "custom_object_type",  # parent FK — establishes ownership, not a field attribute
-    "schema_id",           # assigned by the executor; not authored in schema documents
-    # ── Required schema keys handled directly (not via the attrs loops) ──────
-    "name",                # always present as a required top-level key in schema defs
-    "type",                # always present as a required top-level key in schema defs
-    # ── Audit timestamps (from ChangeLoggedModel) ───────────────────────────
-    "created",             # system-managed; meaningless to import
-    "last_updated",        # system-managed; meaningless to import
-    # ── Intentionally omitted (editorial) ───────────────────────────────────
-    "comments",            # editorial annotation; see cot_schema_v1.json $comment
-    # ── Not yet in the schema format (pending design decision) ──────────────
-    "context",             # display preference flag — not structural; omitted for now
-    "related_name",        # reverse relation accessor name — omitted for now
-})
+_SCHEMA_EXCLUDED_ATTRS = frozenset(
+    {
+        # ── Infrastructure / identity ────────────────────────────────────────────
+        'id',  # DB primary key — meaningless across installations
+        'custom_object_type',  # parent FK — establishes ownership, not a field attribute
+        'schema_id',  # assigned by the executor; not authored in schema documents
+        # ── Required schema keys handled directly (not via the attrs loops) ──────
+        'name',  # always present as a required top-level key in schema defs
+        'type',  # always present as a required top-level key in schema defs
+        # ── Audit timestamps (from ChangeLoggedModel) ───────────────────────────
+        'created',  # system-managed; meaningless to import
+        'last_updated',  # system-managed; meaningless to import
+        # ── Intentionally omitted (editorial) ───────────────────────────────────
+        'comments',  # editorial annotation; see cot_schema_v1.json $comment
+        # ── Not yet in the schema format (pending design decision) ──────────────
+        'context',  # display preference flag — not structural; omitted for now
+    }
+)
 
 
 class SchemaFieldCoverageTestCase(SimpleTestCase):
@@ -61,11 +62,11 @@ class SchemaFieldCoverageTestCase(SimpleTestCase):
         self.assertEqual(
             unaccounted,
             set(),
-            "\n\nThe following CustomObjectTypeField field(s) are neither wired into "
-            "the portable schema pipeline (FIELD_BASE_ATTRS / FIELD_TYPE_ATTRS in "
-            "schema/format.py) nor listed in _SCHEMA_EXCLUDED_ATTRS in this test:\n"
-            f"  {sorted(unaccounted)}\n\n"
-            "Either add the field(s) to the schema pipeline (exporter, comparator, "
-            "executor, and cot_schema_v1.json) or add them to _SCHEMA_EXCLUDED_ATTRS "
-            "with a comment explaining why they are intentionally excluded.",
+            '\n\nThe following CustomObjectTypeField field(s) are neither wired into '
+            'the portable schema pipeline (FIELD_BASE_ATTRS / FIELD_TYPE_ATTRS in '
+            'schema/format.py) nor listed in _SCHEMA_EXCLUDED_ATTRS in this test:\n'
+            f'  {sorted(unaccounted)}\n\n'
+            'Either add the field(s) to the schema pipeline (exporter, comparator, '
+            'executor, and cot_schema_v1.json) or add them to _SCHEMA_EXCLUDED_ATTRS '
+            'with a comment explaining why they are intentionally excluded.',
         )

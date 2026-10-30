@@ -11,6 +11,7 @@ from django.db.models import Q, prefetch_related_objects
 from django.shortcuts import get_object_or_404, render
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import View
+
 from extras.choices import CustomFieldTypeChoices
 from netbox.context import current_request
 from netbox.plugins import get_plugin_config
@@ -37,6 +38,7 @@ except ImportError:
         except TemplateDoesNotExist:
             return 'generic/object.html'
 
+
 logger = logging.getLogger('netbox_custom_objects.related_tabs')
 
 _CUSTOM_OBJECTS_APP = 'netbox_custom_objects'
@@ -44,7 +46,7 @@ _CUSTOM_OBJECTS_APP = 'netbox_custom_objects'
 _CO_BASE_TEMPLATE = 'netbox_custom_objects/customobject.html'
 
 # Single source for the tab label/weight (factory, CO->CO view, registry, template tag).
-COMBINED_LABEL = 'Custom Objects'
+COMBINED_LABEL = _('Custom Objects')
 COMBINED_WEIGHT = 2000
 
 
@@ -396,8 +398,7 @@ def _batch_multiobject_values(pairs, user=None):
             all_targets = [t for targets in per_obj_targets.values() for t in targets]
             viewable_pks = {t.pk for t in restrict_to_viewable(user, all_targets)}
             per_obj_targets = {
-                oid: [t for t in targets if t.pk in viewable_pks]
-                for oid, targets in per_obj_targets.items()
+                oid: [t for t in targets if t.pk in viewable_pks] for oid, targets in per_obj_targets.items()
             }
         for obj in objs:
             resolved[(id(obj), key)] = per_obj_targets[id(obj)][:limit]
@@ -515,9 +516,7 @@ def _render_combined_tab(request, instance, tab):
 
     # Filters preserved on the column sort links (each link adds its own ?sort=)
     base_params = {
-        key: value
-        for key, value in (('q', q), ('type', type_slug), ('tag', tag_slug), ('per_page', per_page))
-        if value
+        key: value for key, value in (('q', q), ('type', type_slug), ('tag', tag_slug), ('per_page', per_page)) if value
     }
 
     sort_headers = {
@@ -588,7 +587,7 @@ def make_co_combined_view(label=COMBINED_LABEL, weight=COMBINED_WEIGHT):
     resolves the target CustomObjectType from the URL slug at request time, so it
     serves any CustomObjectType — including ones created after startup. Its URL is
     injected by ``register_tabs`` and the nav-link is rendered live by the
-    ``custom_objects_tab_link`` template tag.
+    ``custom_object_tabs`` template tag.
     """
 
     class _COCombinedTabView(ConditionalLoginRequiredMixin, View):

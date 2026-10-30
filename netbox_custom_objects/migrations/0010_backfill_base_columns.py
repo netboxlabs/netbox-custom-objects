@@ -40,7 +40,7 @@ def backfill_base_columns(apps, schema_editor):
 
     # Import the live abstract base to get field metadata.
     # See module docstring for rationale.
-    from netbox_custom_objects.models import CustomObject, USER_TABLE_DATABASE_NAME_PREFIX  # noqa: PLC0415
+    from netbox_custom_objects.models import CustomObject, USER_TABLE_DATABASE_NAME_PREFIX
 
     CustomObjectType = apps.get_model("netbox_custom_objects", "CustomObjectType")
     CustomObjectTypeField = apps.get_model("netbox_custom_objects", "CustomObjectTypeField")

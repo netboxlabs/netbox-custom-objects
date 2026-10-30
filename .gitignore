@@ -1,6 +1,76 @@
-*.pyc
-*.egg-info
-.claude/settings.local.json
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+MANIFEST
+pip-wheel-metadata/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+.python-version
+
+# Environment / secrets
+.env
+.envrc
+*.env
+configuration_local.py
+local_settings.py
+local_requirements.txt
+
+# Django / NetBox
+*.sqlite3
+*.sqlite
+db.sqlite3-journal
+media/
+staticfiles/
+collected_static/
+netbox.log
+netbox.pid
+
+# Testing / type-checking caches
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Documentation builds
+docs/_build/
+site/
+
+# IDE / editor
+.vscode/
 .idea/
+*.swp
+*.swo
+*~
 .DS_Store
+Thumbs.db
+
+# uv
+/uv.lock
+
+# Copier
+# Note: `.copier-answers.yml` is committed by convention so `copier update`
+# works on the generated repo. Do not add it to this ignore list.
+
+# Plugin-specific
+# In-app model documentation, built from docs_models/ by `mkdocs build -f mkdocs.models.yml`.
 netbox_custom_objects/static/
+.claude/settings.local.json

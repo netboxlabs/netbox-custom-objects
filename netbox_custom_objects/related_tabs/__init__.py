@@ -23,7 +23,7 @@ host kind:
 
 * **Custom-object host pages** (a COT field that targets another COT — CO→CO) —
   the plugin owns ``customobject.html``, so the tab nav-link is rendered live by
-  the ``custom_objects_tab_link`` template tag (computed from the DB per render),
+  the ``custom_object_tabs`` template tag (computed from the DB per render),
   and its URL is a single COT-agnostic route injected once at startup
   (``_inject_co_urls``) that reverses for *any* slug, including COTs created
   later. CO→CO references are likewise always live, with no restart.

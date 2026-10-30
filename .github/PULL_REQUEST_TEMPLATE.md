@@ -1,9 +1,11 @@
 <!--
-    Please note that pull requests are accepted ONLY for approved
-    issues. Specify the issue resolved by this PR below.
+    Thank you for your interest in contributing to Custom Objects! Pull
+    requests are accepted ONLY for approved, assigned issues. Specify the
+    issue resolved by this PR on the line below; PRs that do not reference
+    an assigned issue will be closed automatically.
 -->
 ### Fixes: #1234
 
 <!--
-    Please include a summary of the changes within this PR below.
+    Please include a summary of the proposed changes below.
 -->

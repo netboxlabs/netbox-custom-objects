@@ -31,34 +31,34 @@ from netbox_custom_objects.mixin_migration import heal_cot
 
 class Command(BaseCommand):
     help = (
-        "Detect and apply mixin column drift for Custom Object Type tables. "
-        "New columns contributed by the CustomObject base class (e.g. from a "
-        "NetBox upgrade) are added automatically when nullable or defaulted. "
-        "Non-nullable columns without defaults and column removals are reported "
-        "but never applied automatically."
+        'Detect and apply mixin column drift for Custom Object Type tables. '
+        'New columns contributed by the CustomObject base class (e.g. from a '
+        'NetBox upgrade) are added automatically when nullable or defaulted. '
+        'Non-nullable columns without defaults and column removals are reported '
+        'but never applied automatically.'
     )
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "--dry-run",
-            action="store_true",
-            help="Report what would change without making any DB modifications.",
+            '--dry-run',
+            action='store_true',
+            help='Report what would change without making any DB modifications.',
         )
         parser.add_argument(
-            "--cot",
-            metavar="NAME_OR_ID",
-            help="Limit to a single Custom Object Type (name or numeric ID).",
+            '--cot',
+            metavar='NAME_OR_ID',
+            help='Limit to a single Custom Object Type (name or numeric ID).',
         )
 
     def handle(self, *args, **options):
-        dry_run = options["dry_run"]
-        cot_filter = options.get("cot")
-        verbosity = options["verbosity"]
+        dry_run = options['dry_run']
+        cot_filter = options.get('cot')
+        verbosity = options['verbosity']
 
-        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+        from netbox_custom_objects.models import CustomObjectType
 
         if dry_run:
-            self.stdout.write(self.style.WARNING("DRY RUN — no changes will be made.\n"))
+            self.stdout.write(self.style.WARNING('DRY RUN — no changes will be made.\n'))
 
         if cot_filter:
             try:
@@ -67,7 +67,7 @@ class Command(BaseCommand):
                 else:
                     cot = CustomObjectType.objects.get(name=cot_filter)
             except CustomObjectType.DoesNotExist:
-                raise CommandError(f"No Custom Object Type found: {cot_filter!r}")
+                raise CommandError(f'No Custom Object Type found: {cot_filter!r}')
 
             result = heal_cot(cot, verbosity=verbosity, dry_run=dry_run)
             self._print_cot_result(cot.name, result, dry_run, verbosity)
@@ -79,11 +79,11 @@ class Command(BaseCommand):
         for cot in cots:
             result = heal_cot(cot, verbosity=verbosity, dry_run=dry_run)
             self._print_cot_result(cot.name, result, dry_run, verbosity)
-            if result["added"]:
+            if result['added']:
                 healed += 1
-            warnings += len(result["warned"])
+            warnings += len(result['warned'])
         self._print_summary(
-            {"total": total, "healed": healed, "warnings": warnings},
+            {'total': total, 'healed': healed, 'warnings': warnings},
             dry_run,
         )
 
@@ -95,74 +95,51 @@ class Command(BaseCommand):
         no-ops (returns an all-zero summary) when netbox-branching isn't
         installed, so nothing extra is printed in that case.
         """
-        from netbox_custom_objects.mixin_migration import heal_all_branches  # noqa: PLC0415
+        from netbox_custom_objects.mixin_migration import heal_all_branches
+
         result = heal_all_branches(verbosity=verbosity, dry_run=dry_run)
 
-        if result["total"] == 0:
+        if result['total'] == 0:
             return
 
-        tag = " (dry run)" if dry_run else ""
-        if result["healed"] == 0 and result["warnings"] == 0:
-            self.stdout.write(
-                self.style.SUCCESS(
-                    f"All {result['total']} branch schema(s) are up to date{tag}."
-                )
-            )
+        tag = ' (dry run)' if dry_run else ''
+        if result['healed'] == 0 and result['warnings'] == 0:
+            self.stdout.write(self.style.SUCCESS(f'All {result["total"]} branch schema(s) are up to date{tag}.'))
         else:
             self.stdout.write(
-                f"{result['total']} branch(es) checked{tag}: "
-                f"{result['healed']} healed, "
-                f"{result['warnings']} warning(s)."
+                f'{result["total"]} branch(es) checked{tag}: '
+                f'{result["healed"]} healed, '
+                f'{result["warnings"]} warning(s).'
             )
-            if result["warnings"]:
-                self.stdout.write(
-                    self.style.WARNING(
-                        "Run with -v 2 or check the application log for warning details."
-                    )
-                )
+            if result['warnings']:
+                self.stdout.write(self.style.WARNING('Run with -v 2 or check the application log for warning details.'))
 
     # ------------------------------------------------------------------
     # Output helpers
     # ------------------------------------------------------------------
 
     def _print_cot_result(self, cot_name, result, dry_run, verbosity=1):
-        added = result["added"]
-        warned = result["warned"]
+        added = result['added']
+        warned = result['warned']
 
         if not added and not warned:
             if verbosity >= 2:
-                self.stdout.write(
-                    self.style.SUCCESS(f"COT {cot_name!r}: no drift detected.")
-                )
+                self.stdout.write(self.style.SUCCESS(f'COT {cot_name!r}: no drift detected.'))
             return
 
-        tag = " [DRY RUN]" if dry_run else ""
+        tag = ' [DRY RUN]' if dry_run else ''
         for field_name in added:
-            self.stdout.write(
-                self.style.SUCCESS(f"  {tag} + Added column: {field_name}")
-            )
+            self.stdout.write(self.style.SUCCESS(f'  {tag} + Added column: {field_name}'))
         for entry in warned:
-            self.stdout.write(
-                self.style.WARNING(f"  ! {entry['message']}")
-            )
+            self.stdout.write(self.style.WARNING(f'  ! {entry["message"]}'))
 
     def _print_summary(self, summary, dry_run):
-        tag = " (dry run)" if dry_run else ""
-        if summary["healed"] == 0 and summary["warnings"] == 0:
-            self.stdout.write(
-                self.style.SUCCESS(
-                    f"All {summary['total']} COT table(s) are up to date{tag}."
-                )
-            )
+        tag = ' (dry run)' if dry_run else ''
+        if summary['healed'] == 0 and summary['warnings'] == 0:
+            self.stdout.write(self.style.SUCCESS(f'All {summary["total"]} COT table(s) are up to date{tag}.'))
         else:
             self.stdout.write(
-                f"{summary['total']} COT(s) checked{tag}: "
-                f"{summary['healed']} healed, "
-                f"{summary['warnings']} warning(s)."
+                f'{summary["total"]} COT(s) checked{tag}: {summary["healed"]} healed, {summary["warnings"]} warning(s).'
             )
-            if summary["warnings"]:
-                self.stdout.write(
-                    self.style.WARNING(
-                        "Run with -v 2 or check the application log for warning details."
-                    )
-                )
+            if summary['warnings']:
+                self.stdout.write(self.style.WARNING('Run with -v 2 or check the application log for warning details.'))

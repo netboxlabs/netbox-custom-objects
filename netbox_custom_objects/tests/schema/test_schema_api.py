@@ -1,5 +1,5 @@
 """
-Tests for the schema preview and apply API endpoints (issue #390).
+Tests for the schema preview and apply API endpoints.
 
 Covers:
 - POST /schema/preview/: returns diffs without modifying the DB
@@ -10,36 +10,34 @@ Covers:
 - Unresolvable FK reference error (400)
 - Missing / malformed 'schema' key (400)
 - Authentication enforced (401 for unauthenticated requests)
-- YAML request/response support (issue #665)
+- YAML request/response support
 """
-
-import yaml
 
 from unittest import mock
 
+import yaml
 from django.apps import apps as django_apps
+from django.test import TestCase
 from django.urls import reverse
-from django.test import TransactionTestCase
 from rest_framework import status
 from rest_framework.test import APIClient
 
+import netbox_custom_objects as nco_pkg
 from core.models import ObjectType
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
+from netbox_custom_objects.schema.exporter import export_cot
 from users.models import ObjectPermission
 from utilities.testing import create_test_user
 
-import netbox_custom_objects as nco_pkg
-from netbox_custom_objects.schema.exporter import export_cot
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
-
-from ..base import CustomObjectsTestCase, TransactionCleanupMixin, create_api_token
-
+from ..base import CustomObjectsTestCase, create_api_token
 
 # ---------------------------------------------------------------------------
 # Base for schema API tests
 # ---------------------------------------------------------------------------
 
-class _SchemaAPIBase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
-    """Base class providing an authenticated API client and helper shortcuts."""
+
+class _SchemaAPIMixin(CustomObjectsTestCase):
+    """An authenticated API client and helper shortcuts, for a TestCase or TransactionTestCase."""
 
     def setUp(self):
         super().setUp()
@@ -50,32 +48,42 @@ class _SchemaAPIBase(TransactionCleanupMixin, CustomObjectsTestCase, Transaction
         except AttributeError:
             token_key = self.token.key
         self.client = APIClient()
-        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token_key}")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Token {token_key}')
         # Previewing a document describes existing types, so it needs view permission on them.
         perm = ObjectPermission.objects.create(name='schema_view_cot_perm', actions=['view'])
         perm.users.add(self.user)
         perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
 
     def _grant_apply_permissions(self):
-        """Add and change on types, plus add, change and delete on their fields."""
+        """Add and change on types, plus add, change and delete on their fields and constraints."""
         for model, actions in (
             (CustomObjectType, ['add', 'change']),
             (CustomObjectTypeField, ['add', 'change', 'delete']),
+            (CustomObjectTypeConstraint, ['add', 'change', 'delete']),
         ):
             perm = ObjectPermission.objects.create(name=f'schema_apply_{model._meta.model_name}', actions=actions)
             perm.users.add(self.user)
             perm.object_types.add(ObjectType.objects.get_for_model(model))
 
+    def _grant(self, model, actions, constraints=None):
+        perm = ObjectPermission.objects.create(
+            name=f'{model._meta.model_name}-{"-".join(actions)}',
+            actions=actions,
+            constraints=constraints,
+        )
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model))
+
     @property
     def preview_url(self):
-        return reverse("plugins-api:netbox_custom_objects-api:schema-preview")
+        return reverse('plugins-api:netbox_custom_objects-api:schema-preview')
 
     @property
     def apply_url(self):
-        return reverse("plugins-api:netbox_custom_objects-api:schema-apply")
+        return reverse('plugins-api:netbox_custom_objects-api:schema-apply')
 
     def _apply_body(self, schema_doc, allow_destructive=False):
-        return {"schema": schema_doc, "allow_destructive": allow_destructive}
+        return {'schema': schema_doc, 'allow_destructive': allow_destructive}
 
     @staticmethod
     def _next_field_id(cot):
@@ -84,9 +92,14 @@ class _SchemaAPIBase(TransactionCleanupMixin, CustomObjectsTestCase, Transaction
         return cot.next_schema_id + 1
 
 
+class _SchemaAPIBase(_SchemaAPIMixin, TestCase):
+    """Base class for the schema API tests."""
+
+
 # ---------------------------------------------------------------------------
 # Preview endpoint
 # ---------------------------------------------------------------------------
+
 
 class SchemaPreviewTestCase(_SchemaAPIBase):
     """POST /schema/preview/ returns a diff without touching the DB."""
@@ -95,15 +108,17 @@ class SchemaPreviewTestCase(_SchemaAPIBase):
         super().setUp()
         self.cot = self.create_custom_object_type(name='previewcot', slug='preview-cot')
         self.field = self.create_custom_object_type_field(
-            self.cot, name='alpha', type='text',
+            self.cot,
+            name='alpha',
+            type='text',
         )
 
     def test_preview_returns_200(self):
         type_def = export_cot(self.cot)
         resp = self.client.post(
             self.preview_url,
-            data={"schema_version": "1", "types": [type_def]},
-            format="json",
+            data={'schema_version': '1', 'types': [type_def]},
+            format='json',
         )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
 
@@ -111,81 +126,81 @@ class SchemaPreviewTestCase(_SchemaAPIBase):
         type_def = export_cot(self.cot)
         resp = self.client.post(
             self.preview_url,
-            data={"schema_version": "1", "types": [type_def]},
-            format="json",
+            data={'schema_version': '1', 'types': [type_def]},
+            format='json',
         )
-        self.assertIn("diffs", resp.data)
+        self.assertIn('diffs', resp.data)
 
     def test_preview_noop_has_no_changes(self):
         type_def = export_cot(self.cot)
         resp = self.client.post(
             self.preview_url,
-            data={"schema_version": "1", "types": [type_def]},
-            format="json",
+            data={'schema_version': '1', 'types': [type_def]},
+            format='json',
         )
-        self.assertEqual(len(resp.data["diffs"]), 1)
-        self.assertFalse(resp.data["diffs"][0]["has_changes"])
+        self.assertEqual(len(resp.data['diffs']), 1)
+        self.assertFalse(resp.data['diffs'][0]['has_changes'])
 
     def test_preview_detects_field_add(self):
         self.cot.refresh_from_db()
         type_def = export_cot(self.cot)
         next_id = self._next_field_id(self.cot)
-        type_def["fields"].append({"id": next_id, "name": "beta", "type": "text"})
+        type_def['fields'].append({'id': next_id, 'name': 'beta', 'type': 'text'})
         resp = self.client.post(
             self.preview_url,
-            data={"schema_version": "1", "types": [type_def]},
-            format="json",
+            data={'schema_version': '1', 'types': [type_def]},
+            format='json',
         )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        diff = resp.data["diffs"][0]
-        self.assertTrue(diff["has_changes"])
-        ops = [fc["op"] for fc in diff["field_changes"]]
-        self.assertIn("add", ops)
+        diff = resp.data['diffs'][0]
+        self.assertTrue(diff['has_changes'])
+        ops = [fc['op'] for fc in diff['field_changes']]
+        self.assertIn('add', ops)
 
     def test_preview_detects_field_alter(self):
         type_def = export_cot(self.cot)
-        for f in type_def["fields"]:
-            if f["name"] == "alpha":
-                f["description"] = "Changed"
+        for f in type_def['fields']:
+            if f['name'] == 'alpha':
+                f['description'] = 'Changed'
         resp = self.client.post(
             self.preview_url,
-            data={"schema_version": "1", "types": [type_def]},
-            format="json",
+            data={'schema_version': '1', 'types': [type_def]},
+            format='json',
         )
-        diff = resp.data["diffs"][0]
-        self.assertTrue(diff["has_changes"])
-        alter_ops = [fc for fc in diff["field_changes"] if fc["op"] == "alter"]
+        diff = resp.data['diffs'][0]
+        self.assertTrue(diff['has_changes'])
+        alter_ops = [fc for fc in diff['field_changes'] if fc['op'] == 'alter']
         self.assertEqual(len(alter_ops), 1)
-        self.assertIn("description", alter_ops[0]["changed_attrs"])
+        self.assertIn('description', alter_ops[0]['changed_attrs'])
 
     def test_preview_does_not_modify_db(self):
         self.cot.refresh_from_db()
         type_def = export_cot(self.cot)
         next_id = self._next_field_id(self.cot)
-        type_def["fields"].append({"id": next_id, "name": "ghost", "type": "text"})
+        type_def['fields'].append({'id': next_id, 'name': 'ghost', 'type': 'text'})
         self.client.post(
             self.preview_url,
-            data={"schema_version": "1", "types": [type_def]},
-            format="json",
+            data={'schema_version': '1', 'types': [type_def]},
+            format='json',
         )
         # Field must NOT have been created.
-        self.assertFalse(self.cot.fields.filter(name="ghost").exists())
+        self.assertFalse(self.cot.fields.filter(name='ghost').exists())
 
     def test_preview_new_cot_reports_is_new(self):
         schema_doc = {
-            "schema_version": "1",
-            "types": [{"name": "brandnew", "slug": "brand-new"}],
+            'schema_version': '1',
+            'types': [{'name': 'brandnew', 'slug': 'brand-new'}],
         }
-        resp = self.client.post(self.preview_url, data=schema_doc, format="json")
-        self.assertTrue(resp.data["diffs"][0]["is_new"])
+        resp = self.client.post(self.preview_url, data=schema_doc, format='json')
+        self.assertTrue(resp.data['diffs'][0]['is_new'])
 
     def test_preview_unauthenticated_returns_403_or_401(self):
         anon = APIClient()
         type_def = export_cot(self.cot)
         resp = anon.post(
             self.preview_url,
-            data={"schema_version": "1", "types": [type_def]},
-            format="json",
+            data={'schema_version': '1', 'types': [type_def]},
+            format='json',
         )
         self.assertIn(resp.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
 
@@ -193,8 +208,8 @@ class SchemaPreviewTestCase(_SchemaAPIBase):
         # schema_version must be "1" (const in cot_schema_v1.json)
         resp = self.client.post(
             self.preview_url,
-            data={"schema_version": "99", "types": [{"name": "x", "slug": "x"}]},
-            format="json",
+            data={'schema_version': '99', 'types': [{'name': 'x', 'slug': 'x'}]},
+            format='json',
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
@@ -202,22 +217,21 @@ class SchemaPreviewTestCase(_SchemaAPIBase):
         """Preview reports has_destructive_changes=True but does NOT raise 409."""
         schema_id = self.field.schema_id
         type_def = export_cot(self.cot)
-        type_def["fields"] = []
-        type_def.setdefault("removed_fields", []).append(
-            {"id": schema_id, "name": "alpha", "type": "text"}
-        )
+        type_def['fields'] = []
+        type_def.setdefault('removed_fields', []).append({'id': schema_id, 'name': 'alpha', 'type': 'text'})
         resp = self.client.post(
             self.preview_url,
-            data={"schema_version": "1", "types": [type_def]},
-            format="json",
+            data={'schema_version': '1', 'types': [type_def]},
+            format='json',
         )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertTrue(resp.data["diffs"][0]["has_destructive_changes"])
+        self.assertTrue(resp.data['diffs'][0]['has_destructive_changes'])
 
 
 # ---------------------------------------------------------------------------
 # Apply endpoint
 # ---------------------------------------------------------------------------
+
 
 class SchemaApplyTestCase(_SchemaAPIBase):
     """POST /schema/apply/ applies the schema document atomically."""
@@ -228,51 +242,51 @@ class SchemaApplyTestCase(_SchemaAPIBase):
 
     def test_apply_new_cot_returns_200(self):
         schema_doc = {
-            "schema_version": "1",
-            "types": [{"name": "applynew", "slug": "apply-new"}],
+            'schema_version': '1',
+            'types': [{'name': 'applynew', 'slug': 'apply-new'}],
         }
         resp = self.client.post(
             self.apply_url,
             data=self._apply_body(schema_doc),
-            format="json",
+            format='json',
         )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertTrue(resp.data["applied"])
+        self.assertTrue(resp.data['applied'])
 
     def test_apply_multi_column_type_change_returns_400(self):
         cot = self.create_custom_object_type(name='applyretype', slug='apply-retype')
         field = self.create_custom_object_type_field(cot, name='loc', type='text')
         type_def = export_cot(cot)
-        type_def["fields"][0]["type"] = "coordinates"
+        type_def['fields'][0]['type'] = 'coordinates'
         resp = self.client.post(
             self.apply_url,
-            data=self._apply_body({"schema_version": "1", "types": [type_def]}),
-            format="json",
+            data=self._apply_body({'schema_version': '1', 'types': [type_def]}),
+            format='json',
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(resp.data["error"], "unsupported_type_change")
+        self.assertEqual(resp.data['error'], 'unsupported_type_change')
         field.refresh_from_db()
-        self.assertEqual(field.type, "text")
+        self.assertEqual(field.type, 'text')
 
     def test_apply_new_cot_creates_cot_in_db(self):
         schema_doc = {
-            "schema_version": "1",
-            "types": [{"name": "applynew2", "slug": "apply-new-2"}],
+            'schema_version': '1',
+            'types': [{'name': 'applynew2', 'slug': 'apply-new-2'}],
         }
-        self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
-        self.assertTrue(CustomObjectType.objects.filter(slug="apply-new-2").exists())
+        self.client.post(self.apply_url, data=self._apply_body(schema_doc), format='json')
+        self.assertTrue(CustomObjectType.objects.filter(slug='apply-new-2').exists())
 
     def test_apply_response_contains_diffs(self):
         cot = self.create_custom_object_type(name='applydiff', slug='apply-diff')
         type_def = export_cot(cot)
         resp = self.client.post(
             self.apply_url,
-            data=self._apply_body({"schema_version": "1", "types": [type_def]}),
-            format="json",
+            data=self._apply_body({'schema_version': '1', 'types': [type_def]}),
+            format='json',
         )
-        self.assertIn("diffs", resp.data)
-        self.assertEqual(len(resp.data["diffs"]), 1)
-        self.assertEqual(resp.data["diffs"][0]["slug"], "apply-diff")
+        self.assertIn('diffs', resp.data)
+        self.assertEqual(len(resp.data['diffs']), 1)
+        self.assertEqual(resp.data['diffs'][0]['slug'], 'apply-diff')
 
     def test_apply_adds_field(self):
         cot = self.create_custom_object_type(name='applyfield', slug='apply-field')
@@ -280,44 +294,44 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         cot.refresh_from_db()
         type_def = export_cot(cot)
         next_id = self._next_field_id(cot)
-        type_def["fields"].append({"id": next_id, "name": "added", "type": "text"})
-        schema_doc = {"schema_version": "1", "types": [type_def]}
-        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        type_def['fields'].append({'id': next_id, 'name': 'added', 'type': 'text'})
+        schema_doc = {'schema_version': '1', 'types': [type_def]}
+        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format='json')
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertTrue(cot.fields.filter(name="added").exists())
+        self.assertTrue(cot.fields.filter(name='added').exists())
 
     def test_apply_without_allow_destructive_returns_409(self):
         cot = self.create_custom_object_type(name='applydest', slug='apply-dest')
         field = self.create_custom_object_type_field(cot, name='bye', type='text')
         sid = field.schema_id
         type_def = export_cot(cot)
-        type_def["fields"] = []
-        type_def["removed_fields"] = [{"id": sid, "name": "bye", "type": "text"}]
-        schema_doc = {"schema_version": "1", "types": [type_def]}
-        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        type_def['fields'] = []
+        type_def['removed_fields'] = [{'id': sid, 'name': 'bye', 'type': 'text'}]
+        schema_doc = {'schema_version': '1', 'types': [type_def]}
+        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format='json')
         self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
-        self.assertEqual(resp.data["error"], "destructive_changes")
+        self.assertEqual(resp.data['error'], 'destructive_changes')
 
     def test_apply_409_includes_destructive_slugs(self):
         cot = self.create_custom_object_type(name='applyslug', slug='apply-slug')
         field = self.create_custom_object_type_field(cot, name='gone', type='text')
         sid = field.schema_id
         type_def = export_cot(cot)
-        type_def["fields"] = []
-        type_def["removed_fields"] = [{"id": sid, "name": "gone", "type": "text"}]
-        schema_doc = {"schema_version": "1", "types": [type_def]}
-        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
-        self.assertIn("apply-slug", resp.data["destructive_slugs"])
+        type_def['fields'] = []
+        type_def['removed_fields'] = [{'id': sid, 'name': 'gone', 'type': 'text'}]
+        schema_doc = {'schema_version': '1', 'types': [type_def]}
+        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format='json')
+        self.assertIn('apply-slug', resp.data['destructive_slugs'])
 
     def test_apply_409_does_not_remove_field(self):
         cot = self.create_custom_object_type(name='applyguard', slug='apply-guard')
         field = self.create_custom_object_type_field(cot, name='keep', type='text')
         sid = field.schema_id
         type_def = export_cot(cot)
-        type_def["fields"] = []
-        type_def["removed_fields"] = [{"id": sid, "name": "keep", "type": "text"}]
-        schema_doc = {"schema_version": "1", "types": [type_def]}
-        self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        type_def['fields'] = []
+        type_def['removed_fields'] = [{'id': sid, 'name': 'keep', 'type': 'text'}]
+        schema_doc = {'schema_version': '1', 'types': [type_def]}
+        self.client.post(self.apply_url, data=self._apply_body(schema_doc), format='json')
         self.assertTrue(cot.fields.filter(schema_id=sid).exists())
 
     def test_apply_with_allow_destructive_removes_field(self):
@@ -325,13 +339,13 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         field = self.create_custom_object_type_field(cot, name='victim', type='text')
         sid = field.schema_id
         type_def = export_cot(cot)
-        type_def["fields"] = []
-        type_def["removed_fields"] = [{"id": sid, "name": "victim", "type": "text"}]
-        schema_doc = {"schema_version": "1", "types": [type_def]}
+        type_def['fields'] = []
+        type_def['removed_fields'] = [{'id': sid, 'name': 'victim', 'type': 'text'}]
+        schema_doc = {'schema_version': '1', 'types': [type_def]}
         resp = self.client.post(
             self.apply_url,
             data=self._apply_body(schema_doc, allow_destructive=True),
-            format="json",
+            format='json',
         )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertFalse(cot.fields.filter(schema_id=sid).exists())
@@ -339,16 +353,16 @@ class SchemaApplyTestCase(_SchemaAPIBase):
     def test_apply_missing_schema_key_returns_400(self):
         resp = self.client.post(
             self.apply_url,
-            data={"allow_destructive": False},
-            format="json",
+            data={'allow_destructive': False},
+            format='json',
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_apply_schema_not_a_dict_returns_400(self):
         resp = self.client.post(
             self.apply_url,
-            data={"schema": "not a dict", "allow_destructive": False},
-            format="json",
+            data={'schema': 'not a dict', 'allow_destructive': False},
+            format='json',
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
@@ -356,8 +370,8 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         anon = APIClient()
         resp = anon.post(
             self.apply_url,
-            data=self._apply_body({"schema_version": "1", "types": []}),
-            format="json",
+            data=self._apply_body({'schema_version': '1', 'types': []}),
+            format='json',
         )
         self.assertIn(resp.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
 
@@ -367,14 +381,34 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         cot.refresh_from_db()
         type_def = export_cot(cot)
         next_id = self._next_field_id(cot)
-        type_def["fields"].append({
-            "id": next_id, "name": "bad_obj", "type": "object",
-            "related_object_type": "does/notexist",
-        })
-        schema_doc = {"schema_version": "1", "types": [type_def]}
-        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        type_def['fields'].append(
+            {
+                'id': next_id,
+                'name': 'bad_obj',
+                'type': 'object',
+                'related_object_type': 'does/notexist',
+            }
+        )
+        schema_doc = {'schema_version': '1', 'types': [type_def]}
+        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format='json')
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(resp.data["error"], "unresolvable_reference")
+        self.assertEqual(resp.data['error'], 'unresolvable_reference')
+
+    def test_apply_invalid_constraint_field_reference_returns_400(self):
+        cot = self.create_custom_object_type(name='applyrule', slug='apply-rule')
+        low = self.create_custom_object_type_field(cot, name='low', type='integer')
+        high = self.create_custom_object_type_field(cot, name='high', type='integer')
+        cot.refresh_from_db()
+        type_def = export_cot(cot)
+        for ref in ([low.schema_id], True):
+            with self.subTest(ref=ref):
+                rule = [{'field': high.schema_id, 'lookup': 'gt', 'value': {'field': ref}}]
+                type_def['constraints'] = [{'name': 'high_above_low', 'type': 'check', 'rule': rule}]
+                schema_doc = {'schema_version': '1', 'types': [type_def]}
+                resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format='json')
+                self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertEqual(resp.data['error'], 'invalid_constraint')
+        self.assertFalse(cot.constraints.exists())
 
     def test_apply_unresolvable_choice_set_returns_400(self):
         cot = self.create_custom_object_type(name='applycsfail', slug='apply-cs-fail')
@@ -382,20 +416,24 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         cot.refresh_from_db()
         type_def = export_cot(cot)
         next_id = self._next_field_id(cot)
-        type_def["fields"].append({
-            "id": next_id, "name": "bad_sel", "type": "select",
-            "choice_set": "NoSuchSet",
-        })
-        schema_doc = {"schema_version": "1", "types": [type_def]}
-        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        type_def['fields'].append(
+            {
+                'id': next_id,
+                'name': 'bad_sel',
+                'type': 'select',
+                'choice_set': 'NoSuchSet',
+            }
+        )
+        schema_doc = {'schema_version': '1', 'types': [type_def]}
+        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format='json')
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(resp.data["error"], "unresolvable_reference")
+        self.assertEqual(resp.data['error'], 'unresolvable_reference')
 
     def test_apply_schema_document_persisted_after_apply(self):
         cot = self.create_custom_object_type(name='applydoccheck', slug='apply-doc-check')
         type_def = export_cot(cot)
-        schema_doc = {"schema_version": "1", "types": [type_def]}
-        self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        schema_doc = {'schema_version': '1', 'types': [type_def]}
+        self.client.post(self.apply_url, data=self._apply_body(schema_doc), format='json')
         cot.refresh_from_db()
         self.assertIsNotNone(cot.schema_document)
 
@@ -403,28 +441,29 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         cot = self.create_custom_object_type(name='applynoop', slug='apply-noop')
         self.create_custom_object_type_field(cot, name='stable', type='text')
         type_def = export_cot(cot)
-        schema_doc = {"schema_version": "1", "types": [type_def]}
+        schema_doc = {'schema_version': '1', 'types': [type_def]}
         # First apply initialises schema_document; second apply is a true no-op.
-        self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
-        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        self.client.post(self.apply_url, data=self._apply_body(schema_doc), format='json')
+        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format='json')
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertTrue(resp.data["applied"])
-        self.assertFalse(resp.data["diffs"][0]["has_changes"])
+        self.assertTrue(resp.data['applied'])
+        self.assertFalse(resp.data['diffs'][0]['has_changes'])
 
     def test_apply_allow_destructive_string_returns_400(self):
-        schema_doc = {"schema_version": "1", "types": []}
+        schema_doc = {'schema_version': '1', 'types': []}
         resp = self.client.post(
             self.apply_url,
-            data={"schema": schema_doc, "allow_destructive": "true"},
-            format="json",
+            data={'schema': schema_doc, 'allow_destructive': 'true'},
+            format='json',
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("allow_destructive", resp.data)
+        self.assertIn('allow_destructive', resp.data)
 
 
 # ---------------------------------------------------------------------------
-# YAML request/response support (issue #665)
+# YAML request/response support
 # ---------------------------------------------------------------------------
+
 
 class SchemaYAMLFormatTestCase(_SchemaAPIBase):
     """POST /schema/preview/ and /schema/apply/ also accept and can return YAML."""
@@ -437,104 +476,106 @@ class SchemaYAMLFormatTestCase(_SchemaAPIBase):
 
     def test_preview_accepts_yaml_request_body(self):
         type_def = export_cot(self.cot)
-        body = yaml.safe_dump({"schema_version": "1", "types": [type_def]})
-        resp = self.client.post(self.preview_url, data=body, content_type="application/yaml")
+        body = yaml.safe_dump({'schema_version': '1', 'types': [type_def]})
+        resp = self.client.post(self.preview_url, data=body, content_type='application/yaml')
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertIn("diffs", resp.data)
+        self.assertIn('diffs', resp.data)
 
     def test_preview_response_defaults_to_json_content_type(self):
         type_def = export_cot(self.cot)
         resp = self.client.post(
             self.preview_url,
-            data={"schema_version": "1", "types": [type_def]},
-            format="json",
+            data={'schema_version': '1', 'types': [type_def]},
+            format='json',
         )
-        self.assertIn("application/json", resp["Content-Type"])
+        self.assertIn('application/json', resp['Content-Type'])
 
     def test_preview_returns_yaml_when_accepted(self):
         type_def = export_cot(self.cot)
         resp = self.client.post(
             self.preview_url,
-            data={"schema_version": "1", "types": [type_def]},
-            format="json",
-            HTTP_ACCEPT="application/yaml",
+            data={'schema_version': '1', 'types': [type_def]},
+            format='json',
+            headers={'accept': 'application/yaml'},
         )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertIn("application/yaml", resp["Content-Type"])
+        self.assertIn('application/yaml', resp['Content-Type'])
         parsed = yaml.safe_load(resp.content)
-        self.assertIn("diffs", parsed)
+        self.assertIn('diffs', parsed)
 
     def test_preview_malformed_yaml_body_returns_400(self):
-        resp = self.client.post(self.preview_url, data="types: [\n", content_type="application/yaml")
+        resp = self.client.post(self.preview_url, data='types: [\n', content_type='application/yaml')
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_apply_accepts_yaml_request_body_and_creates_cot(self):
-        body = yaml.safe_dump({
-            "allow_destructive": False,
-            "schema": {"schema_version": "1", "types": [{"name": "yamlapplied", "slug": "yaml-applied"}]},
-        })
-        resp = self.client.post(self.apply_url, data=body, content_type="application/yaml")
+        body = yaml.safe_dump(
+            {
+                'allow_destructive': False,
+                'schema': {'schema_version': '1', 'types': [{'name': 'yamlapplied', 'slug': 'yaml-applied'}]},
+            }
+        )
+        resp = self.client.post(self.apply_url, data=body, content_type='application/yaml')
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertTrue(CustomObjectType.objects.filter(slug="yaml-applied").exists())
+        self.assertTrue(CustomObjectType.objects.filter(slug='yaml-applied').exists())
 
     def test_preview_non_dict_json_body_returns_400(self):
-        resp = self.client.post(self.preview_url, data=[1, 2, 3], format="json")
+        resp = self.client.post(self.preview_url, data=[1, 2, 3], format='json')
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("non_field_errors", resp.data)
+        self.assertIn('non_field_errors', resp.data)
 
     def test_preview_non_dict_yaml_body_returns_400(self):
         resp = self.client.post(
             self.preview_url,
             data=yaml.safe_dump([1, 2, 3]),
-            content_type="application/yaml",
+            content_type='application/yaml',
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("non_field_errors", resp.data)
+        self.assertIn('non_field_errors', resp.data)
 
     def test_apply_non_dict_json_body_returns_400(self):
-        resp = self.client.post(self.apply_url, data=[1, 2, 3], format="json")
+        resp = self.client.post(self.apply_url, data=[1, 2, 3], format='json')
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("non_field_errors", resp.data)
+        self.assertIn('non_field_errors', resp.data)
 
     def test_apply_non_dict_yaml_body_returns_400(self):
         resp = self.client.post(
             self.apply_url,
             data=yaml.safe_dump([1, 2, 3]),
-            content_type="application/yaml",
+            content_type='application/yaml',
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_preview_empty_yaml_body_returns_400(self):
-        resp = self.client.post(self.preview_url, data="", content_type="application/yaml")
+        resp = self.client.post(self.preview_url, data='', content_type='application/yaml')
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_apply_empty_yaml_body_returns_400(self):
-        resp = self.client.post(self.apply_url, data="", content_type="application/yaml")
+        resp = self.client.post(self.apply_url, data='', content_type='application/yaml')
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_apply_returns_yaml_when_accepted(self):
-        body = yaml.safe_dump({
-            "allow_destructive": False,
-            "schema": {"schema_version": "1", "types": [{"name": "yamlapplied2", "slug": "yaml-applied-2"}]},
-        })
+        body = yaml.safe_dump(
+            {
+                'allow_destructive': False,
+                'schema': {'schema_version': '1', 'types': [{'name': 'yamlapplied2', 'slug': 'yaml-applied-2'}]},
+            }
+        )
         resp = self.client.post(
-            self.apply_url,
-            data=body,
-            content_type="application/yaml",
-            HTTP_ACCEPT="application/yaml",
+            self.apply_url, data=body, content_type='application/yaml', headers={'accept': 'application/yaml'}
         )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertIn("application/yaml", resp["Content-Type"])
+        self.assertIn('application/yaml', resp['Content-Type'])
         parsed = yaml.safe_load(resp.content)
-        self.assertTrue(parsed["applied"])
+        self.assertTrue(parsed['applied'])
 
 
 # ---------------------------------------------------------------------------
-# get_models() re-entrancy (issue #685)
+# get_models() re-entrancy
 # ---------------------------------------------------------------------------
+
 
 class SchemaApplyMultiCOTRecursionTestCase(_SchemaAPIBase):
-    """Regression test for issue #685: applying a document that creates
+    """Regression test: applying a document that creates
     multiple new, cross-referencing Custom Object Types in one request
     raised RecursionError."""
 
@@ -550,50 +591,48 @@ class SchemaApplyMultiCOTRecursionTestCase(_SchemaAPIBase):
         # exercises the real vulnerable code path.
         app_config = django_apps.get_app_config('netbox_custom_objects')
         self.enterContext(mock.patch.object(nco_pkg, '_app_ready', True))
-        self.enterContext(
-            mock.patch.object(app_config, 'should_skip_dynamic_model_creation', return_value=False)
-        )
+        self.enterContext(mock.patch.object(app_config, 'should_skip_dynamic_model_creation', return_value=False))
 
         schema_doc = {
-            "schema_version": "1",
-            "types": [
+            'schema_version': '1',
+            'types': [
                 {
-                    "name": "ospf_instance",
-                    "slug": "ospf-instances",
-                    "fields": [
-                        {"id": 1, "name": "name", "type": "text", "primary": True, "required": True, "unique": True},
+                    'name': 'ospf_instance',
+                    'slug': 'ospf-instances',
+                    'fields': [
+                        {'id': 1, 'name': 'name', 'type': 'text', 'primary': True, 'required': True, 'unique': True},
                     ],
                 },
                 {
-                    "name": "ospf_area",
-                    "slug": "ospf-areas",
-                    "fields": [
-                        {"id": 1, "name": "name", "type": "text", "primary": True, "required": True, "unique": True},
+                    'name': 'ospf_area',
+                    'slug': 'ospf-areas',
+                    'fields': [
+                        {'id': 1, 'name': 'name', 'type': 'text', 'primary': True, 'required': True, 'unique': True},
                         {
-                            "id": 2,
-                            "name": "instance",
-                            "type": "object",
-                            "required": True,
-                            "related_object_type": "custom-objects/ospf-instances",
+                            'id': 2,
+                            'name': 'instance',
+                            'type': 'object',
+                            'required': True,
+                            'related_object_type': 'custom-objects/ospf-instances',
                         },
                     ],
                 },
             ],
         }
-        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format='json')
         self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.content)
-        self.assertTrue(resp.data["applied"])
-        instance_cot = CustomObjectType.objects.get(slug="ospf-instances")
-        area_cot = CustomObjectType.objects.get(slug="ospf-areas")
+        self.assertTrue(resp.data['applied'])
+        instance_cot = CustomObjectType.objects.get(slug='ospf-instances')
+        area_cot = CustomObjectType.objects.get(slug='ospf-areas')
         self.assertIn(
             instance_cot.get_model(),
             django_apps.get_models(),
-            "Generated model should be returned by apps.get_models().",
+            'Generated model should be returned by apps.get_models().',
         )
         self.assertIn(
             area_cot.get_model(),
             django_apps.get_models(),
-            "Generated model should be returned by apps.get_models().",
+            'Generated model should be returned by apps.get_models().',
         )
         self.assertFalse(nco_pkg._generating_models.get())
 
@@ -604,70 +643,68 @@ class SchemaApplyMultiCOTRecursionTestCase(_SchemaAPIBase):
 
         app_config = django_apps.get_app_config('netbox_custom_objects')
         self.enterContext(mock.patch.object(nco_pkg, '_app_ready', True))
-        self.enterContext(
-            mock.patch.object(app_config, 'should_skip_dynamic_model_creation', return_value=False)
-        )
+        self.enterContext(mock.patch.object(app_config, 'should_skip_dynamic_model_creation', return_value=False))
 
         schema_doc = {
-            "schema_version": "1",
-            "types": [
+            'schema_version': '1',
+            'types': [
                 {
-                    "name": "ospf_instance",
-                    "slug": "ospf-instances",
-                    "fields": [
-                        {"id": 1, "name": "name", "type": "text", "primary": True, "required": True, "unique": True},
+                    'name': 'ospf_instance',
+                    'slug': 'ospf-instances',
+                    'fields': [
+                        {'id': 1, 'name': 'name', 'type': 'text', 'primary': True, 'required': True, 'unique': True},
                     ],
                 },
                 {
-                    "name": "ospf_area",
-                    "slug": "ospf-areas",
-                    "fields": [
-                        {"id": 1, "name": "name", "type": "text", "primary": True, "required": True, "unique": True},
+                    'name': 'ospf_area',
+                    'slug': 'ospf-areas',
+                    'fields': [
+                        {'id': 1, 'name': 'name', 'type': 'text', 'primary': True, 'required': True, 'unique': True},
                         {
-                            "id": 2,
-                            "name": "instance",
-                            "type": "object",
-                            "required": True,
-                            "related_object_type": "custom-objects/ospf-instances",
+                            'id': 2,
+                            'name': 'instance',
+                            'type': 'object',
+                            'required': True,
+                            'related_object_type': 'custom-objects/ospf-instances',
                         },
                     ],
                 },
                 {
-                    "name": "ospf_interface",
-                    "slug": "ospf-interfaces",
-                    "fields": [
-                        {"id": 1, "name": "name", "type": "text", "primary": True, "required": True, "unique": True},
+                    'name': 'ospf_interface',
+                    'slug': 'ospf-interfaces',
+                    'fields': [
+                        {'id': 1, 'name': 'name', 'type': 'text', 'primary': True, 'required': True, 'unique': True},
                         {
-                            "id": 2,
-                            "name": "area",
-                            "type": "object",
-                            "required": True,
-                            "related_object_type": "custom-objects/ospf-areas",
+                            'id': 2,
+                            'name': 'area',
+                            'type': 'object',
+                            'required': True,
+                            'related_object_type': 'custom-objects/ospf-areas',
                         },
                     ],
                 },
             ],
         }
-        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format='json')
         self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.content)
-        self.assertTrue(resp.data["applied"])
-        instance_cot = CustomObjectType.objects.get(slug="ospf-instances")
-        area_cot = CustomObjectType.objects.get(slug="ospf-areas")
-        interface_cot = CustomObjectType.objects.get(slug="ospf-interfaces")
+        self.assertTrue(resp.data['applied'])
+        instance_cot = CustomObjectType.objects.get(slug='ospf-instances')
+        area_cot = CustomObjectType.objects.get(slug='ospf-areas')
+        interface_cot = CustomObjectType.objects.get(slug='ospf-interfaces')
         self.assertIn(
             instance_cot.get_model(),
             django_apps.get_models(),
-            "Generated model should be returned by apps.get_models().",
+            'Generated model should be returned by apps.get_models().',
         )
         self.assertIn(
             area_cot.get_model(),
             django_apps.get_models(),
-            "Generated model should be returned by apps.get_models().",
+            'Generated model should be returned by apps.get_models().',
         )
         self.assertIn(
             interface_cot.get_model(),
             django_apps.get_models(),
-            "Generated model should be returned by apps.get_models().",
+            'Generated model should be returned by apps.get_models().',
         )
         self.assertFalse(nco_pkg._generating_models.get())
 
@@ -690,8 +727,8 @@ class SchemaApplyMultiCOTRecursionTestCase(_SchemaAPIBase):
             call_counts[self.pk] += 1
             if call_counts[self.pk] > 10:
                 test_case.fail(
-                    f"get_model() called {call_counts[self.pk]} times for COT "
-                    f"{self.pk} -- unbounded re-entrant generation (issue #685/#686)"
+                    f'get_model() called {call_counts[self.pk]} times for COT '
+                    f'{self.pk} -- unbounded re-entrant generation'
                 )
             result = real_get_model(self, *args, **kwargs)
             if call_counts[self.pk] == 1:

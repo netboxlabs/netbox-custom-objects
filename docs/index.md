@@ -1,14 +1,18 @@
 # NetBox Custom Objects
 
-[NetBox](https://github.com/netbox-community/netbox) is the world's leading source of truth for infrastructure, featuring an extensive data model. Sometimes it can be useful to extend the NetBox data model to fit specific organizational needs. The Custom Objects plugin introduces a new paradigm for NetBox to help overcome these challenges, allowing NetBox administrators to extend the NetBox data model without writing a line of code.
+[NetBox](https://github.com/netbox-community/netbox) is the world's leading source of truth for infrastructure, featuring an extensive data model. Sometimes it can be useful to extend the NetBox data model to fit specific organizational needs. The Custom Objects plugin lets NetBox administrators extend the NetBox data model without writing a line of code.
 
 This documentation covers:
 
-- [Installation and configuration](installation.md)
+- Setting up: [installation](installation.md), [configuration](configuration.md), [permissions](permissions.md), [upgrading](upgrading.md) and [uninstalling](uninstalling.md)
+- [Workflows](workflows/index.md) that walk through common tasks from start to finish
 - [Field attributes](field-attributes.md) available on each field type
+- Working with custom objects: [import and export](import-export.md), the [Custom Objects tab](related-objects-tab.md), and [config context and templates](config-context.md)
 - [REST API](rest-api.md) usage and endpoints
+- [GraphQL API](graphql.md) queries and filters
 - [Using Custom Objects with NetBox Branching](branching.md)
 - [Portable schema](portable-schema.md) — exporting and applying schemas across environments
+- [Troubleshooting](troubleshooting.md)
 
 !!! tip
     If you hit any problems please check the [existing issues](https://github.com/netboxlabs/netbox-custom-objects/issues) before creating a new one. If you're unsure, start a [discussion](https://github.com/netboxlabs/netbox-custom-objects/discussions).
@@ -20,8 +24,10 @@ This documentation covers:
     from netbox_custom_objects.models import CustomObjectType
 
     custom_object_type = CustomObjectType.objects.get(name="cat")
-    Cat = custom_object_type.get_model()
+    Cat = custom_object_type.get_model_with_serializer()
     ```
+
+    `get_model_with_serializer()` also registers the model's REST API serializer, which NetBox needs to record changes when objects are saved. On NetBox 4.6.2 and later, `get_model()` is enough.
 
     ```python
     In [21]: Cat.objects.count()
@@ -43,18 +49,24 @@ This documentation covers:
     * Bookmarks
     * Contacts
     * Custom Links
+    * Custom Validation (`CUSTOM_VALIDATORS`)
     * Cloning
-    * Import/Export
+    * Import/Export, including export templates
     * Event Rules
     * Notifications
     * Journaling
+    * Owners
     * Tags
+
+* A [**Custom Objects** tab](related-objects-tab.md) on NetBox objects lists the custom objects that reference them.
+
+* Optional [config context](config-context.md) support, and access to custom objects from Jinja config and export templates.
 
 * Custom Object Types can include fields of all standard types — text, decimal, integer, boolean, and more — as well as references to choice sets, core NetBox models, plugin models, and other Custom Object Types. See [Field Attributes](field-attributes.md) for the complete list of field types and per-type options.
 
 * Object reference fields support both single-type references (`object`, `multiobject`) and polymorphic references that may point to objects of multiple different types.
 
-* Custom Object Type Fields can model additional behaviour such as uniqueness enforcement, default values, layout hints, required fields, and more.
+* Custom Object Type Fields can model additional behavior such as uniqueness enforcement, default values, layout hints, required fields, and more.
 
 * Custom Object Type definitions can be exported as portable JSON schema documents, versioned in source control, and applied across environments — see [Portable Schema](portable-schema.md).
 
@@ -81,9 +93,9 @@ Let's walk through the DHCP Scope example to highlight the steps involved in cre
 | Internal name           | `dhcp_scope`  |
 | Display name (singular) | `DHCP Scope`  |
 | Display name (plural)   | `DHCP Scopes` |
-| URL path/slug           | `dhcp_scopes` |
+| URL path/slug           | `dhcp-scopes` |
 
-Additional optional fields include `Description`, `Version`, `Group name`, and `Comments`. The `Group name` field controls how Custom Object Types are grouped together in the left navigation menu.
+Additional optional fields include `Description`, `Version`, `Display expression`, `Group name`, `Config context support`, `Tags` and `Comments`. A display expression is a Jinja template, such as `Scope {{ range }}`, that sets how each object is named. The `Group name` field controls how Custom Object Types are grouped together in the left navigation menu.
 
 !!! tip
     The `Version` field accepts a [PEP 440](https://peps.python.org/pep-0440/) version string (e.g. `1.0.0`). This becomes useful when managing schemas across environments using the [portable schema](portable-schema.md) feature.
@@ -92,24 +104,57 @@ Additional optional fields include `Description`, `Version`, `Group name`, and `
 
 ### Adding Fields to the Custom Object Type
 
-1. After creating your Custom Object Type you will be taken to the Custom Object Type detail view. To add a field, click `+ Add Field`.
+1. After creating your Custom Object Type you will be taken to the Custom Object Type detail view. To add a field, click `Add` and choose `Field`.
 
 !!! tip
-    The `Primary` flag on a Custom Object Type Field controls how Custom Objects are named in the UI. By default, a Custom Object is named `<Custom Object Type name> <Custom Object ID>` — so in this example, the first `dhcp_scope` created would be named `dhcp_scope 1`. Setting `Primary` to `true` on a field causes the value of that field to be used as the object's display name instead.
+    The `Primary name field` flag on a Custom Object Type Field controls how Custom Objects are named in the UI. By default, a Custom Object is named `<display name> <ID>` — so in this example, the first DHCP Scope created would be named `DHCP Scope 1`. Enabling `Primary name field` on a field causes the value of that field to be used as the object's display name instead. A type's display expression, if set, takes precedence over both.
 
 !!! tip
-    The `Context` flag causes a field's value to be shown as additional context when this object is referenced by another object.
+    The `Context field` flag causes a field's value to be shown as additional context when this object is referenced by another object.
 
 !!! tip
-    Uniqueness cannot be enforced for Custom Object Type Fields of type `multiobject` or `boolean`.
+    Uniqueness cannot be enforced for Custom Object Type Fields of type `multiobject`, `boolean` or `coordinates`.
 
 2. Specify a `Name` for your field, in this case we'll choose a URL-friendly value: `range`.
 3. Specify the `Label` for your field. This is a human-readable name that will be used in the GUI. In this case we'll choose `DHCP Range`.
-4. Choose a `Type` for your field. In this case we want our `range` field to be a 1-1 reference to a built-in NetBox object type, so we choose `Object`.
+4. Choose a `Type` for your field. In this case we want our `range` field to reference a single built-in NetBox object, so we choose `Object`.
 5. Then we need to specify which type of built-in object our `range` field will reference. Scroll down to `Related object type` and choose `IPAM > IP Range`.
 6. Then click `Create`.
 
 See [Field Attributes](field-attributes.md) for the full list of attributes available on each field type.
+
+### Adding Constraints to the Custom Object Type
+
+A field's `Must be unique` setting makes its values unique on their own. To require that a *combination* of field values is unique, for example a serial number that only has to be unique per vendor, add a constraint: open the Custom Object Type, click `Add` and choose `Constraint`.
+
+- **Fields** — the fields whose combined values must be unique. Pick at least two, or one when the constraint is case-insensitive or has a condition. Text, long text, integer, decimal, boolean, date, datetime, URL, selection, color, MAC address and object fields (including polymorphic object fields, which count as both the object's type and its ID) can be included.
+- **Case-insensitive** — compare text and URL fields without regard to case, so `ACME` and `acme` conflict. The constraint must include at least one text or URL field.
+- **Empty values are distinct** — enabled by default, so objects that leave any of the constrained fields empty never conflict. Disable it to treat empty values as equal; this requires PostgreSQL 15 or later.
+- **Condition** — optionally, apply the constraint only to objects that match all of a list of predicates, for example to make `name` unique only among objects with no `parent`:
+
+    ```json
+    [{"field": "parent", "lookup": "isnull", "value": true}]
+    ```
+
+    Each predicate names a field and a lookup: `exact`, `n` (does not equal, or is empty), `in` (a list of values), `isnull` (`true` for empty, `false` for not empty), or `gt`, `gte`, `lt` and `lte` (greater than, at least, less than, at most; integer, decimal, date and datetime fields only). Instead of a value, `{"field": "other_field"}` compares with another field of the same kind (text, URL and selection; integer and decimal; date; datetime; boolean; color; or MAC address). The same field types as above can be tested; object fields can only be tested with `isnull`. Blank text counts as empty, so test for it with `isnull` rather than comparing with `""`; in a condition, a comparison with an empty value doesn't match.
+
+To require something of every object instead, such as an end date after its start date, add a constraint of type **Check**:
+
+- **Rule** — predicates, in the same form as a condition, that every object must satisfy:
+
+    ```json
+    [{"field": "end_date", "lookup": "gt", "value": {"field": "start_date"}}]
+    ```
+
+    A comparison passes when a value it compares is empty, so this rule allows objects with no start or end date. To require a value, add a predicate such as `{"field": "end_date", "lookup": "isnull", "value": false}`.
+- **Condition** — optionally, apply the rule only to objects that match it. For example, to require a bandwidth above zero for WAN links only, use the condition `[{"field": "kind", "lookup": "exact", "value": "wan"}]` with the rule `[{"field": "bandwidth_mbps", "lookup": "gt", "value": 0}]`.
+- **Error message** — optionally, the error to show when an object breaks the rule, e.g. "The end date must be after the start date." Without one, the error describes the rule.
+
+A check constraint has no fields of its own, isn't case-insensitive, and keeps empty values distinct; those settings apply to unique constraints.
+
+The database enforces constraints, so they apply to the UI, the REST API, imports and scripts alike, and a constraint can't be added while existing objects already break it. Saving an object that would break one shows a validation error.
+
+A constrained field can be renamed. Its type can't be changed until it's removed from its constraints (including their conditions and rules), and deleting it deletes the constraints that include or test it.
 
 ### Interacting with Custom Objects
 
@@ -118,94 +163,24 @@ Typically, NetBox administrators are responsible for thinking through modelling 
 #### Creating a New Custom Object
 
 1. Under the NetBox Custom Objects plugin in the left navigation pane you will now see `DHCP Scopes`. Click the `+` next to your new Custom Object Type.
-2. As you added a single field called `Range` of type `IPAM > IP Range`, you are prompted to specify a range. Select one and click `Create`.
+2. As you added a single field labelled `DHCP Range` that references an IP Range, you are prompted to specify a range. Select one and click `Create`.
 3. You are taken to the detail view for your new `DHCP Scope` object.
 
 #### Standard List Views for Custom Objects
 
 As with core NetBox objects, Custom Objects have their own list views. To see all your `DHCP Scopes`, click on your Custom Object Type in the left navigation pane under the Custom Objects plugin section.
 
-You will see a standard NetBox list view for your new Custom Objects with the standard options including `Configure Table`, `+ Add`, `Import`, `Export`, and others.
-
-### Config Context
-
-A Custom Object Type can opt in to NetBox's [config context](https://netboxlabs.com/docs/netbox/models/extras/configcontext/) support by checking **Config context support** when the type is created. (This can only be set at creation time — it adds a `local_context_data` column to the type's table, so it cannot be toggled afterwards.)
-
-When enabled, every object of that type gains:
-
-- A **Local Context Data** field (arbitrary JSON), stored per object and exposed in the REST and GraphQL APIs — useful for building configurations (e.g. with Ansible).
-- A read-only **`config_context`** field in the REST and GraphQL APIs, holding the rendered context (source contexts merged with the local context data), as Devices and VMs have.
-- A **Config Context** tab on the object's detail view, showing the rendered context, the local context, and any source contexts.
-
-#### Aggregating source config contexts
-
-Custom objects can also inherit the ConfigContexts that apply to NetBox objects they reference, exactly as a Device or VM would. This works **by field-naming convention** — no extra configuration:
-
-Give the Custom Object Type a single (non-polymorphic) **object** field named one of the following, pointing at the matching NetBox model:
-
-| Field name | Points at |
-|------------|-----------|
-| `site` | Site |
-| `tenant` | Tenant |
-| `role` | Device Role |
-| `platform` | Platform |
-| `location` | Location |
-| `device_type` | Device Type |
-| `cluster` | Cluster |
-
-Any active ConfigContext assigned to the referenced object (or to its region, site group, tenant group, cluster type/group, or matching tags) is then aggregated into the object's rendered context, ordered by weight, with the object's own **Local Context Data** applied last (it always wins). Assigning tags to the custom object also matches tag-scoped ConfigContexts automatically.
-
-Notes:
-
-- Field **names are unique per type**, so there is never ambiguity about which field feeds a dimension.
-- A field must be an object field with both the **name and target model** above; a mis-named or mis-pointed field is simply ignored.
-- If a type defines **none** of these fields, aggregation is skipped entirely and its rendered context is just its Local Context Data. This is a deliberate difference from Devices/VMs: **global (unassigned) ConfigContexts are not applied** to such a type — enabling config context support alone never silently pulls in every global context. Add at least one convention field (e.g. `site`) to opt the type into source aggregation; global contexts then apply too (as they do for any object with a dimension).
-
-### Jinja Config Templates
-
-!!! note
-    Requires NetBox 4.7 or later. On earlier NetBox versions, `custom_objects` is simply unavailable in config templates and nothing else changes — no error, no crash. A `DEBUG`-level log message noting this is emitted at plugin startup; enable debug logging if you need to confirm why `custom_objects` isn't resolving.
-
-Custom Objects can be referenced directly from NetBox [config templates](https://netboxlabs.com/docs/netbox/models/extras/configtemplate/), so device configuration can pull in data modelled with Custom Object Types (e.g. OSPF interface parameters, BGP peer groups, MPLS label ranges) alongside built-in NetBox models.
-
-Two equivalent access patterns are available, both resolving the Custom Object Type by its **internal name** at render time (so templates keep working even if the type's slug or internal table ID changes):
-
-Attribute-style, via the `custom_objects` context variable:
-
-```jinja2
-{% for iface in custom_objects.ospf_interface.filter(device=device) %}
-interface {{ iface.name }}
-    ip ospf area {{ iface.area }}
-{% endfor %}
-```
-
-Filter syntax, via the `custom_objects` Jinja filter:
-
-```jinja2
-{% for iface in 'ospf_interface' | custom_objects %}
-interface {{ iface.name }}
-{% endfor %}
-```
-
-Notes:
-
-- The attribute-style form returns the model's manager (`.filter(...)`, `.all()`, etc.); the filter form returns a queryset of all instances of that type.
-- An unknown type name is handled the same way by both forms: a warning is logged, and the reference resolves to an empty, chainable stand-in — further calls like `.filter(...)` or `.all()` continue to render no rows rather than raising. Check the type's internal name (shown on its detail page) if a template renders no data.
-- A type's internal name may begin with a digit (e.g. `123foo`), which isn't valid Jinja dot-notation. Use bracket notation with the attribute-style form instead:
-
-```jinja2
-{% for obj in custom_objects['123foo'].filter(device=device) %}
-```
+You will see a standard NetBox list view for your new Custom Objects with the standard options including `Configure Table`, `+ Add`, `Import`, `Export`, and others. See [Import and Export](import-export.md) for the import format.
 
 ### Deletions
 
 #### Deleting Custom Object Types
 
-Deleting a Custom Object Type drops an entire database table and should be done with caution. You will be warned about the impact before you proceed. We recommend that only administrators have permission to delete Custom Object Types.
+Deleting a Custom Object Type drops an entire database table and should be done with caution. You will be warned about the impact before you proceed. We recommend that only administrators have permission to delete Custom Object Types; see [Permissions](permissions.md).
 
 #### Deleting Custom Object Type Fields
 
-Deleting a Custom Object Type Field drops an entire database column and should be done with caution. You will be warned about the impact before you proceed. We recommend that only administrators have permission to delete Custom Object Type Fields.
+Deleting a Custom Object Type Field drops an entire database column and should be done with caution. You will be warned about the impact before you proceed, including any constraints that will be deleted with the field. We recommend that only administrators have permission to delete Custom Object Type Fields.
 
 #### Deleting Custom Objects
 
