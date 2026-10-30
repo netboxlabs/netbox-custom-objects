@@ -365,7 +365,7 @@ def __getattr__(name):
     """
     Resolve dynamic list tables, e.g. "Table3ModelTable", for NetBox's saved table configurations.
 
-    NetBox imports table classes from "<app_label>.tables.<name>".
+    NetBox imports "<app_label>.tables.<name>", so build matching tables on demand.
     """
     if match := _TABLE_NAME_RE.match(name):
         try:
