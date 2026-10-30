@@ -339,7 +339,7 @@ def get_custom_object_table(custom_object_type, model=None):
             attrs[field.name] = field_type.get_table_column_field(field)
         except NotImplementedError:
             logger.debug(
-                "table mixin: {} field is not implemented; using a default column".format(
+                "{} field is not implemented; using a default column".format(
                     field.name
                 )
             )
