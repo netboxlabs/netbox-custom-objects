@@ -147,6 +147,26 @@ class TableConfigTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'value="speed"')
 
+    def test_add_view_saves_a_config(self):
+        response = self.client.post(
+            reverse('extras:tableconfig_add'),
+            {
+                'name': 'Speeds',
+                'object_type': self.object_type.pk,
+                'table': self.table_name,
+                'weight': 1000,
+                'enabled': True,
+                'shared': True,
+                'columns': ['name', 'speed'],
+                'ordering': '-speed',
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        config = TableConfig.objects.get(name='Speeds')
+        self.assertEqual(config.table, self.table_name)
+        self.assertEqual(config.columns, ['name', 'speed'])
+        self.assertEqual(config.ordering, ['-speed'])
+
     def test_config_validates_columns(self):
         config = TableConfig(
             name='Speeds',
