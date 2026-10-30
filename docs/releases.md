@@ -30,7 +30,6 @@ Expanded the documentation with model references and guides for setup, administr
 ### Enhancements
 
 - [#670](https://github.com/netboxlabs/netbox-custom-objects/issues/670) - Portable schema documents now carry an object field's reverse relation name (`related_name`)
-- [#758](https://github.com/netboxlabs/netbox-custom-objects/issues/758) - A display expression can now include the object's ID
 - [#773](https://github.com/netboxlabs/netbox-custom-objects/issues/773) - Avoid database queries when retrieving cached Custom Object Type models
 - [#775](https://github.com/netboxlabs/netbox-custom-objects/issues/775) - Faster list views for types with polymorphic multi-object columns
 - [#856](https://github.com/netboxlabs/netbox-custom-objects/issues/856) - Custom object pages now match core NetBox 4.7, including other plugins' buttons on detail pages
@@ -40,22 +39,14 @@ Expanded the documentation with model references and guides for setup, administr
 
 ### Bug Fixes
 
-- [#769](https://github.com/netboxlabs/netbox-custom-objects/issues/769) - Align decimal fields and validation with NetBox (16 digits, 4 decimal places), and allow multi-select values up to 100 characters
-- [#770](https://github.com/netboxlabs/netbox-custom-objects/issues/770) - Coordinates columns were dropped when a branch was squash-merged, and missed when a coordinates field was renamed
-- [#771](https://github.com/netboxlabs/netbox-custom-objects/issues/771) - Fix conflicts between blank values in nullable unique text fields
 - [#774](https://github.com/netboxlabs/netbox-custom-objects/issues/774) - The REST API accepted a display expression with invalid syntax, and database errors raised while rendering one were hidden
-- [#776](https://github.com/netboxlabs/netbox-custom-objects/issues/776) - Prevent the multi-object form field from registering an incomplete model
 - [#854](https://github.com/netboxlabs/netbox-custom-objects/issues/854) - Custom object list buttons, menu buttons and detail tabs ignored the user's permissions
 - [#855](https://github.com/netboxlabs/netbox-custom-objects/issues/855) - The Fields and Constraints tabs didn't behave like core child-object tabs, and "Create & Add Another" failed for constraints
-- [#865](https://github.com/netboxlabs/netbox-custom-objects/issues/865) - Exporting a Custom Object Type with a Coordinates field raised `KeyError`
-- [#900](https://github.com/netboxlabs/netbox-custom-objects/issues/900) - Custom Object Type definitions were visible to users without permission to view them
 - [#901](https://github.com/netboxlabs/netbox-custom-objects/issues/901) - A constraint including a polymorphic object field wasn't validated by the UI form, and a violation returned HTTP 500
 - [#902](https://github.com/netboxlabs/netbox-custom-objects/issues/902) - A polymorphic object field's on-delete behavior wasn't enforced, leaving a dangling reference when the referenced object was deleted
-- [#903](https://github.com/netboxlabs/netbox-custom-objects/issues/903) - A Custom Object Type REST API endpoint didn't apply object-level permissions
 - [#925](https://github.com/netboxlabs/netbox-custom-objects/issues/925) - Return HTTP 404 for unknown Custom Object Type slugs during bulk edit, delete and import
 - [#926](https://github.com/netboxlabs/netbox-custom-objects/issues/926) - A field form that failed validation still demoted the type's primary field
 - [#938](https://github.com/netboxlabs/netbox-custom-objects/issues/938) - Applying a schema document didn't check permissions for the constraints it added, changed or removed
-- [#1004](https://github.com/netboxlabs/netbox-custom-objects/issues/1004) - Saving a table configuration for a custom object list failed with "Unknown table", and its column selectors were empty (a `TypeError` before NetBox 4.6.3)
 
 ---
 
