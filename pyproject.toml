@@ -79,7 +79,7 @@ test = [
 ]
 docs = [
     "mkdocs==1.6.1",
-    "mkdocs-material==9.7.7",
+    "mkdocs-material==9.8.0",
     # Keep in step with the zensical pin in test.yml and release.yaml.
     "zensical==0.0.43",
 ]
