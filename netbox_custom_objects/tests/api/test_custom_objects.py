@@ -14,7 +14,8 @@ from packaging.version import Version
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from core.models import Job, ObjectType
+from core.choices import ObjectChangeActionChoices
+from core.models import Job, ObjectChange, ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
 from extras.models import ExportTemplate, Tag
 from netbox.api.viewsets import mixins as netbox_viewset_mixins
@@ -1511,3 +1512,55 @@ class NullOptionalObjectFieldTestCase(CustomObjectsTestCase, TestCase):
             format='json',
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+
+
+class ObjectChangeAPITestCase(CustomObjectsTestCase, TestCase):
+    """
+    The core changelog API serializes a custom object as an ObjectChange's
+    changed_object, which looks up the serializer for the object instance.
+    """
+
+    def setUp(self):
+        self.user = create_test_user('objectchangeuser')
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f'Token {create_token(self.user)}')
+
+        self.cot = CustomObjectsTestCase.create_custom_object_type(name='ChangelogTest', slug='changelog-test')
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot,
+            name='name',
+            type='text',
+            primary=True,
+            required=True,
+        )
+        self.model = self.cot.get_model()
+        self.instance = self.model.objects.create(name='Logged')
+        ObjectChange.objects.create(
+            user_name='tester',
+            request_id=uuid.uuid4(),
+            action=ObjectChangeActionChoices.ACTION_CREATE,
+            changed_object_type=ObjectType.objects.get_for_model(self.model),
+            changed_object_id=self.instance.pk,
+            object_repr=str(self.instance),
+            postchange_data={'name': 'Logged'},
+        )
+
+        perm = ObjectPermission(name=f'objectchange-view-{uuid.uuid4().hex[:8]}', actions=['view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(ObjectChange))
+
+    def tearDown(self):
+        CustomObjectType.clear_model_cache()
+        super().tearDown()
+
+    def test_changelog_serializes_custom_object(self):
+        """Listing object changes must serialize the changed custom object without logging an error."""
+        with self.assertNoLogs('netbox.utilities.api', level='ERROR'):
+            response = self.client.get(reverse('core-api:objectchange-list'))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 1)
+        changed_object = response.data['results'][0]['changed_object']
+        self.assertEqual(changed_object['id'], self.instance.pk)
+        self.assertEqual(changed_object['display'], 'Logged')
