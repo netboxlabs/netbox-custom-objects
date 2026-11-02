@@ -72,6 +72,8 @@ jobs:
           for page in customobjecttype customobjecttypefield customobjecttypeconstraint; do
             test -f netbox_custom_objects/static/docs/models/netbox_custom_objects/$page/index.html
           done
+      - name: Build the docs site
+        run: zensical build -s
 
   test:
     name: >-

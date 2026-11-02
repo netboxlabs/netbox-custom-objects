@@ -30,7 +30,7 @@ The repository follows the [NetBox Labs plugin scaffold](https://github.com/netb
 - Django's built-in test runner (`django.test.TestCase`-based, run via `manage.py test`)
 - ruff for lint + format (config in `pyproject.toml` under `[tool.ruff*]`; no separate `ruff.toml`)
 - pre-commit for local quality gates (config in `.pre-commit-config.yaml`): ruff, djLint, codespell, yamllint, django-upgrade
-- mkdocs + mkdocs-material for the user-facing docs; zensical (as NetBox core uses) for the in-app model help pages
+- zensical (as NetBox core uses) for both the user-facing docs (`mkdocs.yml`) and the in-app model help pages (`mkdocs.models.yml`)
 
 Defer all version pins to `pyproject.toml` and `netbox_custom_objects/__init__.py`.
 
@@ -197,7 +197,7 @@ There is no Justfile/Makefile in this repo; commands are raw. Run them inside a 
 | `python netbox/manage.py makemigrations netbox_custom_objects` | Generate Django migrations after model changes |
 | `python netbox/manage.py migrate` | Apply migrations |
 | `python netbox/manage.py runserver` | Start NetBox locally with the plugin loaded |
-| `mkdocs serve` | Preview the user docs |
+| `zensical serve` | Preview the user docs |
 | `python -m build` | Build sdist + wheel (matches the release workflow) |
 | `zensical build -s -f mkdocs.models.yml` | Build the in-app "Help" model documentation pages into `netbox_custom_objects/static/docs/models/` (run before `collectstatic`; the release workflow does this automatically before packaging) |
 
@@ -269,7 +269,7 @@ Do not claim a test passed without running it.
 GitHub Actions workflows in `.github/workflows/`:
 
 - **`test.yml`** — Runs on pull requests and pushes to `main` and `feature`. Two jobs:
-  - *Lint*: `pre-commit run --all-files`, then builds the in-app model help pages (`zensical build -f mkdocs.models.yml`) and checks they exist.
+  - *Lint*: `pre-commit run --all-files`, then builds the in-app model help pages (`zensical build -f mkdocs.models.yml`) and checks they exist, then builds the user docs with `zensical build -s`.
   - *Test*: runs only if lint passes. Matrix of Python 3.12 / 3.13 / 3.14 × NetBox `v4.5.2` (the `min_version` floor), `v4.7.3` and `main`, plus NetBox `feature` and `main` with netbox-branching installed (`configuration_branching`). The branching leg is split into two jobs: the tests tagged `branching` (`--tag branching`) and the rest (`--exclude-tag branching`). Coverage is collected on one leg. Spins up PostgreSQL + Redis services, installs the plugin editable, and runs `python netbox/manage.py test netbox_custom_objects.tests`.
 - **`release.yaml`** — Runs on published GitHub releases. Builds the in-app model help pages, then sdist + wheel with `python -m build`, and publishes to PyPI using OIDC trusted publishing.
 - **`claude-review.yml`** — Claude Code automation hook; triggers on PR comments mentioning `@claude` from collaborators.
@@ -356,5 +356,5 @@ Where this repository deliberately differs from what the scaffold renders. Keep 
 - Compatibility matrix: [`COMPATIBILITY.md`](./COMPATIBILITY.md)
 - Security policy: [`SECURITY.md`](./SECURITY.md)
 - Scaffold: <https://github.com/netboxlabs/netbox-plugin-scaffold>
-- User docs (mkdocs): [`docs/`](./docs/)
+- User docs (zensical): [`docs/`](./docs/)
 - NetBox plugin docs: <https://netboxlabs.com/docs/netbox/plugins/>

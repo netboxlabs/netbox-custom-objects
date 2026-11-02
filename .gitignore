@@ -71,6 +71,6 @@ Thumbs.db
 # works on the generated repo. Do not add it to this ignore list.
 
 # Plugin-specific
-# In-app model documentation, built from docs_models/ by `mkdocs build -f mkdocs.models.yml`.
+# In-app model documentation, built from docs/models/ by `zensical build -f mkdocs.models.yml`.
 netbox_custom_objects/static/
 .claude/settings.local.json
