@@ -1534,16 +1534,7 @@ class ObjectChangeAPITestCase(CustomObjectsTestCase, TestCase):
             required=True,
         )
         self.model = self.cot.get_model()
-        self.instance = self.model.objects.create(name='Logged')
-        ObjectChange.objects.create(
-            user_name='tester',
-            request_id=uuid.uuid4(),
-            action=ObjectChangeActionChoices.ACTION_CREATE,
-            changed_object_type=ObjectType.objects.get_for_model(self.model),
-            changed_object_id=self.instance.pk,
-            object_repr=str(self.instance),
-            postchange_data={'name': 'Logged'},
-        )
+        self.instance = self._create_logged_object('Logged')
 
         perm = ObjectPermission(name=f'objectchange-view-{uuid.uuid4().hex[:8]}', actions=['view'])
         perm.save()
@@ -1553,6 +1544,25 @@ class ObjectChangeAPITestCase(CustomObjectsTestCase, TestCase):
     def tearDown(self):
         CustomObjectType.clear_model_cache()
         super().tearDown()
+
+    def _create_logged_object(self, name):
+        instance = self.model.objects.create(name=name)
+        ObjectChange.objects.create(
+            user_name='tester',
+            request_id=uuid.uuid4(),
+            action=ObjectChangeActionChoices.ACTION_CREATE,
+            changed_object_type=ObjectType.objects.get_for_model(self.model),
+            changed_object_id=instance.pk,
+            object_repr=str(instance),
+            postchange_data={'name': name},
+        )
+        return instance
+
+    def _count_list_queries(self):
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.get(reverse('core-api:objectchange-list'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return len(queries)
 
     def test_changelog_serializes_custom_object(self):
         """Listing object changes must serialize the changed custom object without logging an error."""
@@ -1564,3 +1574,13 @@ class ObjectChangeAPITestCase(CustomObjectsTestCase, TestCase):
         changed_object = response.data['results'][0]['changed_object']
         self.assertEqual(changed_object['id'], self.instance.pk)
         self.assertEqual(changed_object['display'], 'Logged')
+
+    def test_changelog_query_count_does_not_grow_with_custom_object_changes(self):
+        """The serializer for a custom object type is built once per request, not once per change."""
+        self._count_list_queries()  # Warm up caches
+        baseline = self._count_list_queries()
+
+        for i in range(3):
+            self._create_logged_object(f'Logged {i}')
+
+        self.assertEqual(self._count_list_queries(), baseline)
