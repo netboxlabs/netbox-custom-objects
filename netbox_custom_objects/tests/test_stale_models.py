@@ -7,6 +7,7 @@ from unittest import mock
 
 from django.apps import apps
 from django.core.cache import cache
+from django.db.utils import OperationalError
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework import status
@@ -258,19 +259,62 @@ class StaleThroughModelEvictionTestCase(CustomObjectsTestCase, TestCase):
         self.assertTrue(self._registered(through_model))
         self.assertEqual(through_model._meta.get_field('target').related_model._meta.model_name, 'site')
 
-    def test_eviction_error_is_retried_on_the_next_check(self):
+    def test_eviction_database_error_is_retried_on_the_next_check(self):
         field = self._create_devices_field()
         stale_through_model = self._change_field_in_another_worker(field, field.delete)
 
-        with (
-            mock.patch.object(CustomObjectType, 'get_model', side_effect=ValueError('boom')),
-            self.assertLogs('netbox_custom_objects.stale_models', 'WARNING'),
-        ):
+        with mock.patch.object(CustomObjectType, 'get_model', side_effect=OperationalError('database down')):
             stale_models.evict_deleted_models()
         self.assertTrue(self._registered(stale_through_model))
 
         stale_models.evict_deleted_models()
         self.assertFalse(self._registered(stale_through_model))
+
+    def test_eviction_error_for_one_type_does_not_block_others(self):
+        broken = self.create_custom_object_type(name='broken', slug='broken')
+        self.create_custom_object_type_field(broken, name='name', type='text', primary=True)
+        broken_field = self.create_custom_object_type_field(
+            broken, name='devices', type='multiobject', related_object_type=self.get_device_object_type()
+        )
+        broken.get_model()
+        broken_through_model = apps.all_models[APP_LABEL][broken_field.through_model_name.lower()]
+        self.addCleanup(CustomObjectType.clear_model_cache, broken.pk, all_branches=True)
+        self.addCleanup(CustomObjectType._unregister_model_names, [broken_through_model.__name__])
+        key = stale_models._REMOVED_THROUGH_MODEL_CACHE_KEY.format(broken_through_model._meta.model_name)
+        self.addCleanup(cache.delete, key)
+        cache.set(key, broken.pk, None)
+        field = self._create_devices_field()
+        stale_through_model = self._change_field_in_another_worker(field, field.delete)
+        real_get_model = CustomObjectType.get_model
+
+        def get_model(cot, *args, **kwargs):
+            if cot.pk == broken.pk:
+                raise ValueError('broken')
+            return real_get_model(cot, *args, **kwargs)
+
+        with (
+            mock.patch.object(CustomObjectType, 'get_model', autospec=True, side_effect=get_model),
+            self.assertLogs('netbox_custom_objects.stale_models', 'WARNING'),
+        ):
+            stale_models.evict_deleted_models()
+            # Not retried until something else changes.
+            with self.assertNoLogs('netbox_custom_objects.stale_models', 'WARNING'):
+                stale_models.evict_deleted_models()
+
+        self.assertFalse(self._registered(stale_through_model))
+        self.assertTrue(self._registered(broken_through_model))
+
+    def test_eviction_keeps_through_model_built_for_a_branch(self):
+        field = self._create_devices_field()
+        stale_through_model = self._change_field_in_another_worker(field, field.delete)
+        # A branch's field of the same name, whose through model is registered
+        # because main has none.
+        stale_through_model._context_branch_id = 1
+        self.addCleanup(setattr, stale_through_model, '_context_branch_id', None)
+
+        stale_models.evict_deleted_models()
+
+        self.assertTrue(self._registered(stale_through_model))
 
     def test_deleting_a_multi_object_field_signals_other_workers(self):
         field = self._create_devices_field()

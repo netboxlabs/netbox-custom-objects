@@ -2857,8 +2857,11 @@ class CustomObjectType(NetBoxModel):
         cls._unregister_model_names(names, branch_id=branch_id)
 
     @classmethod
-    def _unregister_model_names(cls, names, branch_id=None):
-        """Remove the classes registered under *names*; see ``unregister_model``."""
+    def _unregister_model_names(cls, names, branch_id=None, main_only=False):
+        """
+        Remove the classes registered under *names*; see ``unregister_model``.
+        With ``main_only``, only classes built for main are removed.
+        """
         with cls._global_lock:
             registry = apps.all_models.get(APP_LABEL, {})
             for name in names:
@@ -2866,7 +2869,10 @@ class CustomObjectType(NetBoxModel):
                 registered = registry.get(name)
                 if registered is None:
                     continue
-                if branch_id is None or getattr(registered, '_context_branch_id', None) == branch_id:
+                context_branch_id = getattr(registered, '_context_branch_id', None)
+                if main_only and context_branch_id is not None:
+                    continue
+                if branch_id is None or context_branch_id == branch_id:
                     del registry[name]
 
         apps.clear_cache()
@@ -4459,7 +4465,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     _old_through_model_name = (
                         f'Through_{through_table_name_for(self.custom_object_type_id, self._original_name)}'
                     )
-                    CustomObjectType._unregister_model_names([_old_through_model_name])
+                    CustomObjectType._unregister_model_names([_old_through_model_name], main_only=True)
                     _signal_args = (self.custom_object_type_id, _old_through_model_name)
                     transaction.on_commit(lambda: signal_through_model_removed(*_signal_args))
 

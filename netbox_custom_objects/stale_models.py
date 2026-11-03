@@ -141,16 +141,32 @@ def _evict_removed_through_models():
     # field added again since, under the same name, gets a through model of that
     # name again; only the regenerated model's own through models are current.
     current = set()
+    failed = set()
     try:
-        for cot in CustomObjectType.objects.filter(pk__in=set(marked.values())):
-            current.update(cot.get_model()._through_models)
-    except Exception:
-        logger.warning('Could not regenerate models to evict removed through models', exc_info=True)
+        cots = list(CustomObjectType.objects.filter(pk__in=set(marked.values())))
+    except (OperationalError, ProgrammingError):
         return False
+    for cot in cots:
+        try:
+            current.update(cot.get_model()._through_models)
+        except (OperationalError, ProgrammingError):
+            return False
+        except Exception:
+            # Not worth retrying on every request; leave this type's through models.
+            logger.warning(
+                'Could not regenerate the model of Custom Object Type %s to evict its removed through models',
+                cot.pk,
+                exc_info=True,
+            )
+            failed.add(cot.pk)
 
-    stale = [keys[key] for key in marked if registry.get(keys[key]) not in current]
+    stale = [
+        keys[key] for key, cot_id in marked.items() if cot_id not in failed and registry.get(keys[key]) not in current
+    ]
     if stale:
-        CustomObjectType._unregister_model_names(stale)
+        # Only main's: changes in a branch don't signal, and a branch's through
+        # model registered under a marked name belongs to a field of the branch.
+        CustomObjectType._unregister_model_names(stale, main_only=True)
         logger.debug('Unregistered removed through models %s', stale)
     return True
 
