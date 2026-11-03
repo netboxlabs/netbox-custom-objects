@@ -7,12 +7,13 @@ keep it registered, so it stays in other models' ``_meta.related_objects``, and 
 later delete of a tag, owner or related object there queries the dropped table.
 Changed types don't have this problem: ``get_model()`` notices a changed
 ``cache_timestamp`` the next time it's called, but a deleted type's model is never
-looked up again.  Deleting a multi-object field has the same problem with the
-field's through model: regenerating the type's model doesn't unregister it.
+looked up again.  Deleting or renaming a multi-object field has the same problem
+with the field's old through model: regenerating the type's model doesn't
+unregister it.
 
-So once the delete commits, the deleting process marks the type's ID, or the
-field's through model, as deleted in NetBox's shared cache and writes a fresh
-token there.  Each worker compares the token with the last one it saw at the start
+So once the change commits, the process that made it marks the type's ID, or the
+field's old through model, in NetBox's shared cache and writes a fresh token
+there.  Each worker compares the token with the last one it saw at the start
 of every request and job.  When it changes, the worker unregisters the marked
 models it has registered.  Only marked models are evicted: a type or field another
 thread is creating, but hasn't committed yet, is missing from the database too,
@@ -24,7 +25,6 @@ import uuid
 
 from django.apps import apps
 from django.core.cache import cache
-from django.db.models import Q
 from django.db.utils import OperationalError, ProgrammingError
 
 from netbox_custom_objects.constants import APP_LABEL
@@ -36,12 +36,12 @@ __all__ = (
     'connect_stale_model_eviction',
     'evict_deleted_models',
     'signal_custom_object_type_deleted',
-    'signal_multi_object_field_deleted',
+    'signal_through_model_removed',
 )
 
 _TOKEN_CACHE_KEY = 'netbox_custom_objects.deleted_types_token'
 _DELETED_TYPE_CACHE_KEY = 'netbox_custom_objects.deleted_type.{}'
-_DELETED_THROUGH_MODEL_CACHE_KEY = 'netbox_custom_objects.deleted_through_model.{}'
+_REMOVED_THROUGH_MODEL_CACHE_KEY = 'netbox_custom_objects.removed_through_model.{}'
 
 # The token this process last acted on.  A random token rather than a counter, so a
 # cache flush or restart can't make a later delete look like one already seen.
@@ -59,21 +59,22 @@ def signal_custom_object_type_deleted(cot_id):
         logger.warning('Could not signal a Custom Object Type deletion to other workers', exc_info=True)
 
 
-def signal_multi_object_field_deleted(cot_id, field_name, through_model_name):
-    """Tell every worker that this multi-object field, and its through model, were deleted."""
+def signal_through_model_removed(cot_id, through_model_name):
+    """
+    Tell every worker that this through model of the Custom Object Type with this
+    ID is gone, because its multi-object field was deleted or renamed.
+    """
     try:
-        # The field identifies the mark's owner, so eviction can tell a field added
-        # again under the same name (and so the same through model name).
-        cache.set(_DELETED_THROUGH_MODEL_CACHE_KEY.format(through_model_name.lower()), (cot_id, field_name), None)
+        cache.set(_REMOVED_THROUGH_MODEL_CACHE_KEY.format(through_model_name.lower()), cot_id, None)
         cache.set(_TOKEN_CACHE_KEY, uuid.uuid4().hex, None)
     except Exception:  # cache down: other workers keep the stale model until restart
-        logger.warning('Could not signal a multi-object field deletion to other workers', exc_info=True)
+        logger.warning('Could not signal a removed through model to other workers', exc_info=True)
 
 
 def evict_deleted_models(**kwargs):
     """
     Unregister generated models of Custom Object Types, and through models of
-    multi-object fields, deleted (in any process) since this process last checked.
+    multi-object fields, removed (in any process) since this process last checked.
     """
     global _seen_token
     try:
@@ -84,7 +85,7 @@ def evict_deleted_models(**kwargs):
         return
 
     # Either can fail while the cache or database is unavailable; try again next time.
-    if _evict_deleted_types() and _evict_deleted_through_models():
+    if _evict_deleted_types() and _evict_removed_through_models():
         _seen_token = token
 
 
@@ -117,12 +118,13 @@ def _evict_deleted_types():
     return True
 
 
-def _evict_deleted_through_models():
-    from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+def _evict_removed_through_models():
+    from netbox_custom_objects.models import CustomObjectType
 
+    registry = apps.all_models.get(APP_LABEL, {})
     keys = {
-        _DELETED_THROUGH_MODEL_CACHE_KEY.format(model_name): model_name
-        for model_name in list(apps.all_models.get(APP_LABEL, {}))
+        _REMOVED_THROUGH_MODEL_CACHE_KEY.format(model_name): model_name
+        for model_name in list(registry)
         if model_name.startswith('through_')
     }
     try:
@@ -131,37 +133,31 @@ def _evict_deleted_through_models():
         return False
     if not marked:
         return True
-
-    # The field may have been added again since (or the ID reused after a database restore).
-    query = Q()
-    for cot_id, field_name in marked.values():
-        query |= Q(custom_object_type_id=cot_id, name=field_name)
-    try:
-        existing = set(CustomObjectTypeField.objects.filter(query).values_list('custom_object_type_id', 'name'))
-    except (OperationalError, ProgrammingError):
+    if apps.get_app_config(APP_LABEL)._dynamic_model_creation_unsafe():
         return False
 
-    deleted = {key: cot_id for key, (cot_id, field_name) in marked.items() if (cot_id, field_name) not in existing}
-    if not deleted:
-        return True
-
-    # Regenerate the types' models first: the registered ones still have the
-    # fields, so they stay in the target models' _meta.related_objects too.
+    # Regenerate the types' models first: the registered ones may still have the
+    # fields, so they stay in the target models' _meta.related_objects too.  A
+    # field added again since, under the same name, gets a through model of that
+    # name again; only the regenerated model's own through models are current.
+    current = set()
     try:
-        for cot in CustomObjectType.objects.filter(pk__in=set(deleted.values())):
-            cot.get_model()
-    except (OperationalError, ProgrammingError):
+        for cot in CustomObjectType.objects.filter(pk__in=set(marked.values())):
+            current.update(cot.get_model()._through_models)
+    except Exception:
+        logger.warning('Could not regenerate models to evict removed through models', exc_info=True)
         return False
 
-    through_model_names = [keys[key] for key in deleted]
-    CustomObjectType._unregister_model_names(through_model_names)
-    logger.debug('Unregistered through models %s of deleted multi-object fields', through_model_names)
+    stale = [keys[key] for key in marked if registry.get(keys[key]) not in current]
+    if stale:
+        CustomObjectType._unregister_model_names(stale)
+        logger.debug('Unregistered removed through models %s', stale)
     return True
 
 
 def connect_stale_model_eviction():
     """
-    Check for deleted types and fields at the start of every request and job.
+    Check for removed types and through models at the start of every request and job.
 
     ``request_started`` fires before any middleware, so no netbox-branching branch
     is active yet and the existence check reads main, where the generated models

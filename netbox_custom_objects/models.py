@@ -4450,6 +4450,18 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             if renamed:
                 updated_model = self.custom_object_type.get_model(no_cache=True)
                 heal_unmasked_fields(self.custom_object_type, updated_model, schema_conn)
+                # The through table was renamed, so the through model registered under
+                # the old name is stale, here and in other workers (see stale_models).
+                # A branch's rename leaves main's table alone.
+                if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and schema_conn is connection:
+                    from netbox_custom_objects.stale_models import signal_through_model_removed
+
+                    _old_through_model_name = (
+                        f'Through_{through_table_name_for(self.custom_object_type_id, self._original_name)}'
+                    )
+                    CustomObjectType._unregister_model_names([_old_through_model_name])
+                    _signal_args = (self.custom_object_type_id, _old_through_model_name)
+                    transaction.on_commit(lambda: signal_through_model_removed(*_signal_args))
 
         # FK constraint runs after commit: inside the transaction it would hit
         # "pending trigger events" and fight a branch merge's row ordering.
@@ -4555,12 +4567,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         if _dropped_through_model is not None:
             if schema_conn is connection:
                 CustomObjectType._unregister_model_names([_dropped_through_model.__name__])
-                # Other workers still have it registered; they evict it once the
-                # delete is committed (see stale_models).
-                from netbox_custom_objects.stale_models import signal_multi_object_field_deleted
-
-                _signal_args = (self.custom_object_type_id, self.name, self.through_model_name)
-                transaction.on_commit(lambda: signal_multi_object_field_deleted(*_signal_args))
             else:
                 # In a branch the captured through is normally main's, whose table
                 # is untouched, so it stays; the removal above built a fresh through
@@ -4575,6 +4581,14 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     else:
                         registry[through_name] = _dropped_through_model
                 apps.clear_cache()
+
+        # Other workers may still have the through model registered, whether or not
+        # this one had; they evict it once the delete is committed (see stale_models).
+        if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and schema_conn is connection:
+            from netbox_custom_objects.stale_models import signal_through_model_removed
+
+            _signal_args = (self.custom_object_type_id, self.through_model_name)
+            transaction.on_commit(lambda: signal_through_model_removed(*_signal_args))
 
         # Clear the model cache for this CustomObjectType when a field is deleted
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
