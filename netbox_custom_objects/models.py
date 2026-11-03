@@ -5279,7 +5279,8 @@ def _wire_polymorphic_reverse_descriptors(field_instance, object_types=None):
     has a non-empty ``related_name``, and when types are added to a live field.
 
     A descriptor another field placed is replaced only if that field no longer
-    exposes it, which this process may not have been told (see
+    exposes it, which this process may not have been told.  Which descriptor is on
+    the class matters little: each looks up the name's current owner when used (see
     ``_PolymorphicReverseDescriptor``).
 
     Target classes are shared by every branch, so only main wires them; a branch's
@@ -5298,27 +5299,29 @@ def _wire_polymorphic_reverse_descriptors(field_instance, object_types=None):
         target_cls = ot.model_class()
         if target_cls is None:
             continue
-        # Target classes are shared by every thread; check and set together.
+        existing = getattr(target_cls, related_name, None)
+        if existing is not None:
+            if not isinstance(existing, _PolymorphicReverseDescriptor):
+                logger.warning(
+                    'Skipping reverse descriptor "%s" on %s: a non-CO attribute already exists '
+                    'with that name. Change the related_name to avoid this conflict.',
+                    related_name,
+                    target_cls.__name__,
+                )
+                continue
+            # Query outside the lock, which every get_model() waits on.
+            if existing.field_pk != field_instance.pk and existing.is_live(target_cls):
+                logger.warning(
+                    'Skipping reverse descriptor "%s" on %s: already owned by a different CO '
+                    'field. Change the related_name to avoid this conflict.',
+                    related_name,
+                    target_cls.__name__,
+                )
+                continue
+        # Target classes are shared by every thread; replace only what was checked.
         with CustomObjectType._global_lock:
-            existing = getattr(target_cls, related_name, None)
-            if existing is not None:
-                if not isinstance(existing, _PolymorphicReverseDescriptor):
-                    logger.warning(
-                        'Skipping reverse descriptor "%s" on %s: a non-CO attribute already exists '
-                        'with that name. Change the related_name to avoid this conflict.',
-                        related_name,
-                        target_cls.__name__,
-                    )
-                    continue
-                if existing.field_pk != field_instance.pk and existing.is_live(target_cls):
-                    logger.warning(
-                        'Skipping reverse descriptor "%s" on %s: already owned by a different CO '
-                        'field. Change the related_name to avoid this conflict.',
-                        related_name,
-                        target_cls.__name__,
-                    )
-                    continue
-            setattr(target_cls, related_name, descriptor)
+            if getattr(target_cls, related_name, None) is existing:
+                setattr(target_cls, related_name, descriptor)
 
 
 def _unwire_polymorphic_reverse_descriptors(field_instance, object_types=None, related_name=None):
@@ -5332,8 +5335,10 @@ def _unwire_polymorphic_reverse_descriptors(field_instance, object_types=None, r
     from a live field, and from ``save()`` when ``related_name`` is renamed.
 
     The descriptors are removed once the change commits, so a rollback keeps them.
-    Until then they check the database themselves, so within the transaction they
-    are already missing.
+    Until then they look up the name's owner themselves, so within the transaction
+    they already behave as removed.  Only the descriptors on the classes now are
+    removed: one placed again later in the transaction (the type added back, the name
+    renamed back, or another field taking it over) stays.
 
     Main-only, like wiring: main still has the field until a branch's change merges.
     """
@@ -5342,20 +5347,24 @@ def _unwire_polymorphic_reverse_descriptors(field_instance, object_types=None, r
     name = related_name if related_name is not None else field_instance.related_name
     if not name:
         return
-    field_pk = field_instance.pk
-    ots = list(object_types if object_types is not None else field_instance.related_object_types.all())
+    ots = object_types if object_types is not None else field_instance.related_object_types.all()
+    placed = []
+    for ot in ots:
+        target_cls = ot.model_class()
+        if target_cls is None:
+            continue
+        attr = target_cls.__dict__.get(name)
+        if isinstance(attr, _PolymorphicReverseDescriptor) and attr.field_pk == field_instance.pk:
+            placed.append((target_cls, attr))
 
     def remove():
-        for ot in ots:
-            target_cls = ot.model_class()
-            if target_cls is None:
-                continue
-            with CustomObjectType._global_lock:
-                attr = target_cls.__dict__.get(name)
-                if isinstance(attr, _PolymorphicReverseDescriptor) and attr.field_pk == field_pk:
+        with CustomObjectType._global_lock:
+            for target_cls, attr in placed:
+                if target_cls.__dict__.get(name) is attr:
                     delattr(target_cls, name)
 
-    transaction.on_commit(remove)
+    if placed:
+        transaction.on_commit(remove)
 
 
 # Signal handlers to clear model cache when definitions change

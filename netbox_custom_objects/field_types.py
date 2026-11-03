@@ -2623,13 +2623,15 @@ class _PolymorphicReverseDescriptor:
     Base for the reverse descriptors of polymorphic fields.
 
     Injected onto target model classes by _wire_polymorphic_reverse_descriptors(), but
-    only in the process that wires or unwires it: in other worker processes it outlives
-    the field's deletion, a change of its related_name or the removal of the target's
-    type.  So it checks that its field still has it before every use, and is otherwise
-    missing (raises AttributeError).
+    only in the process that wires or unwires it.  In other worker processes the one on
+    a class can be stale: its field deleted or renamed, its related_name changed, the
+    target's type removed from it, or the name taken over by another field.  So it
+    doesn't trust the field that placed it: each use looks up the polymorphic field that
+    has this related_name for the target's type now, and builds the manager from that
+    field.  If there's none, the accessor is missing (raises AttributeError).
 
-    Only main's fields count: the target classes are main's, and in a branch that
-    changed the field the managers return no objects instead (#766).
+    In a branch it uses the field that placed it, whose manager returns no objects if
+    the branch removed the field (#766): the target classes and their accessors are main's.
     """
 
     def __init__(self, cot_pk, field_pk, related_name):
@@ -2637,18 +2639,22 @@ class _PolymorphicReverseDescriptor:
         self.field_pk = field_pk
         self.related_name = related_name
 
-    def is_live(self, target_model):
-        """True if the field still exposes this accessor on *target_model*."""
+    def _fields(self, target_model):
         from netbox_custom_objects.models import CustomObjectTypeField
 
         return CustomObjectTypeField.objects.filter(
-            pk=self.field_pk,
             is_polymorphic=True,
+            type__in=(CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT),
             related_name=self.related_name,
             related_object_types__pk=ContentType.objects.get_for_model(target_model).pk,
-        ).exists()
+        )
+
+    def is_live(self, target_model):
+        """True if the field that placed this descriptor still has its name on *target_model*."""
+        return self._fields(target_model).filter(pk=self.field_pk).exists()
 
     def _manager(self, instance):
+        """The manager of the field that placed this descriptor."""
         raise NotImplementedError
 
     def __get__(self, instance, owner=None):
@@ -2656,9 +2662,15 @@ class _PolymorphicReverseDescriptor:
             return self
         from netbox_custom_objects.models import CustomObjectType
 
-        if CustomObjectType._active_branch_id() is None and not self.is_live(type(instance)):
+        if CustomObjectType._active_branch_id() is not None:
+            return self._manager(instance)
+        # Validation allows one field per name and target type; order in case of more.
+        field = self._fields(type(instance)).order_by('pk').first()
+        if field is None:
             raise AttributeError(f'{type(instance).__name__!r} object has no attribute {self.related_name!r}')
-        return self._manager(instance)
+        if field.type == CustomFieldTypeChoices.TYPE_OBJECT:
+            return PolymorphicObjectReverseManager(instance, field.custom_object_type_id, field.name)
+        return PolymorphicMultiObjectReverseManager(instance, field.custom_object_type_id, field.through_model_name)
 
 
 class PolymorphicObjectReverseDescriptor(_PolymorphicReverseDescriptor):

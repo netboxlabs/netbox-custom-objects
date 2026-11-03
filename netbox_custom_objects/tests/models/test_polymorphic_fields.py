@@ -1188,7 +1188,8 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
         field_a.related_object_types.set([self.site_ot])
 
         # Deleting field_a must not touch the descriptor owned by field_b.
-        _unwire_polymorphic_reverse_descriptors(field_a)
+        with self.captureOnCommitCallbacks(execute=True):
+            _unwire_polymorphic_reverse_descriptors(field_a)
         self.assertIs(
             Site.__dict__.get('co_shared_ref'),
             descriptor_b,
@@ -1280,3 +1281,61 @@ class StaleReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
 
         self.assertIn('co_stale_rev', Site.__dict__)
         self.assertTrue(hasattr(self.site, 'co_stale_rev'))
+
+    def _create_cot(self, name):
+        cot = CustomObjectType.objects.create(name=name, slug=name.replace('_', '-'))
+        CustomObjectTypeField.objects.create(custom_object_type=cot, name='name', type='text', primary=True)
+        return cot
+
+    def _link(self, cot, name='target'):
+        co = cot.get_model().objects.create(name=f'{cot.name}-co')
+        setattr(co, name, self.site)
+        co.save()
+        return co
+
+    def test_accessor_taken_over_in_another_worker_returns_new_owners_objects(self):
+        stale = self._delete_field_in_another_worker(self._create_field())
+        cot_b = self._create_cot('stale_rev_b')
+        self._create_field(cot=cot_b)
+        co = self._link(cot_b)
+        # Another worker wired the new field; this one still has the old accessor.
+        setattr(Site, 'co_stale_rev', stale)
+
+        self.assertEqual([obj.pk for obj in self.site.co_stale_rev.all()], [co.pk])
+
+    def test_accessor_kept_when_delete_and_reuse_is_rolled_back(self):
+        field = self._create_field()
+        co = self._link(self.cot)
+        cot_b = self._create_cot('stale_rev_b')
+
+        with self.captureOnCommitCallbacks(execute=True), self.assertRaises(RuntimeError), transaction.atomic():
+            field.delete()
+            self._create_field(cot=cot_b)
+            raise RuntimeError
+
+        self.assertEqual([obj.pk for obj in self.site.co_stale_rev.all()], [co.pk])
+
+    def test_accessor_kept_when_type_removed_and_added_back_in_one_transaction(self):
+        field = self._create_field()
+        co = self._link(self.cot)
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            field.related_object_types.remove(self.site_ot)
+            field.related_object_types.add(self.site_ot)
+
+        self.assertIn('co_stale_rev', Site.__dict__)
+        self.assertEqual([obj.pk for obj in self.site.co_stale_rev.all()], [co.pk])
+
+    def test_accessor_kept_when_related_name_renamed_back_in_one_transaction(self):
+        field = self._create_field()
+        co = self._link(self.cot)
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            for related_name in ('co_renamed_rev', 'co_stale_rev'):
+                field = CustomObjectTypeField.objects.get(pk=field.pk)
+                field.related_name = related_name
+                field.save()
+                self.cot.get_model()
+
+        self.assertIn('co_stale_rev', Site.__dict__)
+        self.assertEqual([obj.pk for obj in self.site.co_stale_rev.all()], [co.pk])

@@ -426,8 +426,8 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
                     _('Polymorphic object fields must specify at least one related object type.'),
                 )
 
-            # For new instances the model's clean() can't check the related_name against
-            # the targets (they're saved after the field); check it against the submitted ones.
+            # The model's clean() checks the related_name against the saved targets, so
+            # a new field has none and an edit sees the old ones; check the submitted ones.
             if related_name and related_object_types:
                 candidate = copy.copy(self.instance)
                 candidate.is_polymorphic = True
