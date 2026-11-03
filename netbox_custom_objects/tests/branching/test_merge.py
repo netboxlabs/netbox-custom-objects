@@ -231,6 +231,42 @@ class FieldAttributeChangesTestCase(BranchingTestBase, _TestBase):
             'required at the form layer only (field_types.py hardcodes null=True).',
         )
 
+    def test_field_added_in_main_after_merging_field_added_in_branch(self):
+        """Main's next_schema_id isn't merged, so a new field must still skip the merged field's schema_id."""
+        with event_tracking(self.request):
+            cot = CustomObjectType.objects.create(name='sprocket', slug='sprocket')
+            CustomObjectTypeField.objects.create(custom_object_type=cot, name='a', type='text')
+
+        branch = _provision_branch('Schema ID Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+        with activate_branch(branch), event_tracking(branch_request):
+            CustomObjectTypeField.objects.create(custom_object_type_id=cot.pk, name='b', type='text')
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        with event_tracking(self.request):
+            field = CustomObjectTypeField.objects.create(custom_object_type_id=cot.pk, name='c', type='text')
+        self.assertEqual(field.schema_id, 3)
+
+    def test_field_added_in_main_after_merging_type_created_in_branch(self):
+        """A type created in a branch is merged with next_schema_id=0, behind its fields' schema_ids."""
+        branch = _provision_branch('Schema ID Type Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+        with activate_branch(branch), event_tracking(branch_request):
+            cot = CustomObjectType.objects.create(name='cog', slug='cog')
+            CustomObjectTypeField.objects.create(custom_object_type=cot, name='x', type='text')
+            CustomObjectTypeField.objects.create(custom_object_type=cot, name='y', type='text')
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        with event_tracking(self.request):
+            field = CustomObjectTypeField.objects.create(custom_object_type_id=cot.pk, name='z', type='text')
+        self.assertEqual(field.schema_id, 3)
+
 
 # ── Tags + journal entries survive merge ──────────────────────────────────────
 

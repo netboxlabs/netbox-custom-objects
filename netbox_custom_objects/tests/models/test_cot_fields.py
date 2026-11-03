@@ -292,6 +292,26 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
         with self.assertRaises(Exception):
             self.create_custom_object_type_field(self.custom_object_type, name='test_field', type='integer')
 
+    def test_schema_id_skips_ids_in_use_when_counter_lags(self):
+        """A new field's schema_id is above every existing one, even if next_schema_id is behind, as after a merge."""
+        self.create_custom_object_type_field(self.custom_object_type, name='a', type='text')
+        self.create_custom_object_type_field(self.custom_object_type, name='b', type='text')
+        CustomObjectType.objects.filter(pk=self.custom_object_type.pk).update(next_schema_id=1)
+
+        field = self.create_custom_object_type_field(self.custom_object_type, name='c', type='text')
+
+        self.assertEqual(field.schema_id, 3)
+        self.custom_object_type.refresh_from_db()
+        self.assertEqual(self.custom_object_type.next_schema_id, 3)
+
+    def test_schema_id_not_reused_after_field_delete(self):
+        self.create_custom_object_type_field(self.custom_object_type, name='a', type='text')
+        self.create_custom_object_type_field(self.custom_object_type, name='b', type='text').delete()
+
+        field = self.create_custom_object_type_field(self.custom_object_type, name='c', type='text')
+
+        self.assertEqual(field.schema_id, 3)
+
     def test_custom_object_type_field_validation_regex_text_only(self):
         """Test that regex validation can only be set on text fields."""
         # Should work for text field

@@ -17,7 +17,7 @@ from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.core.validators import MinValueValidator, RegexValidator, ValidationError
 from django.db import DEFAULT_DB_ALIAS, IntegrityError, connection, connections, models, transaction
-from django.db.models import F, ProtectedError, Q
+from django.db.models import F, Max, ProtectedError, Q
 from django.db.models.fields.related import ForeignKey, ManyToManyField
 from django.db.models.fields.related_descriptors import ReverseManyToOneDescriptor
 from django.db.models.functions import Lower
@@ -4299,7 +4299,15 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     .select_for_update()
                     .get(pk=self.custom_object_type_id)
                 )
-                new_schema_id = cot.next_schema_id + 1
+                # The counter can lag behind the fields: update() isn't change-logged, so merging a
+                # branch brings in its fields' schema_ids but not the counter. Skip any ID in use.
+                highest_in_use = (
+                    CustomObjectTypeField.objects.using(schema_conn.alias)
+                    .filter(custom_object_type_id=self.custom_object_type_id)
+                    .aggregate(Max('schema_id'))['schema_id__max']
+                    or 0
+                )
+                new_schema_id = max(cot.next_schema_id, highest_in_use) + 1
                 # update() avoids post_save → clear_model_cache; the cache must
                 # remain valid until this field's own get_model() below.
                 CustomObjectType.objects.using(schema_conn.alias).filter(pk=self.custom_object_type_id).update(
