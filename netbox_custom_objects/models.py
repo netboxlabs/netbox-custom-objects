@@ -4555,6 +4555,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         if _dropped_through_model is not None:
             if schema_conn is connection:
                 CustomObjectType._unregister_model_names([_dropped_through_model.__name__])
+                # Other workers still have it registered; they evict it once the
+                # delete is committed (see stale_models).
+                from netbox_custom_objects.stale_models import signal_multi_object_field_deleted
+
+                _signal_args = (self.custom_object_type_id, self.name, self.through_model_name)
+                transaction.on_commit(lambda: signal_multi_object_field_deleted(*_signal_args))
             else:
                 # In a branch the captured through is normally main's, whose table
                 # is untouched, so it stays; the removal above built a fresh through

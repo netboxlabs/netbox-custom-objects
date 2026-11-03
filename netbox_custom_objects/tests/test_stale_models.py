@@ -14,6 +14,7 @@ from extras.models import Tag
 from netbox_custom_objects import stale_models
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType
+from utilities.testing.utils import create_test_device
 
 from .base import CustomObjectsTestCase, create_token
 
@@ -69,7 +70,7 @@ class StaleModelEvictionTestCase(CustomObjectsTestCase, TestCase):
         deleted = self.create_simple_custom_object_type(name='gone', slug='gone')
         stale_model = self._delete_type_in_another_worker(deleted)
 
-        stale_models.evict_deleted_custom_object_types()
+        stale_models.evict_deleted_models()
 
         self.assertFalse(self._registered(stale_model))
         self.assertTrue(self._registered(kept_model))
@@ -84,7 +85,7 @@ class StaleModelEvictionTestCase(CustomObjectsTestCase, TestCase):
         deleted = self.create_simple_custom_object_type(name='gone', slug='gone')
         stale_model = self._delete_type_in_another_worker(deleted)
 
-        stale_models.evict_deleted_custom_object_types()
+        stale_models.evict_deleted_models()
 
         self.assertFalse(self._registered(stale_model))
         self.assertTrue(self._registered(pending_model))
@@ -105,7 +106,116 @@ class StaleModelEvictionTestCase(CustomObjectsTestCase, TestCase):
 
     def test_check_is_free_when_nothing_was_deleted(self):
         stale_models.signal_custom_object_type_deleted(0)
-        stale_models.evict_deleted_custom_object_types()  # acts on the new token
+        stale_models.evict_deleted_models()  # acts on the new token
 
         with self.assertNumQueries(0):
-            stale_models.evict_deleted_custom_object_types()
+            stale_models.evict_deleted_models()
+
+
+class StaleThroughModelEvictionTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Through models of multi-object fields deleted in another worker process are
+    evicted from this process's app registry too.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+        self.client = APIClient()
+        self.header = {'HTTP_AUTHORIZATION': f'Token {create_token(self.user)}'}
+        self.cot = self.create_custom_object_type(name='widget', slug='widget')
+        self.create_custom_object_type_field(self.cot, name='name', type='text', primary=True)
+
+    def _registered(self, model):
+        return apps.all_models.get(APP_LABEL, {}).get(model._meta.model_name) is model
+
+    def _delete_field_in_another_worker(self, field):
+        """
+        Delete ``field`` and put back this process's classes from before the delete,
+        the state a worker that didn't handle the delete is left in.
+        """
+        cot_id = field.custom_object_type_id
+        model = self.cot.get_model()
+        registry = apps.all_models[APP_LABEL]
+        through_model = registry[field.through_model_name.lower()]
+        model_cache = CustomObjectType._model_cache[(cot_id, None)]
+        through_model_cache = dict(CustomObjectType._through_model_cache[(cot_id, None)])
+
+        with self.captureOnCommitCallbacks(execute=True):
+            field.delete()
+
+        registry[model._meta.model_name] = model
+        registry[through_model._meta.model_name] = through_model
+        CustomObjectType._model_cache[(cot_id, None)] = model_cache
+        CustomObjectType._through_model_cache[(cot_id, None)] = through_model_cache
+        apps.clear_cache()
+        self.addCleanup(CustomObjectType._unregister_model_names, [through_model.__name__])
+        self.addCleanup(CustomObjectType.clear_model_cache, cot_id, all_branches=True)
+        self.addCleanup(
+            cache.delete, stale_models._DELETED_THROUGH_MODEL_CACHE_KEY.format(through_model._meta.model_name)
+        )
+        return through_model
+
+    def _delete_device(self, device):
+        response = self.client.delete(
+            reverse('dcim-api:device-detail', kwargs={'pk': device.pk}),
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+    def test_device_delete_succeeds_after_multi_object_field_deleted_in_another_worker(self):
+        field = self.create_custom_object_type_field(
+            self.cot, name='devices', type='multiobject', related_object_type=self.get_device_object_type()
+        )
+        device = create_test_device('device1')
+        stale_through_model = self._delete_field_in_another_worker(field)
+
+        self._delete_device(device)
+
+        self.assertFalse(self._registered(stale_through_model))
+
+    def test_device_delete_succeeds_after_polymorphic_field_deleted_in_another_worker(self):
+        field = self.create_polymorphic_field(
+            self.cot,
+            [self.get_device_object_type(), self.get_site_object_type()],
+            name='targets',
+            type='multiobject',
+        )
+        device = create_test_device('device1')
+        stale_through_model = self._delete_field_in_another_worker(field)
+
+        self._delete_device(device)
+
+        self.assertFalse(self._registered(stale_through_model))
+
+    def test_eviction_keeps_through_model_of_field_added_again(self):
+        field = self.create_custom_object_type_field(
+            self.cot, name='devices', type='multiobject', related_object_type=self.get_device_object_type()
+        )
+        self._delete_field_in_another_worker(field)
+        self.create_custom_object_type_field(
+            self.cot, name='devices', type='multiobject', related_object_type=self.get_device_object_type()
+        )
+        through_model = self.cot.get_model()._meta.get_field('devices').remote_field.through
+
+        stale_models.evict_deleted_models()
+
+        self.assertTrue(self._registered(through_model))
+
+    def test_deleting_a_multi_object_field_signals_other_workers(self):
+        field = self.create_custom_object_type_field(
+            self.cot, name='devices', type='multiobject', related_object_type=self.get_device_object_type()
+        )
+        self.cot.get_model()
+        key = stale_models._DELETED_THROUGH_MODEL_CACHE_KEY.format(field.through_model_name.lower())
+        self.addCleanup(cache.delete, key)
+        before = cache.get(stale_models._TOKEN_CACHE_KEY)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            field.delete()
+
+        after = cache.get(stale_models._TOKEN_CACHE_KEY)
+        self.assertIsNotNone(after)
+        self.assertNotEqual(after, before)
+        self.assertEqual(tuple(cache.get(key)), (self.cot.pk, 'devices'))
