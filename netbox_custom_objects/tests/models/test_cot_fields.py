@@ -4,6 +4,7 @@ Tests for the CustomObjectTypeField model.
 
 from django.apps import apps as django_apps
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.utils import ProgrammingError
 from django.test import TestCase, tag
 from django.urls import reverse
@@ -565,7 +566,8 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
         name = 'stale_certificates'
         self.addCleanup(lambda: name in Site.__dict__ and delattr(Site, name))
 
-        # Leave a stale FK reverse accessor behind on Site.
+        # Leave a stale FK reverse accessor on Site, as a worker that hasn't regenerated the
+        # type's model since the field was deleted still has it.
         np_field = self.create_custom_object_type_field(
             self.cert_cot,
             name='site',
@@ -575,8 +577,9 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
         )
         self.cert_cot.refresh_from_db()
         self.cert_cot.get_model()
+        stale = Site.__dict__[name]
         np_field.delete()
-        self.assertIn(name, Site.__dict__)
+        setattr(Site, name, stale)
 
         poly_field = self.create_custom_object_type_field(
             self.cert_cot,
@@ -818,6 +821,132 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
             self.fail(f'Deleting a related object raised ProgrammingError after field deletion: {exc}')
 
         self.assertNotIn(through_model_name, django_apps.all_models.get(APP_LABEL, {}))
+
+
+class _Rollback(Exception):
+    pass
+
+
+class StaleReverseAccessorTestCase(CustomObjectsTestCase, TestCase):
+    """A non-polymorphic field's old reverse accessor is removed when the type's model is regenerated."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name='Widget', slug='widget')
+        self.create_custom_object_type_field(self.cot, name='name', label='Name', type='text', primary=True)
+        self.site_ct = self.get_site_object_type()
+        self.addCleanup(self._remove_accessors)
+
+    @staticmethod
+    def _remove_accessors():
+        # Test transactions roll back the database, not attributes set on Site.
+        for name in ('widgets', 'gadgets'):
+            if name in Site.__dict__:
+                delattr(Site, name)
+
+    def _create_field(self, cot=None, **kwargs):
+        defaults = {
+            'name': 'site',
+            'type': 'object',
+            'related_object_type': self.site_ct,
+            'related_name': 'widgets',
+        }
+        defaults.update(kwargs)
+        field = self.create_custom_object_type_field(cot or self.cot, **defaults)
+        (cot or self.cot).refresh_from_db()
+        (cot or self.cot).get_model()
+        return CustomObjectTypeField.objects.get(pk=field.pk)
+
+    def _regenerate(self, cot=None):
+        cot = cot or self.cot
+        cot.refresh_from_db()
+        return cot.get_model()
+
+    def test_related_name_change_removes_old_accessor(self):
+        field = self._create_field()
+        self.assertIn('widgets', Site.__dict__)
+
+        field.related_name = 'gadgets'
+        field.save()
+        model = self._regenerate()
+
+        self.assertNotIn('widgets', Site.__dict__)
+        self.assertIs(Site.gadgets.rel.field.model, model)
+
+    def test_multiobject_related_name_change_removes_old_accessor(self):
+        field = self._create_field(name='sites', type='multiobject')
+        self.assertIn('widgets', Site.__dict__)
+
+        field.related_name = 'gadgets'
+        field.save()
+        model = self._regenerate()
+
+        self.assertNotIn('widgets', Site.__dict__)
+        self.assertIs(Site.gadgets.rel.field.model, model)
+
+    def test_field_delete_removes_accessor(self):
+        for field_type in ('object', 'multiobject'):
+            with self.subTest(field_type=field_type):
+                field = self._create_field(type=field_type)
+                self.assertIn('widgets', Site.__dict__)
+
+                field.delete()
+                self._regenerate()
+
+                self.assertNotIn('widgets', Site.__dict__)
+
+    def test_field_rename_removes_auto_named_accessor(self):
+        field = self._create_field(related_name='')
+        model_name = self.cot.get_table_model_name(self.cot.id).lower()
+        self.assertIn(f'{model_name}_site_set', Site.__dict__)
+        self.addCleanup(lambda: delattr(Site, f'{model_name}_location_set'))
+
+        field.name = 'location'
+        field.save()
+        self._regenerate()
+
+        self.assertNotIn(f'{model_name}_site_set', Site.__dict__)
+        self.assertIn(f'{model_name}_location_set', Site.__dict__)
+
+    def test_accessor_taken_over_by_another_type_is_kept(self):
+        field = self._create_field()
+        field.related_name = 'gadgets'
+        field.save()
+
+        other_cot = self.create_custom_object_type(name='Gizmo', slug='gizmo')
+        self._create_field(cot=other_cot)
+        other_model = other_cot.get_model()
+        self._regenerate()
+
+        self.assertIs(Site.widgets.rel.field.model, other_model)
+
+    def test_rolled_back_related_name_change_restores_accessor(self):
+        field = self._create_field()
+
+        with self.assertRaises(_Rollback), transaction.atomic():
+            field.related_name = 'gadgets'
+            field.save()
+            self._regenerate()
+            raise _Rollback
+        model = self._regenerate()
+
+        self.assertNotIn('gadgets', Site.__dict__)
+        self.assertIs(Site.widgets.rel.field.model, model)
+
+    def test_type_delete_removes_accessor(self):
+        self._create_field()
+        self.assertIn('widgets', Site.__dict__)
+
+        self.cot.delete()
+
+        self.assertNotIn('widgets', Site.__dict__)
+
+    def test_unchanged_accessor_is_kept(self):
+        self._create_field()
+        self.create_custom_object_type_field(self.cot, name='notes', type='text')
+        model = self._regenerate()
+
+        self.assertIs(Site.widgets.rel.field.model, model)
 
 
 class TargetsCustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
