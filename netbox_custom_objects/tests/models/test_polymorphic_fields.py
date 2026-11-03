@@ -572,7 +572,8 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
         self.cot.get_model()
         self.assertTrue(hasattr(Site, 'co_gfk_removed'), 'Descriptor must be present before removal')
 
-        field.related_object_types.remove(self.site_ot)  # fires m2m_changed pre_remove
+        with self.captureOnCommitCallbacks(execute=True):
+            field.related_object_types.remove(self.site_ot)  # fires m2m_changed pre_remove
 
         self.assertFalse(
             hasattr(Site, 'co_gfk_removed'),
@@ -585,7 +586,8 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
         self.cot.get_model()
         self.assertTrue(hasattr(Site, 'co_gfk_del'), 'Descriptor must be present before delete')
 
-        field.delete()
+        with self.captureOnCommitCallbacks(execute=True):
+            field.delete()
 
         self.assertFalse(
             hasattr(Site, 'co_gfk_del'),
@@ -659,7 +661,8 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
         self.cot.get_model()
         self.assertTrue(hasattr(Site, 'co_m2m_del'), 'Descriptor must be present before delete')
 
-        field.delete()
+        with self.captureOnCommitCallbacks(execute=True):
+            field.delete()
 
         self.assertFalse(
             hasattr(Site, 'co_m2m_del'),
@@ -695,7 +698,8 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
         self.cot.get_model()
         self.assertTrue(hasattr(Site, 'co_gfk_cleared'))
 
-        field.related_object_types.clear()  # fires m2m_changed pre_clear
+        with self.captureOnCommitCallbacks(execute=True):
+            field.related_object_types.clear()  # fires m2m_changed pre_clear
 
         self.assertFalse(
             hasattr(Site, 'co_gfk_cleared'),
@@ -708,7 +712,8 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
         self.cot.get_model()
         self.assertTrue(hasattr(Site, 'co_m2m_cleared'))
 
-        field.related_object_types.clear()  # fires m2m_changed pre_clear
+        with self.captureOnCommitCallbacks(execute=True):
+            field.related_object_types.clear()  # fires m2m_changed pre_clear
 
         self.assertFalse(
             hasattr(Site, 'co_m2m_cleared'),
@@ -752,8 +757,9 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
 
         # Re-fetch so from_db() sets _original (mirrors real save-from-UI flow)
         field = CustomObjectTypeField.objects.get(pk=field.pk)
-        field.related_name = 'co_gfk_new_name'
-        field.save()
+        with self.captureOnCommitCallbacks(execute=True):
+            field.related_name = 'co_gfk_new_name'
+            field.save()
         self.cot.get_model()  # regenerate model so new descriptor is injected
 
         self.assertFalse(
@@ -773,8 +779,9 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
 
         # Re-fetch so from_db() sets _original (mirrors real save-from-UI flow)
         field = CustomObjectTypeField.objects.get(pk=field.pk)
-        field.related_name = 'co_m2m_new_name'
-        field.save()
+        with self.captureOnCommitCallbacks(execute=True):
+            field.related_name = 'co_m2m_new_name'
+            field.save()
         self.cot.get_model()  # regenerate model so new descriptor is injected
 
         self.assertFalse(
@@ -930,7 +937,8 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
         self.cot.get_model()
         self.assertIn('co_deleted_cot_ref', Site.__dict__)
 
-        self.cot.delete()
+        with self.captureOnCommitCallbacks(execute=True):
+            self.cot.delete()
 
         self.assertNotIn('co_deleted_cot_ref', Site.__dict__)
 
@@ -1186,3 +1194,89 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
             descriptor_b,
             '_unwire must not remove a descriptor owned by a different CO field',
         )
+
+
+class StaleReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
+    """
+    A polymorphic field's reverse accessor stays on the target class in worker
+    processes that didn't delete the field or rename its related_name.  There it
+    must behave as if it were gone, and not block another field from the name.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.site_ot = ObjectType.objects.get(app_label='dcim', model='site')
+        self.cot = CustomObjectType.objects.create(name='stale_rev', slug='stale-rev')
+        CustomObjectTypeField.objects.create(custom_object_type=self.cot, name='name', type='text', primary=True)
+        self.site = Site.objects.create(name='Stale Rev Site', slug='stale-rev-site')
+
+    def _create_field(self, cot=None, name='target', type='object', related_name='co_stale_rev'):
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=cot or self.cot,
+            name=name,
+            type=type,
+            is_polymorphic=True,
+            related_name=related_name,
+        )
+        field.related_object_types.set([self.site_ot])
+        (cot or self.cot).get_model()
+        self.addCleanup(lambda: Site.__dict__.get(related_name) and delattr(Site, related_name))
+        return field
+
+    def _delete_field_in_another_worker(self, field):
+        """Delete ``field`` and put its accessor back, as another worker's delete leaves it here."""
+        descriptor = Site.__dict__[field.related_name]
+        with self.captureOnCommitCallbacks(execute=True):
+            field.delete()
+        setattr(Site, field.related_name, descriptor)
+        return descriptor
+
+    def test_accessor_of_field_deleted_in_another_worker_is_gone(self):
+        for type in ('object', 'multiobject'):
+            with self.subTest(type=type):
+                field = self._create_field(name=f'target_{type}', type=type, related_name=f'co_stale_{type}')
+                self._delete_field_in_another_worker(field)
+
+                self.assertFalse(hasattr(self.site, field.related_name))
+
+    def test_accessor_renamed_in_another_worker_is_gone(self):
+        field = self._create_field()
+        # Another worker's rename: the database changes, this process's accessor doesn't.
+        CustomObjectTypeField.objects.filter(pk=field.pk).update(related_name='co_renamed_rev')
+
+        self.assertFalse(hasattr(self.site, 'co_stale_rev'))
+
+    def test_new_field_replaces_stale_accessor_of_deleted_field(self):
+        stale = self._delete_field_in_another_worker(self._create_field())
+        cot_b = CustomObjectType.objects.create(name='stale_rev_b', slug='stale-rev-b')
+        CustomObjectTypeField.objects.create(custom_object_type=cot_b, name='name', type='text', primary=True)
+        field_b = self._create_field(cot=cot_b)
+        model_b = cot_b.get_model()
+        co = model_b.objects.create(name='co-b')
+        co.target = self.site
+        co.save()
+
+        self.assertIsNot(Site.__dict__['co_stale_rev'], stale)
+        self.assertEqual(Site.__dict__['co_stale_rev'].field_pk, field_b.pk)
+        self.assertEqual([obj.pk for obj in self.site.co_stale_rev.all()], [co.pk])
+
+    def test_accessor_kept_when_field_delete_is_rolled_back(self):
+        field = self._create_field()
+
+        with self.captureOnCommitCallbacks(execute=True), self.assertRaises(RuntimeError), transaction.atomic():
+            field.delete()
+            raise RuntimeError
+
+        self.assertIn('co_stale_rev', Site.__dict__)
+        self.assertTrue(hasattr(self.site, 'co_stale_rev'))
+
+    def test_accessor_kept_when_related_name_rename_is_rolled_back(self):
+        field = CustomObjectTypeField.objects.get(pk=self._create_field().pk)
+
+        with self.captureOnCommitCallbacks(execute=True), self.assertRaises(RuntimeError), transaction.atomic():
+            field.related_name = 'co_renamed_rev'
+            field.save()
+            raise RuntimeError
+
+        self.assertIn('co_stale_rev', Site.__dict__)
+        self.assertTrue(hasattr(self.site, 'co_stale_rev'))

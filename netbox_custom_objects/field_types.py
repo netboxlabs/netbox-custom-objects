@@ -2618,21 +2618,61 @@ class PolymorphicObjectReverseManager(_PolymorphicReverseManager):
         )
 
 
-class PolymorphicObjectReverseDescriptor:
-    """Reverse descriptor for polymorphic GFK fields on CO models.
+class _PolymorphicReverseDescriptor:
+    """
+    Base for the reverse descriptors of polymorphic fields.
 
-    Injected onto target model classes by _wire_polymorphic_reverse_descriptors() so
-    that code can do, e.g., ``site.my_co_field.all()`` to retrieve all CO instances
-    whose polymorphic GFK points at that site.
+    Injected onto target model classes by _wire_polymorphic_reverse_descriptors(), but
+    only in the process that wires or unwires it: in other worker processes it outlives
+    the field's deletion, a change of its related_name or the removal of the target's
+    type.  So it checks that its field still has it before every use, and is otherwise
+    missing (raises AttributeError).
+
+    Only main's fields count: the target classes are main's, and in a branch that
+    changed the field the managers return no objects instead (#766).
     """
 
-    def __init__(self, cot_pk, field_name):
+    def __init__(self, cot_pk, field_pk, related_name):
         self.cot_pk = cot_pk
-        self.field_name = field_name
+        self.field_pk = field_pk
+        self.related_name = related_name
+
+    def is_live(self, target_model):
+        """True if the field still exposes this accessor on *target_model*."""
+        from netbox_custom_objects.models import CustomObjectTypeField
+
+        return CustomObjectTypeField.objects.filter(
+            pk=self.field_pk,
+            is_polymorphic=True,
+            related_name=self.related_name,
+            related_object_types__pk=ContentType.objects.get_for_model(target_model).pk,
+        ).exists()
+
+    def _manager(self, instance):
+        raise NotImplementedError
 
     def __get__(self, instance, owner=None):
         if instance is None:
             return self
+        from netbox_custom_objects.models import CustomObjectType
+
+        if CustomObjectType._active_branch_id() is None and not self.is_live(type(instance)):
+            raise AttributeError(f'{type(instance).__name__!r} object has no attribute {self.related_name!r}')
+        return self._manager(instance)
+
+
+class PolymorphicObjectReverseDescriptor(_PolymorphicReverseDescriptor):
+    """Reverse descriptor for polymorphic GFK fields on CO models.
+
+    Lets code do, e.g., ``site.my_co_field.all()`` to retrieve all CO instances whose
+    polymorphic GFK points at that site.
+    """
+
+    def __init__(self, cot_pk, field_pk, related_name, field_name):
+        super().__init__(cot_pk, field_pk, related_name)
+        self.field_name = field_name
+
+    def _manager(self, instance):
         return PolymorphicObjectReverseManager(instance, self.cot_pk, self.field_name)
 
 
@@ -2673,21 +2713,18 @@ class PolymorphicMultiObjectReverseManager(_PolymorphicReverseManager):
         return source_model.objects.filter(pk__in=source_ids)
 
 
-class PolymorphicMultiObjectReverseDescriptor:
+class PolymorphicMultiObjectReverseDescriptor(_PolymorphicReverseDescriptor):
     """Reverse descriptor for polymorphic M2M fields on CO models.
 
-    Injected onto target model classes by _wire_polymorphic_reverse_descriptors() so
-    that code can do, e.g., ``site.my_co_field.all()`` to retrieve all CO instances
-    whose polymorphic M2M field includes that site.
+    Lets code do, e.g., ``site.my_co_field.all()`` to retrieve all CO instances whose
+    polymorphic M2M field includes that site.
     """
 
-    def __init__(self, cot_pk, through_model_name):
-        self.cot_pk = cot_pk
+    def __init__(self, cot_pk, field_pk, related_name, through_model_name):
+        super().__init__(cot_pk, field_pk, related_name)
         self.through_model_name = through_model_name
 
-    def __get__(self, instance, owner=None):
-        if instance is None:
-            return self
+    def _manager(self, instance):
         return PolymorphicMultiObjectReverseManager(instance, self.cot_pk, self.through_model_name)
 
 
