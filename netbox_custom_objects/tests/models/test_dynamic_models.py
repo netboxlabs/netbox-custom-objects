@@ -1068,6 +1068,22 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
             serializer_name, ser_module.__dict__, 'serializer must be cached in module __dict__ after first resolution'
         )
 
+    def test_resolver_accepts_model_instance(self):
+        """serializer_resolver() must resolve a custom object instance to its model's
+        serializer. NetBox passes instances, e.g. for an ObjectChange's changed_object."""
+        import netbox_custom_objects.api.serializers as ser_module
+        from utilities.api import get_serializer_for_model
+
+        parent_model = self.parent_cot.get_model()
+        instance = parent_model.objects.create(title='Instance')
+
+        serializer_cls = ser_module.serializer_resolver(instance)
+        self.assertIsNotNone(serializer_cls)
+        self.assertIs(serializer_cls.Meta.model, parent_model)
+
+        with self.assertNoLogs('netbox.utilities.api', level='ERROR'):
+            self.assertIs(get_serializer_for_model(instance).Meta.model, parent_model)
+
     def test_skip_object_fields_does_not_overwrite_full_serializer(self):
         """get_serializer_class(model, skip_object_fields=True) must not overwrite
         the full module-level serializer for that model.  The full serializer

@@ -1154,11 +1154,14 @@ def serializer_resolver(model, prefix=''):
     serializer is always generated on demand and ``SerializerNotFound`` is never
     raised just because startup-time registration was skipped or missed
     (issue #370).
+
+    NetBox may pass a model instance rather than a class, e.g. for an
+    ObjectChange's ``changed_object``, so resolve the class through ``_meta``.
     """
     if (
         getattr(model, '_meta', None)
         and model._meta.app_label == 'netbox_custom_objects'
-        and _TABLE_MODEL_PATTERN.match(model.__name__)
+        and _TABLE_MODEL_PATTERN.match(model._meta.object_name)
     ):
-        return get_serializer_class(model)
+        return get_serializer_class(model._meta.model)
     return None
