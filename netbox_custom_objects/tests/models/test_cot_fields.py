@@ -436,6 +436,14 @@ class PrimaryFieldTestCase(CustomObjectsTestCase, TestCase):
         obj = self.cot.get_model().objects.create(name='Zone A', code='ZA')
         self.assertEqual(str(obj), 'ZA')
 
+    def test_type_instance_stays_current(self):
+        # The demoted field's save bumps the caller's type instance, so its model isn't rebuilt.
+        code = CustomObjectTypeField.objects.get(pk=self.code.pk)
+        code.primary = True
+        code.save()
+        stored = CustomObjectType.objects.get(pk=self.cot.pk).cache_timestamp
+        self.assertEqual(code.custom_object_type.cache_timestamp, stored)
+
     def test_saving_the_primary_field_keeps_it_primary(self):
         name = CustomObjectTypeField.objects.get(pk=self.name.pk)
         name.label = 'Zone name'
