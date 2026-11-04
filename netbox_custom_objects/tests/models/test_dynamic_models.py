@@ -1500,6 +1500,28 @@ class CustomObjectPicklingTestCase(CustomObjectsTestCase, TestCase):
         self.assertIs(queryset.model, CustomObjectType.objects.get(pk=self.cot.pk).get_model())
         self.assertEqual([obj.name for obj in queryset], ['s1'])
 
+    def test_prefetch_cache_pickles_after_another_process_bumps_the_type(self):
+        """
+        A worker still holding the old class pickles it after another process bumped
+        cache_timestamp (e.g. a choice set rename in the web process).
+        """
+        accessor = next(
+            rel.get_accessor_name() for rel in Site._meta.related_objects if rel.related_model is self.model
+        )
+        site = Site.objects.prefetch_related(accessor).get(pk=self.site.pk)
+        # Another process's bump: the DB row moves on, this process's cache does not.
+        CustomObjectType.objects.filter(pk=self.cot.pk).update(cache_timestamp=timezone.now())
+
+        restored = pickle.loads(pickle.dumps(site))
+        self.assertEqual([obj.name for obj in getattr(restored, accessor).all()], ['s1'])
+
+    def test_unpickling_keeps_the_cached_class_after_another_process_bumps_the_type(self):
+        """Unpickling returns this process's cached class, even if another process bumped the type."""
+        data = pickle.dumps(self.model.objects.all())
+        CustomObjectType.objects.filter(pk=self.cot.pk).update(cache_timestamp=timezone.now())
+
+        self.assertIs(pickle.loads(data).model, self.model)
+
     def test_module_attribute_lookup_only_resolves_existing_types(self):
         self.assertIs(getattr(nco_models, self.model.__name__), self.model)
         with self.assertNoLogs(nco_models.logger):
@@ -1508,6 +1530,8 @@ class CustomObjectPicklingTestCase(CustomObjectsTestCase, TestCase):
 
     def test_module_attribute_lookup_logs_database_errors(self):
         # Unapplied migrations or a database failure: a missing attribute, with the error logged.
+        # A cached class is returned without querying, so start from a cache miss.
+        CustomObjectType.clear_model_cache(self.cot.pk, all_branches=True)
         for error in (ProgrammingError, OperationalError):
             with self.subTest(error=error.__name__):
                 with (

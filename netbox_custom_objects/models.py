@@ -5670,11 +5670,25 @@ def __getattr__(name):
     """
     Resolve generated model classes (``Table<id>Model``) by name, so pickle can find them.
 
-    They aren't stored on this module because they're rebuilt whenever their type changes;
-    ``get_model()`` returns the current class, for the active branch.
+    They aren't stored on this module because they're rebuilt whenever their type changes.
+    The class this process has cached for the active branch wins, even if another process
+    has since bumped the type's cache_timestamp: pickle requires the lookup to return the
+    very class being pickled (#1017). On a miss, ``get_model()`` builds the current class.
+
+    Known limits:
+
+    - A class rebuilt in this process after an object captured the old one (e.g. a
+      ``get_model()`` call after the bump) is no longer cached, so pickling that object
+      still fails the identity check.
+    - Unpickling in a process with a stale cached class returns that class, not a rebuilt one.
+    - With branching, a reverse relation on a core model points to the class generated last
+      in any branch, which may not be the active branch's cached class.
     """
     cot_id = extract_cot_id_from_model_name(name.lower())
     if cot_id is not None and name == CustomObjectType.get_table_model_name(cot_id):
+        model = CustomObjectType.get_cached_model(int(cot_id), CustomObjectType._active_branch_id())
+        if model is not None and not _registration_rolled_back(model):
+            return model
         try:
             return CustomObjectType.objects.get(pk=int(cot_id)).get_model()
         except CustomObjectType.DoesNotExist:
