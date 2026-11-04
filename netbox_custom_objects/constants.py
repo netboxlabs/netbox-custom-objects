@@ -36,8 +36,8 @@ CONFIG_CONTEXT_DIMENSION_FIELDS = {
 }
 
 # Field names that are reserved and cannot be used for custom object fields: attributes
-# every custom object has, and the query parameters and filters of a type's list views
-# and REST API, which a filter for the field would replace.
+# every custom object has, and the query parameters, filters and filterset methods of a
+# type's list views and REST API, which a filter for the field would replace.
 # Keep in alphabetical order for ease of reading error message.
 RESERVED_FIELD_NAMES = [
     '_meta',
@@ -60,8 +60,10 @@ RESERVED_FIELD_NAMES = [
     'fields',
     'filter',
     'filter_id',
+    'filter_owner_group_id',
     'format',
     'full_clean',
+    'get_filters',
     'get_absolute_url',
     'id',
     'images',
@@ -86,6 +88,7 @@ RESERVED_FIELD_NAMES = [
     'q',
     'refresh_from_db',
     'save',
+    'search',
     'serialize_object',
     'snapshot',
     'sort',

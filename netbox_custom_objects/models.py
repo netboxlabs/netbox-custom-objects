@@ -2964,6 +2964,14 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
         raise
 
 
+def is_reserved_field_name(name, original_name=None):
+    """
+    True if a field can't be given *name*: a new field (no *original_name*), or one renamed from
+    *original_name*. A field whose name became reserved in an upgrade can keep it.
+    """
+    return name in RESERVED_FIELD_NAMES and name != original_name
+
+
 def reserved_field_name_message(name):
     """The error for a field named *name*, which is in RESERVED_FIELD_NAMES."""
     return _('Field name "{name}" is reserved and cannot be used. Reserved names are: {reserved_names}').format(
@@ -3412,7 +3420,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         """
         Reject a related_name another field already uses for the same object type, or
         that would replace an existing attribute of a polymorphic field's target model.
-        *object_types* are a polymorphic field's targets, when they aren't saved yet.
+        *object_types* are a polymorphic field's targets, when they aren't saved yet. clean()
+        passes ``_pending_related_object_types``, which a caller sets to them before full_clean().
         """
         # related_name collision detection for polymorphic fields (M2M related_object_types).
         # Without object_types, only saved instances have targets to collide on.
@@ -3548,9 +3557,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         if self.primary and self.context:
             raise ValidationError(_('A field cannot be both the primary display field and a context field.'))
 
-        # Check the field name isn't reserved. Only a new or changed name is checked, so a field
-        # whose name became reserved in an upgrade can still be edited, renamed or deleted.
-        if self.name in RESERVED_FIELD_NAMES and (self._state.adding or self.name != self._original_name):
+        # Check the field name isn't reserved (only a new or changed name; see is_reserved_field_name())
+        if is_reserved_field_name(self.name, None if self._state.adding else self._original_name):
             raise ValidationError({'name': reserved_field_name_message(self.name)})
 
         # Validate the field's default value (if any)
@@ -3631,7 +3639,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 {'related_name': _('A reverse relation name can only be set for Object and MultiObject fields.')}
             )
 
-        self.clean_related_name()
+        self.clean_related_name(getattr(self, '_pending_related_object_types', None))
 
         # Check if uniqueness constraint can be applied when changing from non-unique to unique.
         # _original is set by from_db only; deserialized objects (branch merge/revert)
@@ -3702,7 +3710,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 if not isinstance(f, GenericForeignKey) and not getattr(f, 'blank', True)
             }
             if required_columns:
-                existing = model.objects.values_list(*required_columns.keys())
+                # The columns still have their old names if the field is being renamed too.
+                old_columns = {
+                    new: old for old, new in _backing_column_renames(self.type, self._original_name, self.name)
+                }
+                existing = model.objects.values_list(*(old_columns.get(name, name) for name in required_columns))
                 for row in existing.iterator():
                     if any(value in f.empty_values for value, f in zip(row, required_columns.values())):
                         raise ValidationError(

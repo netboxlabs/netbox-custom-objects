@@ -46,6 +46,7 @@ from netbox_custom_objects.models import (
     CustomObjectTypeField,
     _get_schema_connection,
     is_multi_column_type_change,
+    is_reserved_field_name,
     reserved_field_name_message,
 )
 from netbox_custom_objects.schema.comparator import FieldOp, diff_document
@@ -318,27 +319,24 @@ def _resolve_related_object_types(rot_list: list) -> list:
 # ---------------------------------------------------------------------------
 
 
-def _validate_related_name(cot, field, object_types=None) -> None:
+def _full_clean_field(cot, field, object_types=None) -> None:
     """
-    Raise InvalidRelatedNameError if *field*'s related_name is taken (see clean_related_name()).
+    Validate *field* as the UI and REST API do, *object_types* being a polymorphic field's
+    targets from the document. Raises InvalidRelatedNameError if only its related_name is
+    taken, and InvalidFieldError for anything else.
 
     Call it before setting a polymorphic field's *object_types*: that adds the reverse
     relation to their models, which rolling back the transaction doesn't undo.
     """
-    if not field.related_name:
-        return
-    try:
-        field.clean_related_name(object_types)
-    except ValidationError as exc:
-        raise InvalidRelatedNameError(f'Field {field.name!r} on COT {cot.slug!r}: {" ".join(exc.messages)}') from exc
-
-
-def _full_clean_field(cot, field) -> None:
-    """Validate *field* as the UI and REST API do, raising InvalidFieldError."""
+    if object_types is not None:
+        field._pending_related_object_types = object_types
     try:
         field.full_clean()
     except ValidationError as exc:
-        raise InvalidFieldError(f'Field {field.name!r} on COT {cot.slug!r}: {" ".join(exc.messages)}') from exc
+        message = f'Field {field.name!r} on COT {cot.slug!r}: {" ".join(exc.messages)}'
+        if set(getattr(exc, 'error_dict', ())) == {'related_name'}:
+            raise InvalidRelatedNameError(message) from exc
+        raise InvalidFieldError(message) from exc
 
 
 def _full_clean_cot(cot) -> None:
@@ -358,12 +356,12 @@ def check_field_names(diffs) -> None:
     for diff in diffs:
         for fc in diff.field_changes:
             if fc.op is FieldOp.ADD:
-                name = fc.schema_def.get('name')
+                name, original_name = fc.schema_def.get('name'), None
             elif fc.op is FieldOp.ALTER and 'name' in fc.changed_attrs:
-                name = fc.changed_attrs['name'][1]
+                original_name, name = fc.changed_attrs['name']
             else:
                 continue
-            if name in constants.RESERVED_FIELD_NAMES:
+            if is_reserved_field_name(name, original_name):
                 raise InvalidFieldError(f'Field {name!r} on COT {diff.slug!r}: {reserved_field_name_message(name)}')
 
 
@@ -383,8 +381,7 @@ def _apply_field_add(cot, fc) -> None:
         object_types = None
         if fc.schema_def.get('is_polymorphic'):
             object_types = _resolve_related_object_types(fc.schema_def.get('related_object_types', []))
-        _validate_related_name(cot, field, object_types)
-        _full_clean_field(cot, field)
+        _full_clean_field(cot, field, object_types)
         field.save()
 
         # Wire up M2M related_object_types for polymorphic fields (must be after save).
@@ -464,8 +461,7 @@ def _apply_field_alter(cot, fc) -> None:
     object_types = None
     if 'related_object_types' in pending_m2m:
         object_types = _resolve_related_object_types(pending_m2m['related_object_types'])
-    _validate_related_name(cot, field, object_types)
-    _full_clean_field(cot, field)
+    _full_clean_field(cot, field, object_types)
     field.save()
 
     if object_types is not None:

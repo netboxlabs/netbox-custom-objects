@@ -11,6 +11,9 @@ Format version history
 "1"  Initial version (introduced alongside schema_id / deprecated field support).
 """
 
+from django.core.exceptions import ValidationError
+
+from dcim.fields import MACAddressField
 from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 
@@ -173,6 +176,27 @@ FIELD_BASE_ATTRS = (
     'deprecated_since',
     'scheduled_removal',
 )
+
+
+def field_attr_default(attr, schema_type):
+    """The value a field of *schema_type* has for *attr* when the document leaves it out."""
+    # Validation sets a coordinates field's search weight to 0: it has no single column to index.
+    if attr == 'search_weight' and schema_type == FIELD_TYPE_COORDINATES:
+        return 0
+    return FIELD_DEFAULTS.get(attr)
+
+
+def normalize_field_attr(attr, schema_type, value):
+    """*value* for a field of *schema_type*'s *attr*, as validating the field stores it."""
+    if attr == 'search_weight' and schema_type == FIELD_TYPE_COORDINATES:
+        return 0
+    if attr == 'default' and schema_type == FIELD_TYPE_MAC_ADDRESS and value is not None:
+        try:
+            return str(MACAddressField().to_python(value))
+        except ValidationError:
+            return value  # rejected when the field is validated
+    return value
+
 
 # ── Constraint attributes ─────────────────────────────────────────────────────
 # Constraints are matched by name. Attributes equal to these defaults MAY be

@@ -193,7 +193,7 @@ All fields share these base attributes:
 | `unique` | no | Whether values must be unique. Default: `false`. |
 | `default` | no | JSON default value. |
 | `weight` | no | Display order weight. Default: `100`. |
-| `search_weight` | no | Search relevance weight. Default: `500`. |
+| `search_weight` | no | Search relevance weight. Default: `500`. Always `0` for a `coordinates` field, which can't be searched. |
 | `filter_logic` | no | `"loose"`, `"exact"`, or `"disabled"`. Default: `"loose"`. |
 | `ui_visible` | no | `"always"`, `"if-set"`, or `"hidden"`. Default: `"always"`. |
 | `ui_editable` | no | `"yes"`, `"no"`, or `"hidden"`. Default: `"yes"`. |

@@ -1038,6 +1038,31 @@ class ExecutorApplyDiffsTestCase(_ExecutorTestBase):
 class ExecutorPolymorphicFieldTestCase(_ExecutorTestBase):
     """Executor correctly handles polymorphic object/multiobject field ADD and ALTER."""
 
+    def test_alter_related_name_checked_against_new_targets(self):
+        def poly(slug, targets, related_name):
+            fields = [
+                {
+                    'id': 1,
+                    'name': 'target',
+                    'type': 'object',
+                    'is_polymorphic': True,
+                    'related_object_types': targets,
+                    'related_name': related_name,
+                }
+            ]
+            return {'name': slug, 'slug': slug, 'fields': fields}
+
+        apply_document({'schema_version': '1', 'types': [poly('other', ['dcim/site'], 'things')]})
+        apply_document({'schema_version': '1', 'types': [poly('mine', ['dcim/site'], 'stuff')]})
+        # "things" is taken on sites, which the field no longer targets, but free on devices.
+        apply_document({'schema_version': '1', 'types': [poly('mine', ['dcim/device'], 'things')]})
+        field = CustomObjectType.objects.get(slug='mine').fields.get()
+        self.assertEqual(field.related_name, 'things')
+        self.assertEqual([ot.model for ot in field.related_object_types.all()], ['device'])
+
+        with self.assertRaisesRegex(InvalidRelatedNameError, 'already used by field'):
+            apply_document({'schema_version': '1', 'types': [poly('mine', ['dcim/site'], 'things')]})
+
     def setUp(self):
         super().setUp()
         self.device_ot = self.get_device_object_type()
@@ -1437,6 +1462,31 @@ class ExecutorValidationTestCase(_ExecutorTestBase):
         apply_document(self._new_type({'id': 1, 'name': 'mac', 'type': 'mac_address', 'default': '001a2b3c4d5e'}))
         field = CustomObjectType.objects.get(slug='checked').fields.get(name='mac')
         self.assertEqual(field.default, '00:1A:2B:3C:4D:5E')
+
+    def test_reapplying_normalized_values_is_no_change(self):
+        doc = self._new_type(
+            {'id': 1, 'name': 'location', 'type': 'coordinates'},
+            {'id': 2, 'name': 'spot', 'type': 'coordinates', 'search_weight': 500},
+            {'id': 3, 'name': 'mac', 'type': 'mac_address', 'default': '001a2b3c4d5e'},
+        )
+        apply_document(doc)
+        self.assertEqual(diff_document(doc)[0].field_changes, [])
+        exported = {f['name']: f for f in export_cot(CustomObjectType.objects.get(slug='checked'))['fields']}
+        self.assertNotIn('search_weight', exported['location'])
+
+    def test_rename_and_require_in_one_change(self):
+        apply_document(self._new_type({'id': 1, 'name': 'serial', 'type': 'text'}))
+        model = CustomObjectType.objects.get(slug='checked').get_model()
+        obj = model.objects.create(serial='')
+        renamed = self._new_type({'id': 1, 'name': 'serial_number', 'type': 'text', 'required': True})
+        with self.assertRaisesMessage(InvalidFieldError, 'blank value'):
+            apply_document(renamed)
+
+        obj.delete()
+        model.objects.create(serial='a1')
+        apply_document(renamed)
+        field = CustomObjectType.objects.get(slug='checked').fields.get()
+        self.assertEqual((field.name, field.required), ('serial_number', True))
 
     def test_changed_field_validated(self):
         apply_document(self._new_type({'id': 1, 'name': 'shade', 'type': 'color'}))
