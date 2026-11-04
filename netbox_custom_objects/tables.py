@@ -209,8 +209,6 @@ class CustomObjectTable(NetBoxTable):
         fields = (
             'pk',
             'id',
-            'name',
-            'custom_object_type',
             'created',
             'last_updated',
             'tags',
@@ -218,8 +216,6 @@ class CustomObjectTable(NetBoxTable):
         default_columns = (
             'pk',
             'id',
-            'name',
-            'custom_object_type',
             'created',
             'last_updated',
         )
@@ -246,6 +242,11 @@ class CustomObjectTable(NetBoxTable):
         ]
         if names:
             self.data.data = self.data.data.prefetch_related(*names)
+
+
+def _export_value(table, value):
+    """A cell's value in an export: the field's own value, rather than the HTML its renderer returns."""
+    return value
 
 
 def get_custom_object_table(custom_object_type, model=None):
@@ -300,8 +301,17 @@ def get_custom_object_table(custom_object_type, model=None):
             # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
             with contextlib.suppress(AttributeError):
                 attrs[f'render_{field.name}'] = field_type.render_table_column
+        # An export takes a render_<name> method's HTML unless there's a value_<name> method.
+        if f'render_{field.name}' in attrs:
+            attrs[f'value_{field.name}'] = _export_value
 
-    return type(f'{model._meta.object_name}Table', (CustomObjectTable,), attrs)
+    table = type(f'{model._meta.object_name}Table', (CustomObjectTable,), attrs)
+    # Head each column with the field's label, as the detail view and forms do; a column
+    # generated from the model field would take its name.
+    for field in visible_fields:
+        if field.name in table.base_columns:
+            table.base_columns[field.name].verbose_name = str(field)
+    return table
 
 
 class CustomObjectTypeConstraintTable(NetBoxTable):
