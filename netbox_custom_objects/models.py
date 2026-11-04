@@ -1092,22 +1092,25 @@ class CustomObject(
         cot_id_str = extract_cot_id_from_model_name(cls.__name__.lower())
         if cot_id_str is None:
             return data
-        cot_id = int(cot_id_str)
-        try:
-            cot = CustomObjectType.objects.get(pk=cot_id)
-        except CustomObjectType.DoesNotExist:
-            return data
 
         field_names = {f.name for f in cls._meta.get_fields()}
 
         # Collect the keys that don't match a current field name so we can do
-        # one batched ObjectChange query instead of one per unknown key.
+        # one batched ObjectChange query instead of one per unknown key.  The
+        # polymorphic M2M sidecar is never a field name.
         unknown_keys = []
         for raw_key in data:
             key = 'custom_field_data' if raw_key == 'custom_fields' else raw_key
-            if key not in field_names:
+            if key not in field_names and key != POLY_M2M_SIDECAR_KEY:
                 unknown_keys.append(key)
-        rename_map = _build_rename_map(cot, unknown_keys) if unknown_keys else {}
+        cot = None
+        rename_map = {}
+        if unknown_keys:
+            # Fetched in the active context: the class may have been built in another one.
+            cot = CustomObjectType.objects.filter(pk=int(cot_id_str)).first()
+            if cot is None:
+                return data
+            rename_map = _build_rename_map(cot, unknown_keys)
 
         result = {}
         for raw_key, value in data.items():
@@ -1142,8 +1145,8 @@ class CustomObject(
             return _deserialize_object(cls, data, pk=pk)
         cot_id = int(cot_id_str)
 
-        # In the squash case the cache may still point to a zero-field model.
-        CustomObjectType.clear_model_cache(cot_id)
+        # get_model() regenerates if a field has changed since the model was cached,
+        # e.g. one created earlier in the same merge.
         try:
             cot = CustomObjectType.objects.get(pk=cot_id)
             fresh_model = cot.get_model()
@@ -2257,6 +2260,7 @@ class CustomObjectType(NetBoxModel):
         # threads can regenerate the same (cot_id, branch_id) in parallel;
         # both produce equivalent classes, so the duplication is wasteful but
         # not incorrect.  Worth it to avoid serialising all generation.
+        outdated_entry = False
         with self._global_lock:
             if self.is_model_cached(self.id, branch_id) and not no_cache:
                 cached_timestamp = self.get_cached_timestamp(self.id, branch_id)
@@ -2271,6 +2275,20 @@ class CustomObjectType(NetBoxModel):
                     # post_save's search-cache handler sees this context's fields.
                     self.register_custom_object_search_index(model)
                     return model
+                outdated_entry = bool(cached_timestamp) and not _registration_rolled_back(model)
+
+        # Either the cached model or this instance is out of date.  If it's this instance,
+        # e.g. one loaded before another instance changed a field, use the type as it is
+        # now: the model is built from the instance's own name, slug and display
+        # expression, and rebuilding from this one would also evict a current model.
+        # (Comparing timestamps by order would trust clocks that differ between hosts.)
+        if outdated_entry:
+            current = CustomObjectType.objects.filter(pk=self.pk).first()
+            if current is not None and current.cache_timestamp != self.cache_timestamp:
+                return current.get_model(skip_object_fields=skip_object_fields)
+
+        with self._global_lock:
+            if self.is_model_cached(self.id, branch_id) and not no_cache:
                 # Only clear the current (cot_id, branch_id) entry.  Lazy
                 # invalidation: each branch context detects its own stale
                 # timestamp on next access — main's COT save propagates the
@@ -5422,6 +5440,25 @@ def check_polymorphic_recursion(sender, instance, action, pk_set, **kwargs):
                     'create a circular dependency between custom object types.'
                 )
             )
+
+
+@receiver(m2m_changed, sender=CustomObjectTypeField.related_object_types.through)
+def clear_cache_on_related_object_types_change(sender, instance, action, reverse, pk_set, **kwargs):
+    """Clear the cached model when a polymorphic field's allowed types change.
+
+    The model is built from them, and they're set after the field is saved, so the
+    cache_timestamp bump in save() can come before a model is cached with the old set.
+    Other workers see the bump once the change commits.
+    """
+    if action not in ('post_add', 'post_remove', 'post_clear'):
+        return
+    if not reverse:
+        CustomObjectType.clear_model_cache(instance.custom_object_type_id)
+    elif pk_set:
+        for cot_id in set(
+            CustomObjectTypeField.objects.filter(pk__in=pk_set).values_list('custom_object_type_id', flat=True)
+        ):
+            CustomObjectType.clear_model_cache(cot_id)
 
 
 @receiver(m2m_changed, sender=CustomObjectTypeField.related_object_types.through)
