@@ -206,6 +206,10 @@ class TableConfigTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(response.status_code, 200)
 
 
+# COMPAT(netbox<4.6.0): CustomFieldChoiceSet has no choice_colors.
+HAS_CHOICE_COLORS = hasattr(CustomFieldChoiceSet, 'get_choice_color')
+
+
 class ListExportTestCase(CustomObjectsTestCase, TestCase):
     """The object list's columns are headed with field labels, and export plain values."""
 
@@ -213,10 +217,9 @@ class ListExportTestCase(CustomObjectsTestCase, TestCase):
         super().setUp()
         self.user.is_superuser = True
         self.user.save()
+        colors = {'choice_colors': {'active': 'green'}} if HAS_CHOICE_COLORS else {}
         choices = CustomFieldChoiceSet.objects.create(
-            name='Status',
-            extra_choices=[['active', 'Active'], ['retired', 'Retired']],
-            choice_colors={'active': 'green'},
+            name='Status', extra_choices=[['active', 'Active'], ['retired', 'Retired']], **colors
         )
         site_type, region_type = (ObjectType.objects.get_for_model(m) for m in (Site, Region))
         self.cot = self.create_custom_object_type(
@@ -307,6 +310,7 @@ class ListExportTestCase(CustomObjectsTestCase, TestCase):
     def test_list_keeps_rendering_links(self):
         html = self.client.get(self.list_url).content.decode()
         self.assertIn('<a href="https://support.acme.example">Support portal</a>', html)
-        self.assertIn('<span class="badge text-bg-green">Active</span>', html)
+        if HAS_CHOICE_COLORS:
+            self.assertIn('<span class="badge text-bg-green">Active</span>', html)
         site = Site.objects.get()
         self.assertIn(f'<a href="{site.get_absolute_url()}">Site 1</a>', html)
