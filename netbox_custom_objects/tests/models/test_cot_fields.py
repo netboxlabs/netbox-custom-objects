@@ -9,9 +9,9 @@ from django.db.utils import ProgrammingError
 from django.test import TestCase, tag
 from django.urls import reverse
 
-from core.models import ObjectType
+from core.models import ManagedFile, ObjectType
 from dcim.models import Site
-from extras.models import CustomFieldChoiceSet
+from extras.models import CustomFieldChoiceSet, ScriptModule
 from netbox_custom_objects.api.serializers import get_serializer_class
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import PolymorphicObjectReverseDescriptor
@@ -884,6 +884,26 @@ class StaleReverseAccessorTestCase(CustomObjectsTestCase, TestCase):
 
         self.assertNotIn('widgets', Site.__dict__)
         self.assertIs(Site.gadgets.rel.field.model, model)
+
+    def _assert_proxy_target_related_name_change_removes_old_accessor(self, field_type, holder):
+        self.addCleanup(lambda: [delattr(holder, n) for n in ('widgets', 'gadgets') if n in holder.__dict__])
+        proxy_ct = ObjectType.objects.get_for_model(ScriptModule, for_concrete_model=False)
+        field = self._create_field(name='module', type=field_type, related_object_type=proxy_ct)
+        self.assertIn('widgets', holder.__dict__)
+
+        field.related_name = 'gadgets'
+        field.save()
+        model = self._regenerate()
+
+        self.assertNotIn('widgets', holder.__dict__)
+        self.assertIs(ScriptModule.gadgets.rel.field.model, model)
+
+    def test_related_name_change_on_proxy_target_removes_old_accessor(self):
+        # Django sets an object field's accessor on the proxy's concrete model.
+        self._assert_proxy_target_related_name_change_removes_old_accessor('object', ManagedFile)
+
+    def test_multiobject_related_name_change_on_proxy_target_removes_old_accessor(self):
+        self._assert_proxy_target_related_name_change_removes_old_accessor('multiobject', ScriptModule)
 
     def test_field_delete_removes_accessor(self):
         for field_type in ('object', 'multiobject'):

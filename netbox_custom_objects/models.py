@@ -145,11 +145,9 @@ def _reverse_accessor_owner(descriptor):
 
 
 def _reverse_accessors(model):
-    """Return the (target model label, name) pairs of the reverse accessors *model*'s object fields install.
+    """Return (target model label, accessor name) pairs for *model*'s object fields.
 
-    Targets are kept by label: a generated target's class changes each time its model is
-    regenerated, and one not generated yet is still a string here (Django installs the
-    accessor once it registers).
+    Labels support unresolved targets and remain stable across model regeneration.
     """
     field_names = {entry['name'] for entry in getattr(model, '_field_objects', {}).values()}
     accessors = set()
@@ -162,18 +160,19 @@ def _reverse_accessors(model):
             if '.' not in label:
                 label = f'{model._meta.app_label}.{label}'
         else:
+            # Django sets an object field's accessor on the target's concrete model, which isn't
+            # the target for a proxy; a multi-object field's goes on the target itself.
+            if not field.many_to_many:
+                target = target._meta.concrete_model
             label = target._meta.label
         accessors.add((label.lower(), field.remote_field.get_accessor_name()))
     return accessors
 
 
 def _retract_reverse_accessors(cot_id, accessors):
-    """Remove the reverse accessors in *accessors* that a main-context class of *cot_id* installed.
+    """Remove listed accessors still owned by *cot_id* in the main context.
 
-    Django sets a field's reverse accessor on the target class when the field is contributed,
-    and nothing removes it, so after a field is deleted or its related_name changes the old
-    accessor stays.  An accessor another type's field or a branch's class has since placed
-    under the name is left alone.  Must hold ``CustomObjectType._global_lock``.
+    The caller must hold ``CustomObjectType._global_lock``.
     """
     for label, name in accessors:
         app_label, model_name = label.split('.')
@@ -2474,8 +2473,7 @@ class CustomObjectType(NetBoxModel):
             # concurrent get_model() calls for the same (cot_id, branch_id) can't
             # interleave their through-model registrations.
             with self._global_lock:
-                # Before _after_model_generation(), whose polymorphic wiring won't replace an
-                # accessor this removes.
+                # Remove stale accessors first so polymorphic fields can reuse their names.
                 if branch_id is None:
                     self._update_reverse_accessors(model, partial=skip_object_fields or skip_cot_object_fields)
 
@@ -2586,10 +2584,10 @@ class CustomObjectType(NetBoxModel):
         return model
 
     def _update_reverse_accessors(self, model, partial):
-        """Remove the reverse accessors earlier main classes installed that *model* doesn't.
+        """Update this type's reverse accessors after model regeneration in main.
 
-        A *partial* model (generated without object fields) doesn't replace any, so they're
-        kept until the type's model is next generated in full.  Must hold ``_global_lock``.
+        Preserve existing accessors if object fields were skipped.
+        The caller must hold ``_global_lock``.
         """
         previous = self._reverse_accessor_cache.get(self.id, set())
         current = _reverse_accessors(model)
