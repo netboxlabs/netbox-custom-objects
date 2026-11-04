@@ -227,11 +227,37 @@ class StaleInstanceModelCacheTestCase(CustomObjectsTestCase, TestCase):
         self.assertIs(self.stale.get_model(), model)
         self.assertIs(CustomObjectType.objects.get(pk=self.cot.pk).get_model(), model)
 
-    def test_model_regenerated_by_stale_instance_is_reused(self):
+    def test_stale_instance_gets_model_built_from_current_type(self):
+        CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+        current = CustomObjectType.objects.get(pk=self.cot.pk)
+        current.verbose_name = 'Renamed'
+        current.save()
+        CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+
         model = self.stale.get_model()
 
-        self.assertIn('notes', {f.name for f in model._meta.fields})
-        self.assertIs(CustomObjectType.objects.get(pk=self.cot.pk).get_model(), model)
+        self.assertEqual(model._meta.verbose_name, 'Renamed')
+        self.assertEqual(model.custom_object_type.verbose_name, 'Renamed')
+        self.assertNotEqual(self.stale.verbose_name, 'Renamed')
+
+    def test_model_built_by_stale_instance_is_not_reused_after_a_change(self):
+        current = CustomObjectType.objects.get(pk=self.cot.pk)
+        current.verbose_name = 'Renamed'
+        current.save()
+        self.stale.get_model()
+
+        model = CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+
+        self.assertEqual(model._meta.verbose_name, 'Renamed')
+
+    def test_allowed_type_change_clears_cached_model(self):
+        field = self.create_polymorphic_field(self.cot, [self.get_site_object_type()], name='assigned_to')
+        CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+        self.assertTrue(CustomObjectType.is_model_cached(self.cot.pk))
+
+        field.related_object_types.add(ObjectType.objects.get(app_label='dcim', model='device'))
+
+        self.assertFalse(CustomObjectType.is_model_cached(self.cot.pk))
 
 
 class ModelRegistryTestCase(CustomObjectsTestCase, TestCase):

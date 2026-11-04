@@ -239,7 +239,6 @@ class FieldAttributeChangesTestCase(BranchingTestBase, _TestBase):
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class MergeReplayModelReuseTestCase(BranchingTestBase, _TestBase):
     """Replaying custom object creates reuses the type's cached model."""
 
@@ -299,6 +298,7 @@ class MergeReplayModelReuseTestCase(BranchingTestBase, _TestBase):
             self.assertEqual(model.resolve_field_aliases(data), data)
 
 
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class TagsAndJournalTestCase(BranchingTestBase, _TestBase):
     """
     Tags use a separate code path in ``CustomObject.deserialize_object`` via
