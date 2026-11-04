@@ -130,44 +130,60 @@ def _can_claim_related_name(target_cls, name, polymorphic):
         return True
     if polymorphic:
         return False
+    return _reverse_accessor_owner(existing) is not None
+
+
+def _reverse_accessor_owner(descriptor):
+    """Return the generated model whose non-polymorphic field installed *descriptor*, or None."""
     # ManyToManyDescriptor subclasses ReverseManyToOneDescriptor; exclude its forward side.
+    if not isinstance(descriptor, ReverseManyToOneDescriptor) or not getattr(descriptor, 'reverse', True):
+        return None
     # Only generated Table<id>Model relations qualify: static plugin models share APP_LABEL
     # (e.g. CustomObjectTypeField.choice_set -> CustomFieldChoiceSet.choices_for_object_type).
-    if isinstance(existing, ReverseManyToOneDescriptor) and getattr(existing, 'reverse', True):
-        return _is_custom_object_model(existing.rel.field.model)
-    return False
+    owner = descriptor.rel.field.model
+    return owner if _is_custom_object_model(owner) else None
 
 
 def _reverse_accessors(model):
-    """Return the (target class, name) pairs of the reverse accessors *model*'s object fields install."""
+    """Return the (target model label, name) pairs of the reverse accessors *model*'s object fields install.
+
+    Targets are kept by label: a generated target's class changes each time its model is
+    regenerated, and one not generated yet is still a string here (Django installs the
+    accessor once it registers).
+    """
     field_names = {entry['name'] for entry in getattr(model, '_field_objects', {}).values()}
     accessors = set()
     for field in (*model._meta.local_fields, *model._meta.local_many_to_many):
         if field.name not in field_names or field.remote_field is None or field.remote_field.hidden:
             continue
-        target_cls = field.remote_field.model
-        if isinstance(target_cls, type):
-            accessors.add((target_cls, field.remote_field.get_accessor_name()))
+        target = field.remote_field.model
+        if isinstance(target, str):
+            label = model._meta.label if target == 'self' else target
+            if '.' not in label:
+                label = f'{model._meta.app_label}.{label}'
+        else:
+            label = target._meta.label
+        accessors.add((label.lower(), field.remote_field.get_accessor_name()))
     return accessors
 
 
-def _retract_reverse_accessors(cot_id, accessors, keep_model=None):
+def _retract_reverse_accessors(cot_id, accessors):
     """Remove the reverse accessors in *accessors* that a main-context class of *cot_id* installed.
 
     Django sets a field's reverse accessor on the target class when the field is contributed,
     and nothing removes it, so after a field is deleted or its related_name changes the old
     accessor stays.  An accessor another type's field or a branch's class has since placed
-    under the name, or one *keep_model* placed, is left alone.
+    under the name is left alone.  Must hold ``CustomObjectType._global_lock``.
     """
-    for target_cls, name in accessors:
-        existing = target_cls.__dict__.get(name)
-        # ManyToManyDescriptor subclasses ReverseManyToOneDescriptor; skip its forward side.
-        if not isinstance(existing, ReverseManyToOneDescriptor) or not getattr(existing, 'reverse', True):
+    for label, name in accessors:
+        app_label, model_name = label.split('.')
+        target_cls = apps.all_models.get(app_label, {}).get(model_name)
+        if target_cls is None:
             continue
-        owner = existing.rel.field.model
+        owner = _reverse_accessor_owner(target_cls.__dict__.get(name))
         if (
-            owner is not keep_model
-            and getattr(owner, 'custom_object_type_id', None) == cot_id
+            owner is not None
+            and owner.custom_object_type_id == cot_id
             and getattr(owner, '_context_branch_id', None) is None
         ):
             delattr(target_cls, name)
@@ -1660,7 +1676,7 @@ class CustomObjectType(NetBoxModel):
     # Each context owns its through class so the source FK is set once at
     # generation time and never mutated to follow another context's CO class.
     _through_model_cache = {}
-    # Reverse accessors main's classes have installed, per type: {cot_id: {(target class, name)}}.
+    # Reverse accessors main's classes have installed, per type: {cot_id: {(target label, name)}}.
     _reverse_accessor_cache = {}
     _global_lock = threading.RLock()
     _ON_DELETE_SQL = {
@@ -2458,6 +2474,11 @@ class CustomObjectType(NetBoxModel):
             # concurrent get_model() calls for the same (cot_id, branch_id) can't
             # interleave their through-model registrations.
             with self._global_lock:
+                # Before _after_model_generation(), whose polymorphic wiring won't replace an
+                # accessor this removes.
+                if branch_id is None:
+                    self._update_reverse_accessors(model, partial=skip_object_fields or skip_cot_object_fields)
+
                 self._after_model_generation(attrs, model)
 
                 # _after_model_generation() can trigger a re-entrant get_model() for this
@@ -2470,9 +2491,6 @@ class CustomObjectType(NetBoxModel):
                     if model_key in apps.all_models[APP_LABEL]:
                         del apps.all_models[APP_LABEL][model_key]
                     apps.register_model(APP_LABEL, model)
-
-                if branch_id is None:
-                    self._update_reverse_accessors(model, partial=skip_object_fields or skip_cot_object_fields)
 
                 # When this COT's model is regenerated (cache miss), non-polymorphic through
                 # models owned by OTHER COTs that point to this COT as their M2M target keep
@@ -2578,7 +2596,7 @@ class CustomObjectType(NetBoxModel):
         if partial:
             self._reverse_accessor_cache[self.id] = previous | current
             return
-        _retract_reverse_accessors(self.id, previous - current, keep_model=model)
+        _retract_reverse_accessors(self.id, previous - current)
         self._reverse_accessor_cache[self.id] = current
 
     def get_model_with_serializer(self):
@@ -2908,10 +2926,10 @@ class CustomObjectType(NetBoxModel):
         whichever generation they are, so main's classes stay registered.
         """
         names = [m.__name__ for m in (model, *getattr(model, '_through_models', []))]
-        cls._unregister_model_names(names, branch_id=branch_id)
-        if branch_id is None:
-            cot_id = model.custom_object_type_id
-            with cls._global_lock:
+        with cls._global_lock:
+            cls._unregister_model_names(names, branch_id=branch_id)
+            if branch_id is None:
+                cot_id = model.custom_object_type_id
                 accessors = cls._reverse_accessor_cache.pop(cot_id, set()) | _reverse_accessors(model)
                 _retract_reverse_accessors(cot_id, accessors)
 
