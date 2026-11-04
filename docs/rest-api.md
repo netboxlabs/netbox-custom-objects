@@ -105,7 +105,7 @@ Common attributes available on all field types:
 | `group_name` | no | Fields sharing the same group name are displayed together. |
 | `required` | no | Whether a value must be provided. Default: `false`. |
 | `unique` | no | Whether values must be unique across all objects of this type. Default: `false`. Not supported for `boolean`, `multiobject` or `coordinates` fields. |
-| `primary` | no | Whether this field's value is used as the object's display name. |
+| `primary` | no | Whether this field's value is used as the object's display name. Setting it clears it on the type's other fields. |
 | `context` | no | Whether this field's value is shown when the object is referenced by another object. |
 | `default` | no | Default value (must be a valid JSON value). |
 | `weight` | no | Display order weight. Higher values appear lower. Default: `100`. |

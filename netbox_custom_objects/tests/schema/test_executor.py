@@ -744,6 +744,34 @@ class ExecutorFieldAlterTestCase(_ExecutorTestBase):
 # ---------------------------------------------------------------------------
 
 
+class ExecutorPrimaryFieldTestCase(_ExecutorTestBase):
+    """A field the document makes primary demotes the type's other primary field."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name='zone', slug='zones')
+        self.create_custom_object_type_field(self.cot, name='name', type='text', primary=True)
+        self.create_custom_object_type_field(self.cot, name='code', type='text')
+
+    def _primaries(self):
+        return list(self.cot.fields.filter(primary=True).values_list('name', flat=True))
+
+    def test_add_primary_field(self):
+        type_def = export_cot(self.cot)
+        next_id = max(f['id'] for f in type_def['fields']) + 1
+        type_def['fields'].append({'id': next_id, 'name': 'title', 'type': 'text', 'primary': True})
+        apply_document({'schema_version': '1', 'types': [type_def]})
+        self.assertEqual(self._primaries(), ['title'])
+
+    def test_alter_field_to_primary(self):
+        type_def = export_cot(self.cot)
+        for f in type_def['fields']:
+            f['primary'] = f['name'] == 'code'
+        apply_document({'schema_version': '1', 'types': [type_def]})
+        self.assertEqual(self._primaries(), ['code'])
+        self.assertEqual(diff_document({'schema_version': '1', 'types': [type_def]})[0].field_changes, [])
+
+
 class ExecutorFieldRemoveTestCase(_ExecutorTestBase):
     """Executor removes (tombstoned) fields from existing COTs."""
 

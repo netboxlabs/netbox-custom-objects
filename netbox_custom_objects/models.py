@@ -4535,6 +4535,19 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             self.custom_object_type.snapshot()
             self.custom_object_type.save(update_fields=['cache_timestamp'])
 
+            # A type has one primary field, so demote the others. Save each one rather than
+            # update() them, so the change is logged and a branch merge replays it. The type's
+            # row is locked by the save above, so two fields made primary at once can't both
+            # stay primary.
+            if self.primary:
+                other_primaries = CustomObjectTypeField.objects.filter(
+                    custom_object_type_id=self.custom_object_type_id, primary=True
+                ).exclude(pk=self.pk)
+                for field in other_primaries:
+                    field.snapshot()
+                    field.primary = False
+                    field.save()
+
             super().save(*args, **kwargs)
 
             # On rename, regenerate now: healing needs the class with the new field

@@ -412,6 +412,43 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(deserialized, test_value)
 
 
+class PrimaryFieldTestCase(CustomObjectsTestCase, TestCase):
+    """Saving a field as primary demotes the type's other primary field."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name='zone', slug='zones')
+        self.name = self.create_custom_object_type_field(self.cot, name='name', type='text', primary=True)
+        self.code = self.create_custom_object_type_field(self.cot, name='code', type='text')
+
+    def _primaries(self):
+        return list(self.cot.fields.filter(primary=True).values_list('name', flat=True))
+
+    def test_new_primary_field_demotes_the_old_one(self):
+        self.create_custom_object_type_field(self.cot, name='title', type='text', primary=True)
+        self.assertEqual(self._primaries(), ['title'])
+
+    def test_existing_field_made_primary_demotes_the_old_one(self):
+        code = CustomObjectTypeField.objects.get(pk=self.code.pk)
+        code.primary = True
+        code.save()
+        self.assertEqual(self._primaries(), ['code'])
+        obj = self.cot.get_model().objects.create(name='Zone A', code='ZA')
+        self.assertEqual(str(obj), 'ZA')
+
+    def test_saving_the_primary_field_keeps_it_primary(self):
+        name = CustomObjectTypeField.objects.get(pk=self.name.pk)
+        name.label = 'Zone name'
+        name.save()
+        self.assertEqual(self._primaries(), ['name'])
+
+    def test_other_types_keep_their_primary_field(self):
+        other = self.create_custom_object_type(name='rack', slug='racks')
+        self.create_custom_object_type_field(other, name='name', type='text', primary=True)
+        self.create_custom_object_type_field(self.cot, name='title', type='text', primary=True)
+        self.assertEqual(list(other.fields.filter(primary=True).values_list('name', flat=True)), ['name'])
+
+
 class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
     """Tests for the related_name field on Object and MultiObject fields."""
 
