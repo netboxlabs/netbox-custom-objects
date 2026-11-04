@@ -4,16 +4,18 @@ Tests for the CustomObjectTypeField model.
 
 from django.apps import apps as django_apps
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.utils import ProgrammingError
 from django.test import TestCase, tag
 from django.urls import reverse
 
-from core.models import ObjectType
+from core.models import ManagedFile, ObjectType
 from dcim.models import Site
-from extras.models import CustomFieldChoiceSet
+from extras.models import CustomFieldChoiceSet, ScriptModule
 from netbox_custom_objects.api.serializers import get_serializer_class
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.field_types import PolymorphicObjectReverseDescriptor
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, _reverse_accessors
 
 from ..base import CustomObjectsTestCase
 
@@ -565,7 +567,8 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
         name = 'stale_certificates'
         self.addCleanup(lambda: name in Site.__dict__ and delattr(Site, name))
 
-        # Leave a stale FK reverse accessor behind on Site.
+        # Leave a stale FK reverse accessor on Site, as a worker that hasn't regenerated the
+        # type's model since the field was deleted still has it.
         np_field = self.create_custom_object_type_field(
             self.cert_cot,
             name='site',
@@ -575,8 +578,9 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
         )
         self.cert_cot.refresh_from_db()
         self.cert_cot.get_model()
+        stale = Site.__dict__[name]
         np_field.delete()
-        self.assertIn(name, Site.__dict__)
+        setattr(Site, name, stale)
 
         poly_field = self.create_custom_object_type_field(
             self.cert_cot,
@@ -818,6 +822,210 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
             self.fail(f'Deleting a related object raised ProgrammingError after field deletion: {exc}')
 
         self.assertNotIn(through_model_name, django_apps.all_models.get(APP_LABEL, {}))
+
+
+class _Rollback(Exception):
+    pass
+
+
+class StaleReverseAccessorTestCase(CustomObjectsTestCase, TestCase):
+    """A non-polymorphic field's old reverse accessor is removed when the type's model is regenerated."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name='Widget', slug='widget')
+        self.create_custom_object_type_field(self.cot, name='name', label='Name', type='text', primary=True)
+        self.site_ct = self.get_site_object_type()
+        self.addCleanup(self._remove_accessors)
+
+    def _remove_accessors(self):
+        # Test transactions roll back the database, not attributes set on Site.
+        model_name = self.cot.get_table_model_name(self.cot.id).lower()
+        for name in ('widgets', 'gadgets', f'{model_name}_site_set', f'{model_name}_location_set'):
+            if name in Site.__dict__:
+                delattr(Site, name)
+
+    def _create_field(self, cot=None, **kwargs):
+        defaults = {
+            'name': 'site',
+            'type': 'object',
+            'related_object_type': self.site_ct,
+            'related_name': 'widgets',
+        }
+        defaults.update(kwargs)
+        field = self.create_custom_object_type_field(cot or self.cot, **defaults)
+        (cot or self.cot).refresh_from_db()
+        (cot or self.cot).get_model()
+        return CustomObjectTypeField.objects.get(pk=field.pk)
+
+    def _regenerate(self, cot=None):
+        cot = cot or self.cot
+        cot.refresh_from_db()
+        return cot.get_model()
+
+    def test_related_name_change_removes_old_accessor(self):
+        field = self._create_field()
+        self.assertIn('widgets', Site.__dict__)
+
+        field.related_name = 'gadgets'
+        field.save()
+        model = self._regenerate()
+
+        self.assertNotIn('widgets', Site.__dict__)
+        self.assertIs(Site.gadgets.rel.field.model, model)
+
+    def test_multiobject_related_name_change_removes_old_accessor(self):
+        field = self._create_field(name='sites', type='multiobject')
+        self.assertIn('widgets', Site.__dict__)
+
+        field.related_name = 'gadgets'
+        field.save()
+        model = self._regenerate()
+
+        self.assertNotIn('widgets', Site.__dict__)
+        self.assertIs(Site.gadgets.rel.field.model, model)
+
+    def _assert_proxy_target_related_name_change_removes_old_accessor(self, field_type, holder):
+        self.addCleanup(lambda: [delattr(holder, n) for n in ('widgets', 'gadgets') if n in holder.__dict__])
+        proxy_ct = ObjectType.objects.get_for_model(ScriptModule, for_concrete_model=False)
+        field = self._create_field(name='module', type=field_type, related_object_type=proxy_ct)
+        self.assertIn('widgets', holder.__dict__)
+
+        field.related_name = 'gadgets'
+        field.save()
+        model = self._regenerate()
+
+        self.assertNotIn('widgets', holder.__dict__)
+        self.assertIs(ScriptModule.gadgets.rel.field.model, model)
+
+    def test_related_name_change_on_proxy_target_removes_old_accessor(self):
+        # Django sets an object field's accessor on the proxy's concrete model.
+        self._assert_proxy_target_related_name_change_removes_old_accessor('object', ManagedFile)
+
+    def test_multiobject_related_name_change_on_proxy_target_removes_old_accessor(self):
+        self._assert_proxy_target_related_name_change_removes_old_accessor('multiobject', ScriptModule)
+
+    def test_field_delete_removes_accessor(self):
+        for field_type in ('object', 'multiobject'):
+            with self.subTest(field_type=field_type):
+                field = self._create_field(type=field_type)
+                self.assertIn('widgets', Site.__dict__)
+
+                field.delete()
+                self._regenerate()
+
+                self.assertNotIn('widgets', Site.__dict__)
+
+    def test_field_rename_removes_auto_named_accessor(self):
+        field = self._create_field(related_name='')
+        model_name = self.cot.get_table_model_name(self.cot.id).lower()
+        self.assertIn(f'{model_name}_site_set', Site.__dict__)
+
+        field.name = 'location'
+        field.save()
+        self._regenerate()
+
+        self.assertNotIn(f'{model_name}_site_set', Site.__dict__)
+        self.assertIn(f'{model_name}_location_set', Site.__dict__)
+
+    def test_accessor_taken_over_by_another_type_is_kept(self):
+        field = self._create_field()
+        field.related_name = 'gadgets'
+        field.save()
+
+        other_cot = self.create_custom_object_type(name='Gizmo', slug='gizmo')
+        self._create_field(cot=other_cot)
+        other_model = other_cot.get_model()
+        self._regenerate()
+
+        self.assertIs(Site.widgets.rel.field.model, other_model)
+
+    def test_rolled_back_related_name_change_restores_accessor(self):
+        field = self._create_field()
+
+        with self.assertRaises(_Rollback), transaction.atomic():
+            field.related_name = 'gadgets'
+            field.save()
+            self._regenerate()
+            raise _Rollback
+        model = self._regenerate()
+
+        self.assertNotIn('gadgets', Site.__dict__)
+        self.assertIs(Site.widgets.rel.field.model, model)
+
+    def test_polymorphic_field_replaces_stale_accessor_in_another_worker(self):
+        field = self._create_field()
+        stale = Site.__dict__['widgets']
+        field.delete()
+        self._regenerate()
+        self.create_polymorphic_field(self.cot, [self.site_ct], name='assigned_to', related_name='widgets')
+
+        # A worker that hasn't regenerated the type since the delete still has the old accessor.
+        setattr(Site, 'widgets', stale)
+        CustomObjectType._reverse_accessor_cache[self.cot.id] = {('dcim.site', 'widgets')}
+        CustomObjectType.clear_model_cache(self.cot.id)
+        self._regenerate()
+
+        self.assertIsInstance(Site.__dict__['widgets'], PolymorphicObjectReverseDescriptor)
+
+    def test_custom_object_target_related_name_change_removes_old_accessor(self):
+        target_cot = self.create_custom_object_type(name='Gizmo', slug='gizmo')
+        self.create_custom_object_type_field(target_cot, name='name', type='text', primary=True)
+        target_ct = ObjectType.objects.get_for_model(target_cot.get_model())
+        field = self._create_field(name='gizmo', related_object_type=target_ct)
+        target_model = self._regenerate(target_cot)
+        self.assertIn('widgets', target_model.__dict__)
+
+        field.related_name = 'gadgets'
+        field.save()
+        self._regenerate()
+
+        self.assertNotIn('widgets', target_model.__dict__)
+
+    def test_unresolved_target_is_recorded(self):
+        """A target not generated yet (a string until Django resolves it) is still recorded."""
+        target_cot = self.create_custom_object_type(name='Gizmo', slug='gizmo')
+        self.create_custom_object_type_field(target_cot, name='name', type='text', primary=True)
+        target_model = target_cot.get_model()
+        target_ct = ObjectType.objects.get_for_model(target_model)
+        self._create_field(name='gizmo', related_object_type=target_ct)
+        fk = self.cot.get_model()._meta.get_field('gizmo')
+
+        resolved = fk.remote_field.model
+        fk.remote_field.model = f'{APP_LABEL}.{target_model.__name__}'
+        try:
+            accessors = _reverse_accessors(fk.model)
+        finally:
+            fk.remote_field.model = resolved
+
+        self.assertIn((target_model._meta.label_lower, 'widgets'), accessors)
+
+    def test_unchanged_self_referential_accessor_is_kept(self):
+        ct = ObjectType.objects.get_for_model(self.cot.get_model())
+        self._create_field(name='parent', related_object_type=ct, related_name='children')
+        targets = []
+        for name in ('notes', 'comments'):
+            targets.append(self._regenerate()._meta.get_field('parent').remote_field.model)
+            self.create_custom_object_type_field(self.cot, name=name, type='text')
+        self._regenerate()
+
+        for target in targets:
+            self.assertIn('children', target.__dict__)
+
+    def test_type_delete_removes_accessor(self):
+        self._create_field()
+        self.assertIn('widgets', Site.__dict__)
+
+        self.cot.delete()
+
+        self.assertNotIn('widgets', Site.__dict__)
+
+    def test_unchanged_accessor_is_kept(self):
+        self._create_field()
+        self.create_custom_object_type_field(self.cot, name='notes', type='text')
+        model = self._regenerate()
+
+        self.assertIs(Site.widgets.rel.field.model, model)
 
 
 class TargetsCustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
