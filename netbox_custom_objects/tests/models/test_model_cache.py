@@ -210,6 +210,30 @@ class ModelCacheInvalidationTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(obj_source.ref_target, obj_target)
 
 
+class StaleInstanceModelCacheTestCase(CustomObjectsTestCase, TestCase):
+    """A type instance loaded before a field change uses the current cached model."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name='Stale', slug='stale')
+        self.create_custom_object_type_field(self.cot, name='name', type='text', primary=True)
+        self.cot.get_model()
+        self.stale = CustomObjectType.objects.get(pk=self.cot.pk)
+        self.create_custom_object_type_field(self.cot, name='notes', type='text')
+
+    def test_stale_instance_reuses_current_model(self):
+        model = CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+
+        self.assertIs(self.stale.get_model(), model)
+        self.assertIs(CustomObjectType.objects.get(pk=self.cot.pk).get_model(), model)
+
+    def test_model_regenerated_by_stale_instance_is_reused(self):
+        model = self.stale.get_model()
+
+        self.assertIn('notes', {f.name for f in model._meta.fields})
+        self.assertIs(CustomObjectType.objects.get(pk=self.cot.pk).get_model(), model)
+
+
 class ModelRegistryTestCase(CustomObjectsTestCase, TestCase):
     """Generated models in Django's app registry, and the classes other contexts generate."""
 

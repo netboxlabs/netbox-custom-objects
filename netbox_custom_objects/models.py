@@ -1089,23 +1089,21 @@ class CustomObject(
         if not data:
             return data
 
-        cot_id_str = extract_cot_id_from_model_name(cls.__name__.lower())
-        if cot_id_str is None:
+        if extract_cot_id_from_model_name(cls.__name__.lower()) is None:
             return data
-        cot_id = int(cot_id_str)
-        try:
-            cot = CustomObjectType.objects.get(pk=cot_id)
-        except CustomObjectType.DoesNotExist:
-            return data
+        # Only its fields are queried, so the class's own instance does; a deleted
+        # type has none, and every key is kept as it is.
+        cot = cls.custom_object_type
 
         field_names = {f.name for f in cls._meta.get_fields()}
 
         # Collect the keys that don't match a current field name so we can do
-        # one batched ObjectChange query instead of one per unknown key.
+        # one batched ObjectChange query instead of one per unknown key.  The
+        # polymorphic M2M sidecar is never a field name.
         unknown_keys = []
         for raw_key in data:
             key = 'custom_field_data' if raw_key == 'custom_fields' else raw_key
-            if key not in field_names:
+            if key not in field_names and key != POLY_M2M_SIDECAR_KEY:
                 unknown_keys.append(key)
         rename_map = _build_rename_map(cot, unknown_keys) if unknown_keys else {}
 
@@ -1142,8 +1140,8 @@ class CustomObject(
             return _deserialize_object(cls, data, pk=pk)
         cot_id = int(cot_id_str)
 
-        # In the squash case the cache may still point to a zero-field model.
-        CustomObjectType.clear_model_cache(cot_id)
+        # get_model() regenerates if a field has changed since the model was cached,
+        # e.g. one created earlier in the same merge.
         try:
             cot = CustomObjectType.objects.get(pk=cot_id)
             fresh_model = cot.get_model()
@@ -2257,20 +2255,44 @@ class CustomObjectType(NetBoxModel):
         # threads can regenerate the same (cot_id, branch_id) in parallel;
         # both produce equivalent classes, so the duplication is wasteful but
         # not incorrect.  Worth it to avoid serialising all generation.
+        current_timestamp = self.cache_timestamp
         with self._global_lock:
-            if self.is_model_cached(self.id, branch_id) and not no_cache:
-                cached_timestamp = self.get_cached_timestamp(self.id, branch_id)
-                model = self.get_cached_model(self.id, branch_id)
+            cache_entry = None if no_cache else self._model_cache.get((self.id, branch_id))
+            if cache_entry is not None:
+                model, cached_timestamp = cache_entry
                 if (
                     cached_timestamp
-                    and self.cache_timestamp
-                    and cached_timestamp == self.cache_timestamp
+                    and current_timestamp
+                    and cached_timestamp == current_timestamp
                     and not _registration_rolled_back(model)
                 ):
                     # registry["search"] is global, not per-branch — re-bind so
                     # post_save's search-cache handler sees this context's fields.
                     self.register_custom_object_search_index(model)
                     return model
+
+        # This instance's timestamp can be older than the cached model's, e.g. one loaded
+        # before another instance changed a field.  Use the database's instead, so a stale
+        # instance neither replaces a current model nor caches one under its old timestamp.
+        # (Comparing timestamps by order would trust clocks that differ between hosts.)
+        # Read before the fields are, so a change committed in between causes another
+        # regeneration rather than caching the old fields under the new timestamp.
+        current_timestamp = (
+            CustomObjectType.objects.filter(pk=self.pk).values_list('cache_timestamp', flat=True).first()
+            or self.cache_timestamp
+        )
+        if (
+            cache_entry is not None
+            and cached_timestamp
+            and cached_timestamp == current_timestamp
+            and not _registration_rolled_back(model)
+        ):
+            self.cache_timestamp = current_timestamp
+            self.register_custom_object_search_index(model)
+            return model
+
+        with self._global_lock:
+            if self.is_model_cached(self.id, branch_id) and not no_cache:
                 # Only clear the current (cot_id, branch_id) entry.  Lazy
                 # invalidation: each branch context detects its own stale
                 # timestamp on next access — main's COT save propagates the
@@ -2516,7 +2538,7 @@ class CustomObjectType(NetBoxModel):
                 # fields if a dependent COT triggers generation before this one in
                 # the startup loop (issue #408), or after a migrate-time call (#637).
                 if not (skip_object_fields or skip_cot_object_fields):
-                    self._model_cache[(self.id, branch_id)] = (model, self.cache_timestamp)
+                    self._model_cache[(self.id, branch_id)] = (model, current_timestamp)
                 _mark_registered_in_transaction(model)
 
         apps.clear_cache()

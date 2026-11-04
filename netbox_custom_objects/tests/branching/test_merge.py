@@ -5,12 +5,15 @@ branch before the merge.
 """
 
 import unittest
+from unittest import mock
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection as main_conn
 
 from extras.models import CustomFieldChoiceSet
+from netbox_custom_objects import models as co_models
 from netbox_custom_objects.models import (
+    POLY_M2M_SIDECAR_KEY,
     CustomObjectType,
     CustomObjectTypeField,
 )
@@ -236,6 +239,66 @@ class FieldAttributeChangesTestCase(BranchingTestBase, _TestBase):
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class MergeReplayModelReuseTestCase(BranchingTestBase, _TestBase):
+    """Replaying custom object creates reuses the type's cached model."""
+
+    def setUp(self):
+        super().setUp()
+        with event_tracking(self.request):
+            self.cot = CustomObjectType.objects.create(name='replay_cot', slug='replay-cot')
+            CustomObjectTypeField.objects.create(custom_object_type=self.cot, name='label', type='text', primary=True)
+
+    def _assert_merge_reuses_model(self, strategy):
+        branch = _provision_branch(f'Replay {strategy}', strategy, self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            model = CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+            for i in range(5):
+                model.objects.create(label=f'object-{i}')
+        CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+
+        with mock.patch.object(co_models, 'generate_model', wraps=co_models.generate_model) as generate:
+            branch.merge(user=self.user, commit=True)
+
+        self.assertEqual(generate.call_count, 0)
+        model = CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+        self.assertEqual(model.objects.filter(label__startswith='object-').count(), 5)
+
+    def test_iterative_merge_does_not_regenerate_model_per_object(self):
+        self._assert_merge_reuses_model('iterative')
+
+    def test_squash_merge_does_not_regenerate_model_per_object(self):
+        self._assert_merge_reuses_model('squash')
+
+    def _assert_field_added_in_branch_is_merged(self, strategy):
+        branch = _provision_branch(f'Replay field {strategy}', strategy, self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            CustomObjectTypeField.objects.create(
+                custom_object_type=CustomObjectType.objects.get(pk=self.cot.pk), name='notes', type='text'
+            )
+            model = CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+            model.objects.create(label='noted', notes='merged')
+        CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+
+        branch.merge(user=self.user, commit=True)
+
+        model = CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+        self.assertEqual(model.objects.get(label='noted').notes, 'merged')
+
+    def test_iterative_merge_uses_field_added_in_branch(self):
+        self._assert_field_added_in_branch_is_merged('iterative')
+
+    def test_squash_merge_uses_field_added_in_branch(self):
+        self._assert_field_added_in_branch_is_merged('squash')
+
+    def test_resolve_field_aliases_with_current_names_runs_no_queries(self):
+        model = CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+        data = {'label': 'x', POLY_M2M_SIDECAR_KEY: []}
+
+        with self.assertNumQueries(0):
+            self.assertEqual(model.resolve_field_aliases(data), data)
+
+
 class TagsAndJournalTestCase(BranchingTestBase, _TestBase):
     """
     Tags use a separate code path in ``CustomObject.deserialize_object`` via
