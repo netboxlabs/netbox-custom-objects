@@ -17,7 +17,8 @@ Covers:
 
 import copy
 
-from django.test import SimpleTestCase, TestCase
+from django.conf import settings
+from django.test import SimpleTestCase, TestCase, override_settings
 
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint
 from netbox_custom_objects.schema.comparator import (
@@ -31,7 +32,9 @@ from netbox_custom_objects.schema.executor import (
     CircularDependencyError,
     DestructiveChangesError,
     InvalidConstraintError,
+    InvalidFieldError,
     InvalidRelatedNameError,
+    InvalidTypeError,
     UnknownChoiceSetError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
@@ -1342,7 +1345,7 @@ class ExecutorConstraintTestCase(_ExecutorTestBase):
 
     def test_constraint_on_field_added_in_same_document(self):
         doc = self._document()
-        doc['types'][0]['fields'].append({'id': 50, 'name': 'model', 'type': 'text'})
+        doc['types'][0]['fields'].append({'id': 50, 'name': 'model_number', 'type': 'text'})
         doc['types'][0]['constraints'] = [{'name': 'vendor_model', 'fields': [self.vendor.schema_id, 50]}]
         apply_document(doc)
         self.assertEqual(CustomObjectTypeConstraint.objects.get().field_schema_ids, [self.vendor.schema_id, 50])
@@ -1373,3 +1376,89 @@ class ExecutorConstraintTestCase(_ExecutorTestBase):
         self.assertFalse(CustomObjectTypeConstraint.objects.exists())
         self.cot.refresh_from_db()
         self.assertEqual(self.cot.description, 'A test custom object type')
+
+
+# ---------------------------------------------------------------------------
+# Validation of the types and fields written
+# ---------------------------------------------------------------------------
+
+
+def _max_custom_object_types(limit):
+    plugin_config = settings.PLUGINS_CONFIG['netbox_custom_objects']
+    return override_settings(
+        PLUGINS_CONFIG={
+            **settings.PLUGINS_CONFIG,
+            'netbox_custom_objects': {**plugin_config, 'max_custom_object_types': limit},
+        }
+    )
+
+
+class ExecutorValidationTestCase(_ExecutorTestBase):
+    """Types and fields are validated as the UI and REST API validate them."""
+
+    def _new_type(self, *fields, slug='checked'):
+        return {'schema_version': '1', 'types': [{'name': slug, 'slug': slug, 'fields': list(fields)}]}
+
+    def test_reserved_field_name_rejected(self):
+        for name in ('objects', 'limit'):
+            with self.subTest(name=name):
+                with self.assertRaisesMessage(InvalidFieldError, f'Field name "{name}" is reserved'):
+                    apply_document(self._new_type({'id': 1, 'name': name, 'type': 'text'}))
+                self.assertFalse(CustomObjectType.objects.filter(slug='checked').exists())
+
+    def test_rename_to_reserved_field_name_rejected(self):
+        apply_document(self._new_type({'id': 1, 'name': 'quota', 'type': 'integer'}))
+        with self.assertRaisesMessage(InvalidFieldError, 'Field name "limit" is reserved'):
+            apply_document(self._new_type({'id': 1, 'name': 'limit', 'type': 'integer'}))
+        self.assertTrue(CustomObjectType.objects.get(slug='checked').fields.filter(name='quota').exists())
+
+    def test_existing_field_with_reserved_name_can_be_changed(self):
+        # e.g. created before the name was reserved
+        cot = self.create_custom_object_type(name='legacy', slug='legacy')
+        field = self.create_custom_object_type_field(cot, name='limit', type='integer')
+        type_def = export_cot(cot)
+        type_def['fields'][0]['label'] = 'Quota'
+        apply_document({'schema_version': '1', 'types': [type_def]})
+        field.refresh_from_db()
+        self.assertEqual(field.label, 'Quota')
+
+    def test_invalid_default_rejected(self):
+        for field_def in (
+            {'id': 1, 'name': 'shade', 'type': 'color', 'default': 'red'},
+            {'id': 1, 'name': 'count', 'type': 'integer', 'default': 'many'},
+            {'id': 1, 'name': 'mac', 'type': 'mac_address', 'default': 'nope'},
+        ):
+            with self.subTest(type=field_def['type']):
+                with self.assertRaisesMessage(InvalidFieldError, 'Invalid default value'):
+                    apply_document(self._new_type(field_def))
+                self.assertFalse(CustomObjectType.objects.filter(slug='checked').exists())
+
+    def test_default_normalized(self):
+        apply_document(self._new_type({'id': 1, 'name': 'mac', 'type': 'mac_address', 'default': '001a2b3c4d5e'}))
+        field = CustomObjectType.objects.get(slug='checked').fields.get(name='mac')
+        self.assertEqual(field.default, '00:1A:2B:3C:4D:5E')
+
+    def test_changed_field_validated(self):
+        apply_document(self._new_type({'id': 1, 'name': 'shade', 'type': 'color'}))
+        with self.assertRaisesMessage(InvalidFieldError, 'Invalid default value'):
+            apply_document(self._new_type({'id': 1, 'name': 'shade', 'type': 'color', 'default': 'red'}))
+        self.assertIsNone(CustomObjectType.objects.get(slug='checked').fields.get(name='shade').default)
+
+    def test_type_limit_enforced(self):
+        self.create_custom_object_type(name='existing', slug='existing')
+        doc = {'schema_version': '1', 'types': [{'name': slug, 'slug': slug} for slug in ('first', 'second')]}
+        with (
+            _max_custom_object_types(2),
+            self.assertRaisesMessage(InvalidTypeError, 'Maximum number of Custom Object Types (2) exceeded'),
+        ):
+            apply_document(doc)
+        self.assertEqual(CustomObjectType.objects.count(), 1)
+
+    def test_changed_type_validated(self):
+        self.create_custom_object_type(name='taken', slug='taken')
+        apply_document(self._new_type())
+        doc = self._new_type()
+        doc['types'][0]['name'] = 'taken'
+        with self.assertRaisesMessage(InvalidTypeError, 'already exists'):
+            apply_document(doc)
+        self.assertEqual(CustomObjectType.objects.get(slug='checked').name, 'checked')

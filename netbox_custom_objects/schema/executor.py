@@ -46,6 +46,7 @@ from netbox_custom_objects.models import (
     CustomObjectTypeField,
     _get_schema_connection,
     is_multi_column_type_change,
+    reserved_field_name_message,
 )
 from netbox_custom_objects.schema.comparator import FieldOp, diff_document
 from netbox_custom_objects.schema.format import (
@@ -84,6 +85,14 @@ class DestructiveChangesError(Exception):
 
 class InvalidConstraintError(Exception):
     """Raised when a constraint in the schema fails validation, e.g. existing objects violate it."""
+
+
+class InvalidFieldError(Exception):
+    """Raised when a field in the schema fails validation, e.g. a reserved name or an invalid default."""
+
+
+class InvalidTypeError(Exception):
+    """Raised when a Custom Object Type in the schema fails validation, e.g. the type limit is reached."""
 
 
 class InvalidRelatedNameError(Exception):
@@ -324,6 +333,40 @@ def _validate_related_name(cot, field, object_types=None) -> None:
         raise InvalidRelatedNameError(f'Field {field.name!r} on COT {cot.slug!r}: {" ".join(exc.messages)}') from exc
 
 
+def _full_clean_field(cot, field) -> None:
+    """Validate *field* as the UI and REST API do, raising InvalidFieldError."""
+    try:
+        field.full_clean()
+    except ValidationError as exc:
+        raise InvalidFieldError(f'Field {field.name!r} on COT {cot.slug!r}: {" ".join(exc.messages)}') from exc
+
+
+def _full_clean_cot(cot) -> None:
+    """Validate *cot* as the UI and REST API do, raising InvalidTypeError."""
+    try:
+        cot.full_clean()
+    except ValidationError as exc:
+        raise InvalidTypeError(f'COT {cot.slug!r}: {" ".join(exc.messages)}') from exc
+
+
+def check_field_names(diffs) -> None:
+    """
+    Raise InvalidFieldError if *diffs* add a field under a reserved name or rename one to it.
+
+    An apply validates every field it writes; this lets a preview report the name too.
+    """
+    for diff in diffs:
+        for fc in diff.field_changes:
+            if fc.op is FieldOp.ADD:
+                name = fc.schema_def.get('name')
+            elif fc.op is FieldOp.ALTER and 'name' in fc.changed_attrs:
+                name = fc.changed_attrs['name'][1]
+            else:
+                continue
+            if name in constants.RESERVED_FIELD_NAMES:
+                raise InvalidFieldError(f'Field {name!r} on COT {diff.slug!r}: {reserved_field_name_message(name)}')
+
+
 def _apply_field_add(cot, fc) -> None:
     """Create a new field on *cot* as described by the ADD FieldChange *fc*."""
     kwargs = _schema_def_to_field_kwargs(fc.schema_def)
@@ -341,6 +384,7 @@ def _apply_field_add(cot, fc) -> None:
         if fc.schema_def.get('is_polymorphic'):
             object_types = _resolve_related_object_types(fc.schema_def.get('related_object_types', []))
         _validate_related_name(cot, field, object_types)
+        _full_clean_field(cot, field)
         field.save()
 
         # Wire up M2M related_object_types for polymorphic fields (must be after save).
@@ -421,6 +465,7 @@ def _apply_field_alter(cot, fc) -> None:
     if 'related_object_types' in pending_m2m:
         object_types = _resolve_related_object_types(pending_m2m['related_object_types'])
     _validate_related_name(cot, field, object_types)
+    _full_clean_field(cot, field)
     field.save()
 
     if object_types is not None:
@@ -527,6 +572,7 @@ def _phase1_cots(ordered_diffs, type_defs_by_slug) -> dict:
                 description=type_def.get('description', ''),
                 group_name=type_def.get('group_name', ''),
             )
+            _full_clean_cot(cot)
             cot.save()
             logger.info('Created new COT %r (slug=%r)', cot.name, cot.slug)
         else:
@@ -534,6 +580,7 @@ def _phase1_cots(ordered_diffs, type_defs_by_slug) -> dict:
             if diff.cot_changes:
                 for attr, (_db_val, schema_val) in diff.cot_changes.items():
                     setattr(cot, attr, schema_val)
+                _full_clean_cot(cot)
                 cot.save(update_fields=list(diff.cot_changes.keys()))
                 logger.info(
                     'Updated COT %r attrs: %s',
@@ -670,6 +717,8 @@ def apply_diffs(
         UnknownChoiceSetError    – a choice_set name cannot be resolved.
         UnknownObjectTypeError   – a related_object_type cannot be resolved.
         InvalidConstraintError   – a constraint fails validation.
+        InvalidFieldError        – a field fails validation.
+        InvalidTypeError         – a Custom Object Type fails validation.
     """
     if not allow_destructive:
         destructive = [d for d in diffs if d.has_destructive_changes]

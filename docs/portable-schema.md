@@ -183,7 +183,7 @@ All fields share these base attributes:
 | Key | Required | Description |
 |-----|----------|-------------|
 | `id` | yes | Stable integer schema ID (>= 1). |
-| `name` | yes | Internal field name, must match identifier pattern. |
+| `name` | yes | Internal field name, must match identifier pattern. Reserved names are rejected, as in the UI (see [Field Attributes](field-attributes.md)). |
 | `type` | yes | Field type (see below). |
 | `label` | no | Display label. Defaults to `name` with underscores replaced by spaces. |
 | `description` | no | Help text shown in the UI. |
@@ -427,7 +427,9 @@ diffs:
 ```
 
 `has_destructive_changes: true` indicates that applying this schema would drop at least one
-column. The preview endpoint never returns `409` — it is safe to call at any time.
+column. The preview endpoint never returns `409` — it is safe to call at any time. A field added
+under a reserved name, or renamed to one, returns `400 Bad Request` with `error: invalid_field`,
+as the apply would.
 
 ### Applying a Schema (API)
 
@@ -456,6 +458,9 @@ schema: { ... }
   being added, changed or removed. Missing permissions return `403 Forbidden`
   before anything is changed; a result that falls outside a constraint returns `403` and is
   rolled back.
+- **Validation:** each Custom Object Type and field the apply creates or changes is validated as
+  the UI and REST API validate it, e.g. reserved field names, invalid default values and the
+  [`max_custom_object_types`](configuration.md#max_custom_object_types) limit.
 - On success, `schema_document` is persisted on each affected COT so tombstones are available
   for future export/diff cycles.
 - Schema apply **works inside a [NetBox Branching](branching.md) branch**: with a branch
@@ -493,6 +498,8 @@ Other `400 Bad Request` responses give an `error` code and a `detail` message:
 |---------|-------|
 | `unresolvable_reference` | A choice set, object type or field type in the document doesn't exist. |
 | `circular_dependency` | New Custom Object Types reference each other in a cycle. |
+| `invalid_type` | A Custom Object Type is invalid, e.g. creating it would exceed `max_custom_object_types`. |
+| `invalid_field` | A field is invalid, e.g. its name is reserved or its default value isn't valid for its type. |
 | `invalid_constraint` | A constraint is invalid, e.g. existing objects already violate it. |
 | `unsupported_field_change` | The document changes an `array` field's element type or tuple size, or a field's type to or from `array`. |
 | `unsupported_type_change` | The document changes a field's type to or from `coordinates` or `url`. |
@@ -617,6 +624,8 @@ full rollback.
 | `UnknownFieldTypeError` | A `type` value is not one of the supported field type strings |
 | `UnsupportedFieldChangeError` | A document changes an `array` field's element type or tuple size, or a field's type to or from `array` |
 | `UnsupportedTypeChangeError` | A document changes a field's type to or from `coordinates` or `url` |
+| `InvalidTypeError` | A Custom Object Type fails validation, e.g. creating it would exceed `max_custom_object_types` |
+| `InvalidFieldError` | A field fails validation, e.g. its name is reserved or its default value is invalid |
 | `InvalidConstraintError` | A constraint fails validation, e.g. existing objects already violate it |
 | `InvalidRelatedNameError` | A field's `related_name` is already used for its object type, or clashes with an attribute of a polymorphic field's target model |
 

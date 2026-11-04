@@ -10,7 +10,7 @@ The Custom Object Type this field belongs to.
 
 ### Name
 
-The internal field name, unique within the Custom Object Type, e.g. `vendor_label`. Only lowercase alphanumeric characters and single underscores between words are permitted, up to 50 characters. Names that every custom object already uses, such as `id`, `tags` and `owner`, are reserved. A polymorphic field can't be renamed.
+The internal field name, unique within the Custom Object Type, e.g. `vendor_label`. Only lowercase alphanumeric characters and single underscores between words are permitted, up to 50 characters. Names that every custom object already uses, such as `id`, `tags` and `owner`, and the query parameters of the type's list views and REST API, such as `limit`, `offset` and `q`, are reserved. A polymorphic field can't be renamed.
 
 ### Label
 

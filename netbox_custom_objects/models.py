@@ -2964,6 +2964,13 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
         raise
 
 
+def reserved_field_name_message(name):
+    """The error for a field named *name*, which is in RESERVED_FIELD_NAMES."""
+    return _('Field name "{name}" is reserved and cannot be used. Reserved names are: {reserved_names}').format(
+        name=name, reserved_names=', '.join(RESERVED_FIELD_NAMES)
+    )
+
+
 class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
     custom_object_type = models.ForeignKey(CustomObjectType, on_delete=models.CASCADE, related_name='fields')
     type = models.CharField(
@@ -3541,15 +3548,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         if self.primary and self.context:
             raise ValidationError(_('A field cannot be both the primary display field and a context field.'))
 
-        # Check if the field name is reserved
-        if self.name in RESERVED_FIELD_NAMES:
-            raise ValidationError(
-                {
-                    'name': _(
-                        'Field name "{name}" is reserved and cannot be used. Reserved names are: {reserved_names}'
-                    ).format(name=self.name, reserved_names=', '.join(RESERVED_FIELD_NAMES))
-                }
-            )
+        # Check the field name isn't reserved. Only a new or changed name is checked, so a field
+        # whose name became reserved in an upgrade can still be edited, renamed or deleted.
+        if self.name in RESERVED_FIELD_NAMES and (self._state.adding or self.name != self._original_name):
+            raise ValidationError({'name': reserved_field_name_message(self.name)})
 
         # Validate the field's default value (if any)
         if self.default is not None:
