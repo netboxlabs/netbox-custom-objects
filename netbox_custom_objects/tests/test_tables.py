@@ -2,6 +2,9 @@
 Tests for the custom object list table.
 """
 
+import csv
+import functools
+import io
 from unittest import skipUnless
 from urllib.parse import parse_qs, urlparse
 
@@ -12,12 +15,13 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from core.models import ObjectType
-from dcim.models import Site
+from dcim.models import Region, Site
 from extras.choices import CustomFieldUIVisibleChoices
 from extras.forms import TableConfigForm
-from extras.models import TableConfig
+from extras.models import CustomFieldChoiceSet, TableConfig
 from netbox.tables import NetBoxTable
 from netbox_custom_objects.models import CustomObjectTypeField
+from netbox_custom_objects.tables import CustomObjectTable
 from utilities.tables import get_table_for_model
 
 from .base import CustomObjectsTestCase
@@ -201,3 +205,140 @@ class TableConfigTestCase(CustomObjectsTestCase, TestCase):
 
         response = self.client.get(config.get_absolute_url())
         self.assertEqual(response.status_code, 200)
+
+
+# COMPAT(netbox<4.6.0): CustomFieldChoiceSet has no choice_colors.
+HAS_CHOICE_COLORS = hasattr(CustomFieldChoiceSet, 'get_choice_color')
+
+
+class ListExportTestCase(CustomObjectsTestCase, TestCase):
+    """The object list's columns are headed with field labels, and export plain values."""
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+        colors = {'choice_colors': {'active': 'green'}} if HAS_CHOICE_COLORS else {}
+        choices = CustomFieldChoiceSet.objects.create(
+            name='Status', extra_choices=[['active', 'Active'], ['retired', 'Retired']], **colors
+        )
+        site_type, region_type = (ObjectType.objects.get_for_model(m) for m in (Site, Region))
+        self.cot = self.create_custom_object_type(
+            name='Contract', slug='contracts', display_expression='{{ vendor }} {{ contract_number }}'
+        )
+        add = functools.partial(self.create_custom_object_type_field, self.cot)
+        add(name='contract_number', label='Contract number', type='text', primary=True)
+        add(name='vendor', label='Vendor', type='text')
+        add(name='notes', label='Notes', type='longtext')
+        add(name='portal', label='Portal', type='url')
+        add(name='status', label='Status', type='select', choice_set=choices)
+        add(name='statuses', label='Statuses', type='multiselect', choice_set=choices)
+        add(name='site', label='Site', type='object', related_object_type=site_type)
+        add(name='sites', label='Sites', type='multiobject', related_object_type=site_type)
+        add(name='anything', label='Anything', type='object', is_polymorphic=True).related_object_types.set(
+            [site_type, region_type]
+        )
+        add(name='things', label='Things', type='multiobject', is_polymorphic=True).related_object_types.set(
+            [site_type, region_type]
+        )
+        add(name='mac', label='MAC address', type='mac_address')
+        add(name='start_date', label='', type='date')
+        self.cot.refresh_from_db()
+
+        site = Site.objects.create(name='Site 1', slug='site-1')
+        region = Region.objects.create(name='Region 1', slug='region-1')
+        obj = self.cot.get_model().objects.create(
+            contract_number='ACME-1001',
+            vendor='Acme',
+            notes='**Renewed**',
+            portal='https://support.acme.example',
+            portal_title='Support portal',
+            status='active',
+            statuses=['active', 'retired'],
+            site=site,
+            anything=region,
+        )
+        obj.sites.set([site])
+        obj.things.add(site, region)
+        self.list_url = reverse(
+            'plugins:netbox_custom_objects:customobject_list', kwargs={'custom_object_type': self.cot.slug}
+        )
+
+    def _export(self, export, url=None):
+        response = self.client.get(url or self.list_url, {'export': export})
+        self.assertEqual(response.status_code, 200)
+        content = b''.join(response.streaming_content) if response.streaming else response.content
+        return list(csv.DictReader(io.StringIO(content.decode())))
+
+    def test_export_has_plain_values(self):
+        expected = {
+            'Contract number': 'ACME-1001',
+            'Notes': '**Renewed**',
+            'Portal': 'https://support.acme.example',
+            'Status': 'Active',
+            'Statuses': 'Active, Retired',
+            'Site': 'Site 1',
+            'Sites': 'Site 1',
+            'Anything': 'Region 1',
+            'Things': 'Region 1, Site 1',
+        }
+        for export in ('table', ''):
+            with self.subTest(export=export):
+                (row,) = self._export(export)
+                self.assertEqual({name: row[name] for name in expected}, expected)
+                self.assertFalse([value for value in row.values() if '<' in value])
+
+    def test_export_has_no_name_or_type_column(self):
+        # An object has no name of its own, and every row has the same type.
+        (row,) = self._export('')
+        self.assertNotIn('Name', row)
+        self.assertNotIn('Custom object type', row)
+
+    def test_saved_config_with_name_or_type_column_validates(self):
+        model = self.cot.get_model()
+        config = TableConfig(
+            name='Contracts',
+            object_type=ObjectType.objects.get_for_model(model),
+            table=get_table_for_model(model).__name__,
+            columns=['id', 'name', 'custom_object_type'],
+            ordering=['name'],
+            user=self.user,
+        )
+        config.full_clean()
+
+    def test_field_named_like_a_table_column(self):
+        cot = self.create_custom_object_type(name='Task', slug='tasks')
+        self.create_custom_object_type_field(cot, name='name', label='Title', type='text', primary=True)
+        self.create_custom_object_type_field(cot, name='actions', label='Next actions', type='text')
+        cot.refresh_from_db()
+        cot.get_model().objects.create(name='Renew', actions='Call Acme')
+        url = reverse('plugins:netbox_custom_objects:customobject_list', kwargs={'custom_object_type': cot.slug})
+
+        (row,) = self._export('', url)
+        self.assertEqual(row['Title'], 'Renew')
+        # The actions column is shared by every type's table, so keeps its heading.
+        self.assertNotEqual(CustomObjectTable.base_columns['actions'].verbose_name, 'Next actions')
+        table = self.client.get(self.list_url).context['table']
+        self.assertEqual(table.columns['name'].header, 'Name')
+
+    def test_columns_headed_with_labels(self):
+        response = self.client.get(self.list_url)
+        table = response.context['table']
+        self.assertEqual(table.columns['mac'].header, 'MAC address')
+        self.assertEqual(table.columns['start_date'].header, 'Start date')
+        self.assertIn('MAC address', self._export('table')[0])
+
+    def test_primary_column_shows_the_field_value(self):
+        # Not the object's display name, which is the display expression here.
+        obj = self.cot.get_model().objects.get()
+        html = self.client.get(self.list_url).content.decode()
+        self.assertIn(f'<a href="{obj.get_absolute_url()}">ACME-1001</a>', html)
+        self.assertNotIn('>Acme ACME-1001</a>', html)
+
+    def test_list_keeps_rendering_links(self):
+        html = self.client.get(self.list_url).content.decode()
+        self.assertIn('<a href="https://support.acme.example">Support portal</a>', html)
+        if HAS_CHOICE_COLORS:
+            self.assertIn('<span class="badge text-bg-green">Active</span>', html)
+        site = Site.objects.get()
+        self.assertIn(f'<a href="{site.get_absolute_url()}">Site 1</a>', html)

@@ -38,7 +38,7 @@ from strawberry.scalars import JSON
 from dcim.fields import MACAddressField
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from netbox.config import get_config
-from netbox.tables.columns import BooleanColumn, ColorColumn
+from netbox.tables.columns import BooleanColumn, ColorColumn, ManyToManyColumn
 from netbox_custom_objects.choices import (
     ArrayElementTypeChoices,
     CustomObjectFieldTypeChoices,
@@ -375,8 +375,9 @@ class FieldType:
     def get_table_column_field(self, field, **kwargs):
         raise NotImplementedError
 
-    def render_table_column_linkified(self, record):
-        return linkify(record)
+    def render_table_column_linkified(self, record, bound_column):
+        # The field's own value, not the object's display name, which may be a display expression.
+        return linkify(record, bound_column.name)
 
     def _get_related_content_type(self, field):
         """
@@ -847,6 +848,9 @@ class SelectFieldType(FieldType):
                     return mark_safe(f'<span class="badge text-bg-{escape(color)}">{escape(label)}</span>')
                 return label
 
+            def value(self, value):
+                return choices_dict.get(value, value)
+
         return _SelectLabelColumn()
 
     def get_filterform_field(self, field, **kwargs):
@@ -1006,6 +1010,9 @@ class MultiSelectFieldType(FieldType):
                     )
                     return mark_safe(f'<div class="d-flex flex-wrap gap-1">{badges}</div>')
                 return ', '.join(label for label, _ in pairs)
+
+            def value(self, value):
+                return ', '.join(str(choices_dict.get(v, v)) for v in value or ())
 
         return _MultiSelectLabelColumn()
 
@@ -1770,7 +1777,8 @@ class MultiObjectFieldType(FieldType):
         return ', '.join(str(s) for s in field.all())
 
     def get_table_column_field(self, field, **kwargs):
-        return tables.ManyToManyColumn(linkify_item=True, orderable=False)
+        # NetBox's ManyToManyColumn exports the related objects' names, not their links.
+        return ManyToManyColumn(linkify_item=True, orderable=False)
 
     def get_serializer_field(self, field, **kwargs):
         if field.is_polymorphic:
@@ -2930,11 +2938,7 @@ class CoordinatesFieldType(FieldType):
         }
 
     def get_table_column_field(self, field, **kwargs):
-        return CoordinatesColumn(
-            self.latitude_field_name(field),
-            self.longitude_field_name(field),
-            verbose_name=str(field),
-        )
+        return CoordinatesColumn(self.latitude_field_name(field), self.longitude_field_name(field))
 
     @staticmethod
     def validate_pair(latitude, longitude):
@@ -3244,7 +3248,7 @@ class ArrayFieldType(FieldType):
             def render(self, value):
                 return format_array_value(value) or self.default
 
-        return _ArrayColumn(verbose_name=str(field), orderable=False)
+        return _ArrayColumn(orderable=False)
 
 
 FIELD_TYPE_CLASS = {
