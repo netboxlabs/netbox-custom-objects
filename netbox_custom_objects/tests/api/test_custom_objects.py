@@ -6,6 +6,7 @@ import uuid
 from unittest import skipUnless
 
 from django.conf import settings
+from django.core.cache import cache
 from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
@@ -1589,7 +1590,8 @@ class ObjectChangeAPITestCase(CustomObjectsTestCase, TestCase):
 class ObjectFieldWithoutNetBoxSerializerTestCase(CustomObjectsTestCase, TestCase):
     """
     Object fields to models without a NetBox REST API serializer (Dashboard has a plain DRF
-    one, ConfigRevision none) are shown and written like any other related object.
+    one, ConfigRevision none) show the related object's id, URLs and display, and are
+    written by ID.
     """
 
     def setUp(self):
@@ -1615,10 +1617,21 @@ class ObjectFieldWithoutNetBoxSerializerTestCase(CustomObjectsTestCase, TestCase
         )
         self.model = self.cot.get_model()
         self.dashboard = Dashboard.objects.create(user=self.user)
-        self.revision = ConfigRevision.objects.create(data={})
-        self.revision.refresh_from_db()  # Saving it activates it.
+        self.revision = self._create_config_revision()
         self.instance = self.model.objects.create(name='Object 1', dash=self.dashboard, revision=self.revision)
         self.instance.dashes.set([self.dashboard])
+
+    def _create_config_revision(self):
+        # Saving a revision activates it, which caches its data; the rollback doesn't undo that.
+        cached = {key: cache.get(key) for key in ('config', 'config_version')}
+        for key, value in cached.items():
+            if value is None:
+                self.addCleanup(cache.delete, key)
+            else:
+                self.addCleanup(cache.set, key, value, None)
+        revision = ConfigRevision.objects.create(data={})
+        revision.refresh_from_db()
+        return revision
 
     def _list_url(self):
         return reverse(
@@ -1633,9 +1646,11 @@ class ObjectFieldWithoutNetBoxSerializerTestCase(CustomObjectsTestCase, TestCase
         )
 
     def test_list_and_detail_show_the_related_objects(self):
-        dashboard = {'id': self.dashboard.pk, 'display': str(self.dashboard)}
+        # Dashboard has neither an API nor a UI detail view; ConfigRevision has a UI one.
+        dashboard = {'id': self.dashboard.pk, 'url': None, 'display_url': None, 'display': str(self.dashboard)}
         revision = {
             'id': self.revision.pk,
+            'url': None,
             'display_url': f'http://testserver{self.revision.get_absolute_url()}',
             'display': str(self.revision),
         }
@@ -1653,7 +1668,7 @@ class ObjectFieldWithoutNetBoxSerializerTestCase(CustomObjectsTestCase, TestCase
             self._list_url(),
             {
                 'name': 'Object 2',
-                'dash': self.dashboard.pk,
+                'dash': {'id': self.dashboard.pk},
                 'dashes': [self.dashboard.pk],
                 'revision': self.revision.pk,
             },
@@ -1664,3 +1679,12 @@ class ObjectFieldWithoutNetBoxSerializerTestCase(CustomObjectsTestCase, TestCase
         self.assertEqual(instance.dash, self.dashboard)
         self.assertEqual(list(instance.dashes.all()), [self.dashboard])
         self.assertEqual(instance.revision, self.revision)
+
+    def test_related_object_is_not_looked_up_by_attributes(self):
+        for value in ({'user': {'username': self.user.username}}, [{'id': self.dashboard.pk, 'layout': []}]):
+            with self.subTest(value=value):
+                field = 'dash' if isinstance(value, dict) else 'dashes'
+                response = self.client.post(self._list_url(), {'name': 'Object 2', field: value}, format='json')
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn(field, response.data)
+        self.assertFalse(self.model.objects.filter(name='Object 2').exists())

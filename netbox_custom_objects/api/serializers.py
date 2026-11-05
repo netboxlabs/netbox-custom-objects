@@ -7,6 +7,7 @@ from django.db import transaction
 from django.urls import NoReverseMatch
 from django.utils.translation import gettext_lazy as _
 from drf_spectacular.extensions import OpenApiSerializerExtension
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
@@ -37,7 +38,7 @@ from netbox_custom_objects.models import (
 from netbox_custom_objects.utilities import predicate_field_ref
 from users.api.serializers_.owners import OwnerSerializer
 from utilities.api import get_serializer_for_model
-from utilities.views import get_viewname
+from utilities.views import get_action_url
 
 # Public URL slug used in API paths (e.g. /api/plugins/custom-objects/)
 _PUBLIC_APP_LABEL = 'custom-objects'
@@ -100,43 +101,67 @@ def get_nested_serializer_for_model(model):
     """
     Return a serializer that represents an object of ``model`` nested in a custom object.
 
-    That's the model's REST API serializer if it's a NetBox serializer, which accepts
-    ``nested``. Some models offered as related object types have none, or a plain DRF one
-    (e.g. core's ConfigRevision and Dashboard); for those, return a minimal serializer with
-    the object's id and display, and its URLs where the model has those views.
+    That's the custom object serializer for a generated model, or the model's REST API
+    serializer if it's a NetBox serializer, which accepts ``nested``. Some models offered as
+    related object types have none, or a plain DRF one (e.g. core's ConfigRevision and
+    Dashboard); for those, return an ObjectReferenceSerializer.
     """
+    if model._meta.app_label == constants.APP_LABEL and _TABLE_MODEL_PATTERN.match(model._meta.object_name):
+        return get_serializer_class(model, skip_object_fields=True)
+    if model in _reference_serializers:
+        return _reference_serializers[model]
     try:
         serializer = get_serializer_for_model(model)
     except SerializerNotFound:
         serializer = None
     if serializer is not None and issubclass(serializer, BaseModelSerializer):
         return serializer
-    if model not in _reference_serializers:
-        _reference_serializers[model] = _build_reference_serializer(model)
+    meta = type(
+        'Meta',
+        (),
+        {'model': model, 'fields': ObjectReferenceSerializer.FIELDS, 'brief_fields': ObjectReferenceSerializer.FIELDS},
+    )
+    name = f'{model._meta.app_label.title()}{model.__name__}ReferenceSerializer'
+    _reference_serializers[model] = type(name, (ObjectReferenceSerializer,), {'Meta': meta})
     return _reference_serializers[model]
 
 
-def _has_detail_view(model, rest_api):
-    viewname = get_viewname(model=model, action='detail' if rest_api else None, rest_api=rest_api)
-    try:
-        reverse(viewname, kwargs={'pk': 1})
-    except NoReverseMatch:
-        return False
-    return True
+class ObjectReferenceSerializer(BaseModelSerializer):
+    """
+    A related object of a model without a NetBox REST API serializer: its id, display, and
+    URLs where the model has those views.
 
+    It's written by ID only. The model's queryset may not restrict lookups by attribute to
+    the objects the user can view, as a NetBox model's does.
+    """
 
-def _build_reference_serializer(model):
-    fields = ['id']
-    attrs = {}
-    for name, rest_api in (('url', True), ('display_url', False)):
-        if _has_detail_view(model, rest_api):
-            fields.append(name)
-        else:
-            attrs[name] = None  # Removes BaseModelSerializer's field.
-    fields.append('display')
-    attrs['Meta'] = type('Meta', (), {'model': model, 'fields': fields, 'brief_fields': fields})
-    name = f'{model._meta.app_label.title()}{model.__name__}ReferenceSerializer'
-    return type(name, (BaseModelSerializer,), attrs)
+    FIELDS = ('id', 'url', 'display_url', 'display')
+
+    url = serializers.SerializerMethodField()
+    display_url = serializers.SerializerMethodField()
+
+    @extend_schema_field(OpenApiTypes.URI)
+    def get_url(self, obj):
+        return self._get_object_url(obj, rest_api=True)
+
+    @extend_schema_field(OpenApiTypes.URI)
+    def get_display_url(self, obj):
+        return self._get_object_url(obj, rest_api=False)
+
+    def _get_object_url(self, obj, rest_api):
+        try:
+            path = get_action_url(obj, action='detail' if rest_api else None, rest_api=rest_api, kwargs={'pk': obj.pk})
+        except NoReverseMatch:
+            return None
+        request = self.context.get('request')
+        return request.build_absolute_uri(path) if request else path
+
+    def to_internal_value(self, data):
+        if isinstance(data, dict):
+            if list(data) != ['id']:
+                raise ValidationError(_('Refer to the object by its ID.'))
+            data = data['id']
+        return super().to_internal_value(data)
 
 
 class PolymorphicObjectSerializerField(serializers.Field):

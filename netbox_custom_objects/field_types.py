@@ -1193,15 +1193,9 @@ class ObjectFieldType(FieldType):
                 allow_null=not field.required,
             )
         self._get_related_content_type(field)  # validates FK; raises NotImplementedError if null/missing
-        related_model_class = field.related_object_type.model_class()
-        if related_model_class._meta.app_label == APP_LABEL:
-            from netbox_custom_objects.api.serializers import get_serializer_class
+        from netbox_custom_objects.api.serializers import get_nested_serializer_for_model
 
-            serializer = get_serializer_class(related_model_class, skip_object_fields=True)
-        else:
-            from netbox_custom_objects.api.serializers import get_nested_serializer_for_model
-
-            serializer = get_nested_serializer_for_model(related_model_class)
+        serializer = get_nested_serializer_for_model(field.related_object_type.model_class())
         return serializer(required=field.required, allow_null=not field.required, nested=True)
 
     def after_model_generation(self, instance, model, field_name):
@@ -1786,15 +1780,9 @@ class MultiObjectFieldType(FieldType):
                 allow_null=not field.required,
                 allow_empty=True,
             )
-        related_model_class = field.related_object_type.model_class()
-        if related_model_class._meta.app_label == APP_LABEL:
-            from netbox_custom_objects.api.serializers import get_serializer_class
+        from netbox_custom_objects.api.serializers import get_nested_serializer_for_model
 
-            serializer = get_serializer_class(related_model_class, skip_object_fields=True)
-        else:
-            from netbox_custom_objects.api.serializers import get_nested_serializer_for_model
-
-            serializer = get_nested_serializer_for_model(related_model_class)
+        serializer = get_nested_serializer_for_model(field.related_object_type.model_class())
         # Construct the ListSerializer explicitly so that allow_null is set only on
         # the outer list (permitting null to clear the whole field) and NOT on the
         # child (preventing individual null items like [null, 3] from slipping
