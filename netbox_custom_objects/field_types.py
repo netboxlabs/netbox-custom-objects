@@ -1152,7 +1152,7 @@ class ObjectFieldType(FieldType):
                 model_class = ot.model_class()
                 if model_class is None:
                     continue
-                result[f'{field.name}_{ot.app_label}_{ot.model}'] = DynamicModelChoiceField(
+                result[f'{field.name}_{ot.app_label}_{ot.model}'] = DynamicModelMultipleChoiceField(
                     queryset=model_class.objects.all(),
                     required=False,
                     label=f'{base_label} ({model_class._meta.verbose_name})',
@@ -1172,13 +1172,16 @@ class ObjectFieldType(FieldType):
             model = custom_object_type.get_model()
         else:
             model = content_type.model_class()
-        return DynamicModelChoiceField(
-            queryset=model.objects.all(),
-            required=False,
-            label=field,
-            selector=model._meta.app_label != APP_LABEL,
-            query_params=(field.related_object_filter if hasattr(field, 'related_object_filter') else None),
-        )
+        # Named <field>_id, like core's object filters and the Related Objects links.
+        return {
+            f'{field.name}_id': DynamicModelMultipleChoiceField(
+                queryset=model.objects.all(),
+                required=False,
+                label=field,
+                selector=model._meta.app_label != APP_LABEL,
+                query_params=(field.related_object_filter if hasattr(field, 'related_object_filter') else None),
+            )
+        }
 
     def render_table_column(self, value):
         return linkify(value)

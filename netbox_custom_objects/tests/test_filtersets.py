@@ -3,16 +3,18 @@ Tests for filtersets used by the plugin's UI and API views.
 """
 
 import datetime
+import functools
 from decimal import Decimal
 from unittest.mock import MagicMock
 
 import django_filters
+from django.http import QueryDict
 from django.test import TestCase
 from django.utils import timezone
 
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
-from extras.choices import CustomFieldTypeChoices
+from extras.choices import CustomFieldFilterLogicChoices, CustomFieldTypeChoices
 from extras.models import CustomFieldChoiceSet
 from netbox_custom_objects.field_types import MultiObjectFieldType, ObjectFieldType
 from netbox_custom_objects.filtersets import (
@@ -27,10 +29,8 @@ from netbox_custom_objects.filtersets import (
     get_filterset_class,
 )
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
-from utilities.forms.fields import (
-    DynamicModelChoiceField,
-    DynamicModelMultipleChoiceField,
-)
+from utilities.filters import MultiValueDecimalFilter
+from utilities.forms.fields import DynamicModelMultipleChoiceField
 
 try:
     from utilities.testing import ChangeLoggedFilterSetTestMixin
@@ -39,6 +39,14 @@ except ImportError:
     from utilities.testing import ChangeLoggedFilterSetTests as ChangeLoggedFilterSetTestMixin
 
 from .base import CustomObjectsTestCase
+
+
+def query_dict(params):
+    """Filter parameters as a request gives them to a filterset: a QueryDict, with a list for a repeated one."""
+    data = QueryDict(mutable=True)
+    for key, value in params.items():
+        data.setlist(key, [str(v) for v in value] if isinstance(value, (list, tuple)) else [str(value)])
+    return data
 
 
 def _make_device_fixtures(suffix):
@@ -56,7 +64,7 @@ def _make_device_fixtures(suffix):
 
 
 class ObjectFieldFilterFormFieldTestCase(CustomObjectsTestCase, TestCase):
-    """get_filterform_field() for an object field returns a DynamicModelChoiceField."""
+    """get_filterform_field() for an object field returns a DynamicModelMultipleChoiceField named <field>_id."""
 
     @classmethod
     def setUpTestData(cls):
@@ -73,16 +81,18 @@ class ObjectFieldFilterFormFieldTestCase(CustomObjectsTestCase, TestCase):
             related_object_type=cls.get_device_object_type(),
         )
 
-    def test_returns_dynamic_model_choice_field(self):
-        form_field = ObjectFieldType().get_filterform_field(self.field)
-        self.assertIsInstance(form_field, DynamicModelChoiceField)
+    def test_returns_dynamic_model_multiple_choice_field_named_id(self):
+        # Named like core's object filters and the Related Objects links.
+        (name, form_field) = ObjectFieldType().get_filterform_field(self.field).popitem()
+        self.assertEqual(name, 'device_id')
+        self.assertIsInstance(form_field, DynamicModelMultipleChoiceField)
 
     def test_form_field_not_required(self):
-        form_field = ObjectFieldType().get_filterform_field(self.field)
+        form_field = ObjectFieldType().get_filterform_field(self.field)['device_id']
         self.assertFalse(form_field.required)
 
     def test_form_field_queryset_uses_related_model(self):
-        form_field = ObjectFieldType().get_filterform_field(self.field)
+        form_field = ObjectFieldType().get_filterform_field(self.field)['device_id']
         self.assertEqual(form_field.queryset.model, Device)
 
 
@@ -120,7 +130,7 @@ class ObjectFieldFiltersetTestCase(CustomObjectsTestCase, TestCase):
 
     def _filterset(self, params):
         model = self.cot.get_model()
-        return get_filterset_class(model)(params, model.objects.all())
+        return get_filterset_class(model)(query_dict(params), model.objects.all())
 
     def test_filter_returns_matching_object(self):
         pks = list(self._filterset({'device': self.device1.pk}).qs.values_list('pk', flat=True))
@@ -223,7 +233,7 @@ class MultiObjectFieldFiltersetTestCase(CustomObjectsTestCase, TestCase):
 
     def _filterset(self, params):
         model = self.cot.get_model()
-        return get_filterset_class(model)(params, model.objects.all())
+        return get_filterset_class(model)(query_dict(params), model.objects.all())
 
     def test_filter_single_site_returns_linked_objects(self):
         pks = list(self._filterset({'sites': [self.site1.pk]}).qs.values_list('pk', flat=True))
@@ -301,12 +311,12 @@ class CustomObjectTargetObjectFieldTestCase(CustomObjectsTestCase, TestCase):
     def _field(self):
         return CustomObjectTypeField.objects.get(custom_object_type=self.source_cot, name='related')
 
-    def test_filterform_field_returns_dynamic_model_choice_field(self):
-        form_field = ObjectFieldType().get_filterform_field(self._field())
-        self.assertIsInstance(form_field, DynamicModelChoiceField)
+    def test_filterform_field_returns_dynamic_model_multiple_choice_field(self):
+        form_field = ObjectFieldType().get_filterform_field(self._field())['related_id']
+        self.assertIsInstance(form_field, DynamicModelMultipleChoiceField)
 
     def test_filterform_field_queryset_points_at_target_model(self):
-        form_field = ObjectFieldType().get_filterform_field(self._field())
+        form_field = ObjectFieldType().get_filterform_field(self._field())['related_id']
         target_model = self.target_cot.get_model()
         self.assertEqual(
             form_field.queryset.model._meta.db_table,
@@ -315,7 +325,7 @@ class CustomObjectTargetObjectFieldTestCase(CustomObjectsTestCase, TestCase):
 
     def test_filter_by_custom_object_target(self):
         source_model = self.source_cot.get_model()
-        fs = get_filterset_class(source_model)({'related': self.target1.pk}, source_model.objects.all())
+        fs = get_filterset_class(source_model)(query_dict({'related': self.target1.pk}), source_model.objects.all())
         pks = list(fs.qs.values_list('pk', flat=True))
         self.assertIn(self.source_t1.pk, pks)
         self.assertNotIn(self.source_t2.pk, pks)
@@ -323,7 +333,7 @@ class CustomObjectTargetObjectFieldTestCase(CustomObjectsTestCase, TestCase):
 
     def test_filter_other_target(self):
         source_model = self.source_cot.get_model()
-        fs = get_filterset_class(source_model)({'related': self.target2.pk}, source_model.objects.all())
+        fs = get_filterset_class(source_model)(query_dict({'related': self.target2.pk}), source_model.objects.all())
         pks = list(fs.qs.values_list('pk', flat=True))
         self.assertIn(self.source_t2.pk, pks)
         self.assertNotIn(self.source_t1.pk, pks)
@@ -389,7 +399,9 @@ class CustomObjectTargetMultiObjectFieldTestCase(CustomObjectsTestCase, TestCase
 
     def test_filter_single_target(self):
         source_model = self.source_cot.get_model()
-        fs = get_filterset_class(source_model)({'related_items': [self.target1.pk]}, source_model.objects.all())
+        fs = get_filterset_class(source_model)(
+            query_dict({'related_items': [self.target1.pk]}), source_model.objects.all()
+        )
         pks = list(fs.qs.values_list('pk', flat=True))
         self.assertIn(self.source_t1.pk, pks)
         self.assertIn(self.source_both.pk, pks)
@@ -399,7 +411,7 @@ class CustomObjectTargetMultiObjectFieldTestCase(CustomObjectsTestCase, TestCase
     def test_filter_multiple_targets_returns_union(self):
         source_model = self.source_cot.get_model()
         fs = get_filterset_class(source_model)(
-            {'related_items': [self.target1.pk, self.target2.pk]}, source_model.objects.all()
+            query_dict({'related_items': [self.target1.pk, self.target2.pk]}), source_model.objects.all()
         )
         pks = list(fs.qs.values_list('pk', flat=True))
         self.assertIn(self.source_t1.pk, pks)
@@ -410,7 +422,7 @@ class CustomObjectTargetMultiObjectFieldTestCase(CustomObjectsTestCase, TestCase
     def test_filter_multiple_targets_no_duplicates(self):
         source_model = self.source_cot.get_model()
         qs = get_filterset_class(source_model)(
-            {'related_items': [self.target1.pk, self.target2.pk]}, source_model.objects.all()
+            query_dict({'related_items': [self.target1.pk, self.target2.pk]}), source_model.objects.all()
         ).qs
         self.assertEqual(qs.filter(pk=self.source_both.pk).count(), 1)
 
@@ -555,7 +567,7 @@ class FiltersetAfterClearCacheTestCase(CustomObjectsTestCase, TestCase):
         other_mfr = Manufacturer.objects.create(name='Other503', slug='other-503')
         model.objects.create(name='other-obj', manufacturer=other_mfr)
 
-        fs = get_filterset_class(model)({'manufacturer': self.mfr.pk}, model.objects.all())
+        fs = get_filterset_class(model)(query_dict({'manufacturer': self.mfr.pk}), model.objects.all())
         pks = list(fs.qs.values_list('pk', flat=True))
         self.assertEqual(set(pks), {obj.pk})
 
@@ -567,7 +579,7 @@ class FiltersetAfterClearCacheTestCase(CustomObjectsTestCase, TestCase):
         model.objects.create(name='unlinked')
 
         Site.objects.create(name='Other503', slug='other-site-503')
-        fs = get_filterset_class(model)({'sites': [self.site.pk]}, model.objects.all())
+        fs = get_filterset_class(model)(query_dict({'sites': [self.site.pk]}), model.objects.all())
         pks = list(fs.qs.values_list('pk', flat=True))
         self.assertEqual(set(pks), {obj.pk})
 
@@ -578,7 +590,7 @@ class FiltersetAfterClearCacheTestCase(CustomObjectsTestCase, TestCase):
         model.objects.create(name='obj-b')
         total = model.objects.count()
 
-        fs = get_filterset_class(model)({}, model.objects.all())
+        fs = get_filterset_class(model)(query_dict({}), model.objects.all())
         self.assertEqual(fs.qs.count(), total)
 
     def test_multiobject_filter_empty_value_returns_full_queryset(self):
@@ -588,7 +600,7 @@ class FiltersetAfterClearCacheTestCase(CustomObjectsTestCase, TestCase):
         model.objects.create(name='obj-b')
         total = model.objects.count()
 
-        fs = get_filterset_class(model)({}, model.objects.all())
+        fs = get_filterset_class(model)(query_dict({}), model.objects.all())
         self.assertEqual(fs.qs.count(), total)
 
 
@@ -614,7 +626,7 @@ class IntegerPrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
 
     def _search(self, value):
         model = self.cot.get_model()
-        return get_filterset_class(model)({'q': value}, model.objects.all()).qs
+        return get_filterset_class(model)(query_dict({'q': value}), model.objects.all()).qs
 
     def test_search_by_integer_value_finds_match(self):
         pks = list(self._search('311').values_list('pk', flat=True))
@@ -653,7 +665,7 @@ class DecimalPrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
 
     def _search(self, value):
         model = self.cot.get_model()
-        return get_filterset_class(model)({'q': value}, model.objects.all()).qs
+        return get_filterset_class(model)(query_dict({'q': value}), model.objects.all()).qs
 
     def test_search_exact_decimal_finds_match(self):
         pks = list(self._search('1.1').values_list('pk', flat=True))
@@ -699,7 +711,7 @@ class SelectPrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
 
     def _search(self, value):
         model = self.cot.get_model()
-        return get_filterset_class(model)({'q': value}, model.objects.all()).qs
+        return get_filterset_class(model)(query_dict({'q': value}), model.objects.all()).qs
 
     def test_search_by_select_value_finds_match(self):
         pks = list(self._search('active').values_list('pk', flat=True))
@@ -734,7 +746,7 @@ class DatePrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
 
     def _search(self, value):
         model = self.cot.get_model()
-        return get_filterset_class(model)({'q': value}, model.objects.all()).qs
+        return get_filterset_class(model)(query_dict({'q': value}), model.objects.all()).qs
 
     def test_search_by_date_finds_match(self):
         pks = list(self._search('2025-01-15').values_list('pk', flat=True))
@@ -765,7 +777,7 @@ class DateTimePrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
 
     def _search(self, value):
         model = self.cot.get_model()
-        return get_filterset_class(model)({'q': value}, model.objects.all()).qs
+        return get_filterset_class(model)(query_dict({'q': value}), model.objects.all()).qs
 
     def test_search_by_datetime_finds_match(self):
         pks = list(self._search('2025-03-10 09:00:00').values_list('pk', flat=True))
@@ -807,7 +819,7 @@ class MultiSelectPrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
 
     def _search(self, value):
         model = self.cot.get_model()
-        return get_filterset_class(model)({'q': value}, model.objects.all()).qs
+        return get_filterset_class(model)(query_dict({'q': value}), model.objects.all()).qs
 
     def test_search_finds_exact_element(self):
         pks = list(self._search('red').values_list('pk', flat=True))
@@ -853,7 +865,7 @@ class ScalarFieldFiltersetTestCase(CustomObjectsTestCase):
 
     def _filterset(self, params):
         model = self.cot.get_model()
-        return get_filterset_class(model)(params, model.objects.all())
+        return get_filterset_class(model)(query_dict(params), model.objects.all())
 
     def test_filter_returns_match_not_other(self):
         pks = list(self._filterset(self.match_params).qs.values_list('pk', flat=True))
@@ -942,7 +954,7 @@ class TextFieldFilterLogicTestCase(CustomObjectsTestCase, TestCase):
 
     def _filterset(self, params):
         model = self.cot.get_model()
-        return get_filterset_class(model)(params, model.objects.all())
+        return get_filterset_class(model)(query_dict(params), model.objects.all())
 
     def test_loose_field_bare_filter_is_icontains(self):
         """Existing (pre-fix) loose behavior is unchanged."""
@@ -1413,7 +1425,7 @@ class ArrayFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
 
 class PolymorphicObjectFilterFormFieldTestCase(CustomObjectsTestCase, TestCase):
     """get_filterform_field() for a polymorphic object field returns a dict of
-    DynamicModelChoiceField instances keyed by {field}_{app}_{model}."""
+    DynamicModelMultipleChoiceField instances keyed by {field}_{app}_{model}."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1439,10 +1451,10 @@ class PolymorphicObjectFilterFormFieldTestCase(CustomObjectsTestCase, TestCase):
         self.assertIn('target_dcim_device', result)
         self.assertIn('target_dcim_site', result)
 
-    def test_each_form_field_is_dynamic_model_choice(self):
+    def test_each_form_field_is_dynamic_model_multiple_choice(self):
         result = ObjectFieldType().get_filterform_field(self.field)
         for form_field in result.values():
-            self.assertIsInstance(form_field, DynamicModelChoiceField)
+            self.assertIsInstance(form_field, DynamicModelMultipleChoiceField)
 
     def test_each_form_field_not_required(self):
         result = ObjectFieldType().get_filterform_field(self.field)
@@ -1486,7 +1498,7 @@ class PolymorphicObjectFiltersetTestCase(CustomObjectsTestCase, TestCase):
 
     def _filterset(self, params):
         model = self.cot.get_model()
-        return get_filterset_class(model)(params, model.objects.all())
+        return get_filterset_class(model)(query_dict(params), model.objects.all())
 
     def test_filter_by_device(self):
         pks = list(self._filterset({'target_dcim_device': self.device.pk}).qs.values_list('pk', flat=True))
@@ -1552,7 +1564,7 @@ class PolymorphicMultiObjectFiltersetTestCase(CustomObjectsTestCase, TestCase):
 
     def _filterset(self, params):
         model = self.cot.get_model()
-        return get_filterset_class(model)(params, model.objects.all())
+        return get_filterset_class(model)(query_dict(params), model.objects.all())
 
     def test_filter_by_device_returns_linked_objects(self):
         pks = list(self._filterset({'targets_dcim_device': [self.device1.pk]}).qs.values_list('pk', flat=True))
@@ -1630,12 +1642,12 @@ class CoordinatesFieldFiltersetTestCase(CustomObjectsTestCase, TestCase):
 
     def _filterset(self, params):
         model = self.cot.get_model()
-        return get_filterset_class(model)(params, model.objects.all())
+        return get_filterset_class(model)(query_dict(params), model.objects.all())
 
     def test_build_filter_for_field_returns_two_filters(self):
         filters = build_filter_for_field(self.field)
         self.assertEqual(set(filters), {'location_latitude', 'location_longitude'})
-        self.assertIsInstance(filters['location_latitude'], django_filters.NumberFilter)
+        self.assertIsInstance(filters['location_latitude'], MultiValueDecimalFilter)
 
     def test_filter_by_latitude(self):
         pks = list(self._filterset({'location_latitude': '40.712800'}).qs.values_list('pk', flat=True))
@@ -1756,3 +1768,148 @@ class CustomObjectTypeFieldFilterSetTestCase(CustomObjectsTestCase, TestCase, Ch
     def test_related_object_types_id(self):
         params = {'related_object_types_id': [self.device_ot.pk]}
         self.assertEqual(self.filterset(params, self.queryset).qs.get().pk, self.poly_field.pk)
+
+
+class RepeatedFilterAndLookupTestCase(CustomObjectsTestCase, TestCase):
+    """As with NetBox custom fields, a repeated filter matches any of its values, and dates take lookup suffixes."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='Server', slug='servers')
+        add = functools.partial(cls.create_custom_object_type_field, cls.cot)
+        add(name='hostname', label='Hostname', type='text', primary=True)
+        add(name='rack', label='Rack', type='text', filter_logic=CustomFieldFilterLogicChoices.FILTER_EXACT)
+        add(name='cores', label='Cores', type='integer')
+        add(name='ratio', label='Ratio', type='decimal')
+        add(name='purchased', label='Purchased', type='date')
+        add(name='seen', label='Seen', type='datetime')
+        add(name='location', label='Location', type='coordinates')
+        add(name='device', label='Device', type='object', related_object_type=cls.get_device_object_type())
+        cls.create_polymorphic_field(
+            cls.cot, [cls.get_device_object_type(), cls.get_site_object_type()], name='target', type='object'
+        )
+        cls.create_polymorphic_field(
+            cls.cot, [cls.get_device_object_type(), cls.get_site_object_type()], name='targets', type='multiobject'
+        )
+        site, device_type, role = _make_device_fixtures('repeat')
+        cls.devices = [
+            Device.objects.create(name=f'Device {i}', site=site, device_type=device_type, role=role) for i in range(3)
+        ]
+        model = cls.cot.get_model()
+        cls.objects = []
+        for i, device in enumerate(cls.devices):
+            obj = model.objects.create(
+                hostname=f'web{i}',
+                rack=f'R{i}',
+                cores=4 * (i + 1),
+                ratio=Decimal(f'0.{i + 1}'),
+                purchased=datetime.date(2026, i + 1, 1),
+                seen=timezone.make_aware(datetime.datetime(2026, i + 1, 1, 12)),
+                location_latitude=Decimal(f'{i}.5'),
+                location_longitude=Decimal('1.5'),
+                device=device,
+                target=device,
+            )
+            obj.targets.add(device)
+            cls.objects.append(obj)
+
+    def _names(self, query):
+        model = self.cot.get_model()
+        filterset = get_filterset_class(model)(QueryDict(query), model.objects.all())
+        self.assertTrue(filterset.is_valid(), filterset.errors)
+        return sorted(filterset.qs.values_list('hostname', flat=True))
+
+    def test_repeated_filter_matches_any_value(self):
+        devices = self.devices
+        for query in (
+            'hostname=web0&hostname=web2',
+            'rack=R0&rack=R2',
+            'cores=4&cores=12',
+            'ratio=0.1&ratio=0.3',
+            'purchased=2026-01-01&purchased=2026-03-01',
+            'seen=2026-01-01T12:00:00&seen=2026-03-01T12:00:00',
+            'location_latitude=0.5&location_latitude=2.5',
+            f'device={devices[0].pk}&device={devices[2].pk}',
+            f'device_id={devices[0].pk}&device_id={devices[2].pk}',
+            f'target_dcim_device={devices[0].pk}&target_dcim_device={devices[2].pk}',
+            f'targets_dcim_device={devices[0].pk}&targets_dcim_device={devices[2].pk}',
+        ):
+            with self.subTest(query=query):
+                self.assertEqual(self._names(query), ['web0', 'web2'])
+
+    def test_date_lookup_suffixes(self):
+        for query, expected in (
+            ('purchased__gte=2026-02-01', ['web1', 'web2']),
+            ('purchased__lt=2026-02-01', ['web0']),
+            ('purchased__n=2026-02-01', ['web0', 'web2']),
+            ('seen__gt=2026-02-01T12:00:00', ['web2']),
+            ('seen__lte=2026-02-01T12:00:00', ['web0', 'web1']),
+        ):
+            with self.subTest(query=query):
+                self.assertEqual(self._names(query), expected)
+
+
+class JSONFieldFilterLogicTestCase(CustomObjectsTestCase, TestCase):
+    """A JSON field's filter matches the whole JSON value with exact filter logic, or part of its text with loose."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='Contact', slug='contacts')
+        add = functools.partial(cls.create_custom_object_type_field, cls.cot)
+        add(name='name', label='Name', type='text', primary=True)
+        add(name='contact', label='Contact', type='json', filter_logic=CustomFieldFilterLogicChoices.FILTER_EXACT)
+        add(name='notes', label='Notes', type='json')
+        model = cls.cot.get_model()
+        for name, contact in (
+            ('string-match', 'alice@example.com'),
+            ('string-other', 'bob@example.com'),
+            ('list', ['alice@example.com', 'carol@example.com']),
+            ('dict', {'email': 'alice@example.com'}),
+            ('number', 4),
+            ('number-string', '4'),
+            ('null', None),
+        ):
+            model.objects.create(name=name, contact=contact, notes=contact)
+
+    def _names(self, query):
+        model = self.cot.get_model()
+        filterset = get_filterset_class(model)(QueryDict(query), model.objects.all())
+        self.assertTrue(filterset.is_valid(), filterset.errors)
+        return sorted(filterset.qs.values_list('name', flat=True))
+
+    def test_exact_matches_the_json_value(self):
+        for query, expected in (
+            ('contact=alice@example.com', ['string-match']),
+            ('contact="alice@example.com"', ['string-match']),
+            ('contact=["alice@example.com", "carol@example.com"]', ['list']),
+            ('contact={"email": "alice@example.com"}', ['dict']),
+            ('contact=4', ['number']),
+            ('contact="4"', ['number-string']),
+            ('contact=alice@example.com&contact=bob@example.com', ['string-match', 'string-other']),
+        ):
+            with self.subTest(query=query):
+                self.assertEqual(self._names(query), expected)
+
+    def test_loose_matches_part_of_the_text(self):
+        self.assertEqual(self._names('notes=alice'), ['dict', 'list', 'string-match'])
+        self.assertEqual(self._names('notes=alice&notes=bob'), ['dict', 'list', 'string-match', 'string-other'])
+
+    def test_negation_and_empty(self):
+        everything = ['dict', 'list', 'null', 'number', 'number-string', 'string-match', 'string-other']
+        for field in ('contact', 'notes'):
+            with self.subTest(field=field):
+                self.assertEqual(self._names(f'{field}__empty=true'), ['null'])
+                self.assertEqual(self._names(f'{field}__empty=false'), [n for n in everything if n != 'null'])
+        self.assertEqual(self._names('contact__n=alice@example.com'), [n for n in everything if n != 'string-match'])
+        self.assertEqual(self._names('notes__n=alice'), ['null', 'number', 'number-string', 'string-other'])
+
+    def test_no_text_lookup_suffixes(self):
+        # They would compare the serialized JSON, quotes and all.
+        filters = get_filterset_class(self.cot.get_model()).base_filters
+        for name in ('contact', 'notes'):
+            with self.subTest(field=name):
+                self.assertEqual(
+                    sorted(key for key in filters if key.startswith(f'{name}__')), [f'{name}__empty', f'{name}__n']
+                )
