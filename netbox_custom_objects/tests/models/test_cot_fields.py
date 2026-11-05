@@ -65,7 +65,17 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
 
     def test_custom_object_type_field_reserved_name_rejected(self):
         """Field names in RESERVED_FIELD_NAMES must be rejected with ValidationError."""
-        reserved_names = ('owner', 'tags', 'id', 'created', 'last_updated', 'local_context_data', 'limit', 'search')
+        reserved_names = (
+            'owner',
+            'tags',
+            'id',
+            'created',
+            'last_updated',
+            'local_context_data',
+            'limit',
+            'search',
+            'start',
+        )
         for reserved in reserved_names:
             with self.assertRaises(ValidationError, msg=f'Expected ValidationError for reserved name={reserved!r}'):
                 field = CustomObjectTypeField(
