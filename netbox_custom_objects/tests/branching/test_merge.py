@@ -232,7 +232,7 @@ class FieldAttributeChangesTestCase(BranchingTestBase, _TestBase):
         )
 
     def test_field_added_in_main_after_merging_field_added_in_branch(self):
-        """Main's next_schema_id isn't merged, so a new field must still skip the merged field's schema_id."""
+        """A merged field can have a schema ID above the parent's counter."""
         with event_tracking(self.request):
             cot = CustomObjectType.objects.create(name='sprocket', slug='sprocket')
             CustomObjectTypeField.objects.create(custom_object_type=cot, name='a', type='text')

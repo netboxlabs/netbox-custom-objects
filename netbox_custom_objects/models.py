@@ -4299,8 +4299,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     .select_for_update()
                     .get(pk=self.custom_object_type_id)
                 )
-                # The counter can lag behind the fields: update() isn't change-logged, so merging a
-                # branch brings in its fields' schema_ids but not the counter. Skip any ID in use.
+                # Branch merges can leave the counter behind existing field IDs
+                # because QuerySet.update() does not create change log entries.
                 highest_in_use = (
                     CustomObjectTypeField.objects.using(schema_conn.alias)
                     .filter(custom_object_type_id=self.custom_object_type_id)

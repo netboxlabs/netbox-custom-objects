@@ -293,7 +293,7 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
             self.create_custom_object_type_field(self.custom_object_type, name='test_field', type='integer')
 
     def test_schema_id_skips_ids_in_use_when_counter_lags(self):
-        """A new field's schema_id is above every existing one, even if next_schema_id is behind, as after a merge."""
+        """Allocating a field ID also advances a stale counter."""
         self.create_custom_object_type_field(self.custom_object_type, name='a', type='text')
         self.create_custom_object_type_field(self.custom_object_type, name='b', type='text')
         CustomObjectType.objects.filter(pk=self.custom_object_type.pk).update(next_schema_id=1)
