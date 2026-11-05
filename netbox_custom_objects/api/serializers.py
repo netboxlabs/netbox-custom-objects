@@ -17,8 +17,9 @@ from core.models import ObjectType
 from dcim.fields import MACAddressField
 from extras.choices import CustomFieldTypeChoices
 from extras.models import ConfigContextModel
+from netbox.api.exceptions import SerializerNotFound
 from netbox.api.fields import ChoiceField as NetBoxChoiceField
-from netbox.api.serializers import NetBoxModelSerializer
+from netbox.api.serializers import BaseModelSerializer, NetBoxModelSerializer
 from netbox.api.serializers.nested import NestedTagSerializer
 from netbox_custom_objects import constants, field_types
 from netbox_custom_objects.choices import (
@@ -35,6 +36,8 @@ from netbox_custom_objects.models import (
 )
 from netbox_custom_objects.utilities import predicate_field_ref
 from users.api.serializers_.owners import OwnerSerializer
+from utilities.api import get_serializer_for_model
+from utilities.views import get_viewname
 
 # Public URL slug used in API paths (e.g. /api/plugins/custom-objects/)
 _PUBLIC_APP_LABEL = 'custom-objects'
@@ -88,6 +91,52 @@ class SafeChoiceField(NetBoxChoiceField):
             pass
 
         raise ValidationError(_('{value} is not a valid choice.').format(value=data))
+
+
+_reference_serializers = {}
+
+
+def get_nested_serializer_for_model(model):
+    """
+    Return a serializer that represents an object of ``model`` nested in a custom object.
+
+    That's the model's REST API serializer if it's a NetBox serializer, which accepts
+    ``nested``. Some models offered as related object types have none, or a plain DRF one
+    (e.g. core's ConfigRevision and Dashboard); for those, return a minimal serializer with
+    the object's id and display, and its URLs where the model has those views.
+    """
+    try:
+        serializer = get_serializer_for_model(model)
+    except SerializerNotFound:
+        serializer = None
+    if serializer is not None and issubclass(serializer, BaseModelSerializer):
+        return serializer
+    if model not in _reference_serializers:
+        _reference_serializers[model] = _build_reference_serializer(model)
+    return _reference_serializers[model]
+
+
+def _has_detail_view(model, rest_api):
+    viewname = get_viewname(model=model, action='detail' if rest_api else None, rest_api=rest_api)
+    try:
+        reverse(viewname, kwargs={'pk': 1})
+    except NoReverseMatch:
+        return False
+    return True
+
+
+def _build_reference_serializer(model):
+    fields = ['id']
+    attrs = {}
+    for name, rest_api in (('url', True), ('display_url', False)):
+        if _has_detail_view(model, rest_api):
+            fields.append(name)
+        else:
+            attrs[name] = None  # Removes BaseModelSerializer's field.
+    fields.append('display')
+    attrs['Meta'] = type('Meta', (), {'model': model, 'fields': fields, 'brief_fields': fields})
+    name = f'{model._meta.app_label.title()}{model.__name__}ReferenceSerializer'
+    return type(name, (BaseModelSerializer,), attrs)
 
 
 class PolymorphicObjectSerializerField(serializers.Field):

@@ -15,9 +15,9 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from core.choices import ObjectChangeActionChoices
-from core.models import Job, ObjectChange, ObjectType
+from core.models import ConfigRevision, Job, ObjectChange, ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
-from extras.models import ExportTemplate, Tag
+from extras.models import Dashboard, ExportTemplate, Tag
 from netbox.api.viewsets import mixins as netbox_viewset_mixins
 from netbox_custom_objects.models import CustomObjectType
 from users.models import ObjectPermission
@@ -1584,3 +1584,83 @@ class ObjectChangeAPITestCase(CustomObjectsTestCase, TestCase):
             self._create_logged_object(f'Logged {i}')
 
         self.assertEqual(self._count_list_queries(), baseline)
+
+
+class ObjectFieldWithoutNetBoxSerializerTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Object fields to models without a NetBox REST API serializer (Dashboard has a plain DRF
+    one, ConfigRevision none) are shown and written like any other related object.
+    """
+
+    def setUp(self):
+        self.user = create_test_user('noserializeruser')
+        self.user.is_superuser = True
+        self.user.save()
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f'Token {create_token(self.user)}')
+        self.addCleanup(CustomObjectType.clear_model_cache)
+
+        self.cot = self.create_custom_object_type(name='NoSerializer', slug='no-serializer')
+        self.create_custom_object_type_field(self.cot, name='name', type='text', primary=True, required=True)
+        dashboard_type = ObjectType.objects.get_for_model(Dashboard)
+        self.create_custom_object_type_field(self.cot, name='dash', type='object', related_object_type=dashboard_type)
+        self.create_custom_object_type_field(
+            self.cot, name='dashes', type='multiobject', related_object_type=dashboard_type
+        )
+        self.create_custom_object_type_field(
+            self.cot,
+            name='revision',
+            type='object',
+            related_object_type=ObjectType.objects.get_for_model(ConfigRevision),
+        )
+        self.model = self.cot.get_model()
+        self.dashboard = Dashboard.objects.create(user=self.user)
+        self.revision = ConfigRevision.objects.create(data={})
+        self.revision.refresh_from_db()  # Saving it activates it.
+        self.instance = self.model.objects.create(name='Object 1', dash=self.dashboard, revision=self.revision)
+        self.instance.dashes.set([self.dashboard])
+
+    def _list_url(self):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': self.cot.slug},
+        )
+
+    def _detail_url(self, pk):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-detail',
+            kwargs={'pk': pk, 'custom_object_type': self.cot.slug},
+        )
+
+    def test_list_and_detail_show_the_related_objects(self):
+        dashboard = {'id': self.dashboard.pk, 'display': str(self.dashboard)}
+        revision = {
+            'id': self.revision.pk,
+            'display_url': f'http://testserver{self.revision.get_absolute_url()}',
+            'display': str(self.revision),
+        }
+        for url in (self._list_url(), self._detail_url(self.instance.pk)):
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+                data = response.data['results'][0] if 'results' in response.data else response.data
+                self.assertEqual(data['dash'], dashboard)
+                self.assertEqual(data['dashes'], [dashboard])
+                self.assertEqual(data['revision'], revision)
+
+    def test_create_with_the_related_objects(self):
+        response = self.client.post(
+            self._list_url(),
+            {
+                'name': 'Object 2',
+                'dash': self.dashboard.pk,
+                'dashes': [self.dashboard.pk],
+                'revision': self.revision.pk,
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        instance = self.model.objects.get(pk=response.data['id'])
+        self.assertEqual(instance.dash, self.dashboard)
+        self.assertEqual(list(instance.dashes.all()), [self.dashboard])
+        self.assertEqual(instance.revision, self.revision)

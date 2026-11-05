@@ -46,7 +46,6 @@ from netbox_custom_objects.choices import (
 )
 from netbox_custom_objects.constants import APP_LABEL, CHOICE_VALUE_MAX_LENGTH, DECIMAL_MAX_DIGITS, DECIMAL_PLACES
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name, generate_model
-from utilities.api import get_serializer_for_model
 from utilities.fields import ColorField
 from utilities.forms.fields import (
     CSVChoiceField,
@@ -1200,7 +1199,9 @@ class ObjectFieldType(FieldType):
 
             serializer = get_serializer_class(related_model_class, skip_object_fields=True)
         else:
-            serializer = get_serializer_for_model(related_model_class)
+            from netbox_custom_objects.api.serializers import get_nested_serializer_for_model
+
+            serializer = get_nested_serializer_for_model(related_model_class)
         return serializer(required=field.required, allow_null=not field.required, nested=True)
 
     def after_model_generation(self, instance, model, field_name):
@@ -1791,7 +1792,9 @@ class MultiObjectFieldType(FieldType):
 
             serializer = get_serializer_class(related_model_class, skip_object_fields=True)
         else:
-            serializer = get_serializer_for_model(related_model_class)
+            from netbox_custom_objects.api.serializers import get_nested_serializer_for_model
+
+            serializer = get_nested_serializer_for_model(related_model_class)
         # Construct the ListSerializer explicitly so that allow_null is set only on
         # the outer list (permitting null to clear the whole field) and NOT on the
         # child (preventing individual null items like [null, 3] from slipping
