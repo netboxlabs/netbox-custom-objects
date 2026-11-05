@@ -33,6 +33,12 @@ from .choices import ConstraintTypeChoices, CustomObjectFieldTypeChoices
 from .constants import APP_LABEL
 from .models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 
+try:
+    from django.db.models import JSONNull
+except ImportError:
+    # COMPAT(django<6.1): there's no JSONNull, and None in an exact lookup means JSON null.
+    JSONNull = None
+
 __all__ = (
     'ArrayContainsFilter',
     'CustomObjectTypeConstraintFilterSet',
@@ -298,6 +304,11 @@ class NonPolymorphicMultiObjectFilter(django_filters.Filter):
         return qs.filter(**{f'{self.field_name}__in': pks}).distinct()
 
 
+def _json_null():
+    """The value an exact lookup on a JSON field takes to match JSON null."""
+    return JSONNull() if JSONNull is not None else None
+
+
 class JSONValueFilter(django_filters.Filter):
     """
     Filter for a JSON field with exact filter logic: objects whose value equals any of the
@@ -321,7 +332,7 @@ class JSONValueFilter(django_filters.Filter):
                 json.dumps(parsed, allow_nan=False)
             except ValueError:
                 parsed = v
-            q |= Q(**{self.field_name: parsed})
+            q |= Q(**{self.field_name: _json_null() if parsed is None else parsed})
         return self.get_method(qs)(q)
 
 
@@ -331,7 +342,7 @@ class JSONEmptyFilter(django_filters.BooleanFilter):
     def filter(self, qs, value):
         if value is None:
             return qs
-        empty = Q(**{f'{self.field_name}__isnull': True}) | Q(**{self.field_name: None})
+        empty = Q(**{f'{self.field_name}__isnull': True}) | Q(**{self.field_name: _json_null()})
         return qs.filter(empty) if value else qs.exclude(empty)
 
 
@@ -821,6 +832,21 @@ def get_filterset_class(model):
             reference_filter = copy.deepcopy(filters[field_name])
             reference_filter.lookup_expr = 'exact'
             filters.update(cls.get_additional_lookups(field_name, reference_filter))
+        # COMPAT(netbox<4.7.3): NetBox kept a numeric or date filter's class for its __empty
+        # variant, which looks up isnull, so the variant rejected true and false.
+        for name, existing in filters.items():
+            if (
+                name.endswith('__empty')
+                and existing.lookup_expr == 'isnull'
+                and not isinstance(existing, django_filters.BooleanFilter)
+            ):
+                filters[name] = django_filters.BooleanFilter(
+                    field_name=existing.field_name,
+                    lookup_expr='isnull',
+                    label=existing.label,
+                    exclude=existing.exclude,
+                    distinct=existing.distinct,
+                )
         return filters
 
     attrs['get_filters'] = classmethod(get_filters)

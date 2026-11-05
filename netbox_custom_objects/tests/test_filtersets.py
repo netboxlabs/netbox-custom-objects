@@ -4,10 +4,12 @@ Tests for filtersets used by the plugin's UI and API views.
 
 import datetime
 import functools
+import warnings
 from decimal import Decimal
 from unittest.mock import MagicMock
 
 import django_filters
+from django.db.models.expressions import RawSQL
 from django.http import QueryDict
 from django.test import TestCase
 from django.utils import timezone
@@ -1850,6 +1852,39 @@ class RepeatedFilterAndLookupTestCase(CustomObjectsTestCase, TestCase):
                 self.assertEqual(self._names(query), expected)
 
 
+class EmptyLookupTestCase(CustomObjectsTestCase, TestCase):
+    """Numeric and date fields' __empty filters take true or false, on every supported NetBox version."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='Lease', slug='leases')
+        add = functools.partial(cls.create_custom_object_type_field, cls.cot)
+        add(name='name', label='Name', type='text', primary=True)
+        add(name='term', label='Term', type='integer')
+        add(name='rate', label='Rate', type='decimal')
+        add(name='starts', label='Starts', type='date')
+        add(name='signed', label='Signed', type='datetime')
+        model = cls.cot.get_model()
+        model.objects.create(
+            name='set',
+            term=12,
+            rate=Decimal('1.5'),
+            starts=datetime.date(2026, 1, 1),
+            signed=timezone.make_aware(datetime.datetime(2026, 1, 1, 12)),
+        )
+        model.objects.create(name='blank')
+
+    def test_empty(self):
+        model = self.cot.get_model()
+        for field in ('term', 'rate', 'starts', 'signed'):
+            for value, expected in (('true', ['blank']), ('false', ['set'])):
+                with self.subTest(field=field, value=value):
+                    filterset = get_filterset_class(model)(QueryDict(f'{field}__empty={value}'), model.objects.all())
+                    self.assertTrue(filterset.is_valid(), filterset.errors)
+                    self.assertEqual(list(filterset.qs.values_list('name', flat=True)), expected)
+
+
 class JSONFieldFilterLogicTestCase(CustomObjectsTestCase, TestCase):
     """A JSON field's filter matches the whole JSON value with exact filter logic, or part of its text with loose."""
 
@@ -1873,12 +1908,20 @@ class JSONFieldFilterLogicTestCase(CustomObjectsTestCase, TestCase):
             ('null', None),
         ):
             model.objects.create(name=name, contact=contact, notes=contact)
+        # None saves SQL NULL, so set JSON null directly.
+        json_null = RawSQL("'null'::jsonb", ())
+        model.objects.create(name='json-null')
+        model.objects.filter(name='json-null').update(contact=json_null, notes=json_null)
 
     def _names(self, query):
         model = self.cot.get_model()
         filterset = get_filterset_class(model)(QueryDict(query), model.objects.all())
         self.assertTrue(filterset.is_valid(), filterset.errors)
-        return sorted(filterset.qs.values_list('name', flat=True))
+        with warnings.catch_warnings():
+            # e.g. Django 6.1 deprecates None for JSON null in a lookup
+            warnings.simplefilter('error', PendingDeprecationWarning)
+            warnings.simplefilter('error', DeprecationWarning)
+            return sorted(filterset.qs.values_list('name', flat=True))
 
     def test_exact_matches_the_json_value(self):
         for query, expected in (
@@ -1888,6 +1931,7 @@ class JSONFieldFilterLogicTestCase(CustomObjectsTestCase, TestCase):
             ('contact={"email": "alice@example.com"}', ['dict']),
             ('contact=4', ['number']),
             ('contact="4"', ['number-string']),
+            ('contact=null', ['json-null']),
             ('contact=alice@example.com&contact=bob@example.com', ['string-match', 'string-other']),
             # Python reads these as floats, which PostgreSQL's JSON can't hold.
             ('contact=NaN', ['nan-string']),
@@ -1903,14 +1947,16 @@ class JSONFieldFilterLogicTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(self._names('notes=alice&notes=bob'), ['dict', 'list', 'string-match', 'string-other'])
 
     def test_negation_and_empty(self):
-        everything = ['dict', 'list', 'nan-string', 'null', 'number', 'number-string', 'string-match', 'string-other']
+        everything = self._names('')
+        empty = ['json-null', 'null']
         for field in ('contact', 'notes'):
             with self.subTest(field=field):
-                self.assertEqual(self._names(f'{field}__empty=true'), ['null'])
-                self.assertEqual(self._names(f'{field}__empty=false'), [n for n in everything if n != 'null'])
+                self.assertEqual(self._names(f'{field}__empty=true'), empty)
+                self.assertEqual(self._names(f'{field}__empty=false'), [n for n in everything if n not in empty])
         self.assertEqual(self._names('contact__n=alice@example.com'), [n for n in everything if n != 'string-match'])
         self.assertEqual(
-            self._names('notes__n=alice'), ['nan-string', 'null', 'number', 'number-string', 'string-other']
+            self._names('notes__n=alice'),
+            ['json-null', 'nan-string', 'null', 'number', 'number-string', 'string-other'],
         )
 
     def test_no_text_lookup_suffixes(self):
