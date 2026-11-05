@@ -1537,13 +1537,28 @@ class CustomObjectPicklingTestCase(CustomObjectsTestCase, TestCase):
         self.create_custom_object_type_field(self.cot, name='notes', label='Notes', type='text')
         data = pickle.dumps(CustomObjectType.objects.get(pk=self.cot.pk).get_model().objects.filter(notes='x'))
         # The worker's state: the class from before the field was added, cached and registered.
+        registry = django_apps.all_models[APP_LABEL]
+        model_key = self.model.__name__.lower()
         self.addCleanup(CustomObjectType.clear_model_cache, self.cot.pk, all_branches=True)
+        self.addCleanup(registry.__setitem__, model_key, registry[model_key])
         CustomObjectType._model_cache[(self.cot.pk, None)] = outdated
-        django_apps.all_models[APP_LABEL][self.model.__name__.lower()] = self.model
+        registry[model_key] = self.model
 
         queryset = pickle.loads(data)
         self.assertIsNot(queryset.model, self.model)
         self.assertEqual(list(queryset), [])
+
+    def test_config_context_class_pickles_after_it_was_rebuilt(self):
+        """A type with config contexts enabled has an extra base, and still pickles by type id."""
+        cot = self.create_custom_object_type(name='Router', slug='router', config_context_enabled=True)
+        self.create_custom_object_type_field(cot, name='name', label='Name', type='text', primary=True)
+        model = cot.get_model()
+        self.assertTrue(issubclass(model, nco_models.CustomObjectConfigContextMixin))
+        CustomObjectType.objects.filter(pk=cot.pk).update(cache_timestamp=timezone.now())
+        rebuilt = CustomObjectType.objects.get(pk=cot.pk).get_model()
+        self.assertIsNot(rebuilt, model)
+
+        self.assertIs(pickle.loads(pickle.dumps(model)), rebuilt)
 
     def test_data_pickled_by_name_still_loads(self):
         """Data pickled by module and name, e.g. a job queued before an upgrade."""

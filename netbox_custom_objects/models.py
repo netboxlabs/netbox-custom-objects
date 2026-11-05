@@ -1070,6 +1070,28 @@ class _GeneratedModelBase(ModelBase):
     """
 
 
+def _reduce_generated_model(cls):
+    """
+    Pickle a generated class by its type's id, so it pickles even after it was rebuilt.
+
+    Unpickling returns the type's current class for the active branch, as ``get_model()``
+    does. CustomObject itself has no type and pickles by name, as usual.
+    """
+    cot_id = cls.__dict__.get('custom_object_type_id')
+    if cot_id is None:
+        return cls.__qualname__
+    return _load_generated_model, (cot_id,)
+
+
+def _load_generated_model(cot_id):
+    # Pickles reference this function by module and name, e.g. in queued jobs: renaming or
+    # moving it breaks data already pickled.
+    return __getattr__(CustomObjectType.get_table_model_name(cot_id))
+
+
+copyreg.pickle(_GeneratedModelBase, _reduce_generated_model)
+
+
 class CustomObject(
     OwnerMixin,
     BookmarksMixin,
@@ -5836,23 +5858,3 @@ def __getattr__(name):
             # Unapplied migrations, or a real database failure: keep the traceback.
             logger.warning('Could not resolve %s.%s', __name__, name, exc_info=True)
     raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
-
-
-def _reduce_generated_model(cls):
-    """
-    Pickle a generated class by its type's id, so it pickles even after it was rebuilt.
-
-    Unpickling returns the type's current class for the active branch, as ``get_model()``
-    does. CustomObject itself has no type and pickles by name, as usual.
-    """
-    cot_id = cls.__dict__.get('custom_object_type_id')
-    if cot_id is None:
-        return cls.__qualname__
-    return _load_generated_model, (cot_id,)
-
-
-def _load_generated_model(cot_id):
-    return __getattr__(CustomObjectType.get_table_model_name(cot_id))
-
-
-copyreg.pickle(_GeneratedModelBase, _reduce_generated_model)
