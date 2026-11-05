@@ -36,7 +36,8 @@ from .models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTy
 try:
     from django.db.models import JSONNull
 except ImportError:
-    # COMPAT(django<6.1): there's no JSONNull, and None in an exact lookup means JSON null.
+    # COMPAT(netbox<4.7.0): Django before 6.1 has no JSONNull, and None in an exact lookup
+    # means JSON null.
     JSONNull = None
 
 __all__ = (
