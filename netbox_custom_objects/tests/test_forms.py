@@ -229,6 +229,43 @@ class PolymorphicRelatedNameCollisionFormTestCase(CustomObjectsTestCase, TestCas
         form = self._make_polymorphic_object_form(related_name='co_safe_form_test_ref')
         self.assertTrue(form.is_valid(), form.errors)
 
+    def test_new_field_related_name_held_by_stale_accessor_is_valid(self):
+        """A name held only by the accessor of a deleted field (left behind in a worker
+        that didn't delete it) is free, as the API agrees."""
+        from dcim.models import Site
+
+        other = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name='other',
+            type=CustomFieldTypeChoices.TYPE_OBJECT,
+            is_polymorphic=True,
+            related_name='co_form_stale_ref',
+        )
+        other.related_object_types.set([self.site_ot])
+        self.cot.get_model()
+        descriptor = Site.__dict__['co_form_stale_ref']
+        self.addCleanup(lambda: Site.__dict__.get('co_form_stale_ref') and delattr(Site, 'co_form_stale_ref'))
+        with self.captureOnCommitCallbacks(execute=True):
+            other.delete()
+        setattr(Site, 'co_form_stale_ref', descriptor)
+
+        form = self._make_polymorphic_object_form(related_name='co_form_stale_ref')
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_new_field_related_name_used_by_another_field_is_invalid(self):
+        other = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name='other',
+            type=CustomFieldTypeChoices.TYPE_OBJECT,
+            is_polymorphic=True,
+            related_name='co_form_taken_ref',
+        )
+        other.related_object_types.set([self.site_ot])
+
+        form = self._make_polymorphic_object_form(related_name='co_form_taken_ref')
+        self.assertFalse(form.is_valid())
+        self.assertIn('related_name', form.errors)
+
 
 class SchemaBookkeepingFieldsPreservedOnEditTestCase(CustomObjectsTestCase, TestCase):
     """
