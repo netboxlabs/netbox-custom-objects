@@ -9,6 +9,7 @@ import django_filters
 from django import forms as django_forms
 from django.apps import apps as django_apps
 from django.db.models import Q, QuerySet
+from django.db.models.query import EmptyQuerySet
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.timezone import is_aware, make_aware
 from django.utils.translation import gettext_lazy as _
@@ -236,9 +237,10 @@ class NonPolymorphicObjectFilter(django_filters.Filter):
         super().__init__(*args, queryset=queryset, **kwargs)
 
     def filter(self, qs, value):
-        if not value:
+        # An empty selection cleans to queryset.none().
+        if value is None or isinstance(value, EmptyQuerySet):
             return qs
-        return qs.filter(**{f'{self.field_name}_id__in': [obj.pk for obj in value]})
+        return qs.filter(**{f'{self.field_name}_id__in': value})
 
 
 class NonPolymorphicObjectIdFilter(django_filters.Filter):
@@ -300,7 +302,8 @@ class JSONValueFilter(django_filters.Filter):
     """
     Filter for a JSON field with exact filter logic: objects whose value equals any of the
     given values. Each value is read as JSON, or as a string if it isn't valid JSON, so
-    ``"4"`` matches the string and ``4`` the number.
+    ``"4"`` matches the string and ``4`` the number. ``NaN`` and ``Infinity``, which Python
+    reads but PostgreSQL's JSON doesn't, are strings too.
 
     A plain Filter rather than a CharFilter, so NetBox doesn't derive string lookup
     variants (__ic, __isw, ...) from it, which would compare the serialized JSON.
@@ -315,6 +318,7 @@ class JSONValueFilter(django_filters.Filter):
         for v in value:
             try:
                 parsed = json.loads(v)
+                json.dumps(parsed, allow_nan=False)
             except ValueError:
                 parsed = v
             q |= Q(**{self.field_name: parsed})

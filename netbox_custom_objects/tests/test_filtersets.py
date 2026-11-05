@@ -1869,6 +1869,7 @@ class JSONFieldFilterLogicTestCase(CustomObjectsTestCase, TestCase):
             ('dict', {'email': 'alice@example.com'}),
             ('number', 4),
             ('number-string', '4'),
+            ('nan-string', 'NaN'),
             ('null', None),
         ):
             model.objects.create(name=name, contact=contact, notes=contact)
@@ -1888,6 +1889,11 @@ class JSONFieldFilterLogicTestCase(CustomObjectsTestCase, TestCase):
             ('contact=4', ['number']),
             ('contact="4"', ['number-string']),
             ('contact=alice@example.com&contact=bob@example.com', ['string-match', 'string-other']),
+            # Python reads these as floats, which PostgreSQL's JSON can't hold.
+            ('contact=NaN', ['nan-string']),
+            ('contact=Infinity', []),
+            ('contact=1e999', []),
+            ('contact=[NaN]', []),
         ):
             with self.subTest(query=query):
                 self.assertEqual(self._names(query), expected)
@@ -1897,13 +1903,15 @@ class JSONFieldFilterLogicTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(self._names('notes=alice&notes=bob'), ['dict', 'list', 'string-match', 'string-other'])
 
     def test_negation_and_empty(self):
-        everything = ['dict', 'list', 'null', 'number', 'number-string', 'string-match', 'string-other']
+        everything = ['dict', 'list', 'nan-string', 'null', 'number', 'number-string', 'string-match', 'string-other']
         for field in ('contact', 'notes'):
             with self.subTest(field=field):
                 self.assertEqual(self._names(f'{field}__empty=true'), ['null'])
                 self.assertEqual(self._names(f'{field}__empty=false'), [n for n in everything if n != 'null'])
         self.assertEqual(self._names('contact__n=alice@example.com'), [n for n in everything if n != 'string-match'])
-        self.assertEqual(self._names('notes__n=alice'), ['null', 'number', 'number-string', 'string-other'])
+        self.assertEqual(
+            self._names('notes__n=alice'), ['nan-string', 'null', 'number', 'number-string', 'string-other']
+        )
 
     def test_no_text_lookup_suffixes(self):
         # They would compare the serialized JSON, quotes and all.
