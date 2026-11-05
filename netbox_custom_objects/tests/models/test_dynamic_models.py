@@ -3,6 +3,7 @@ Tests for the generated custom object models: instances, get_model(), the model 
 startup ordering, stale references and pickling.
 """
 
+import copy
 import pickle
 import uuid
 from decimal import Decimal
@@ -1499,6 +1500,64 @@ class CustomObjectPicklingTestCase(CustomObjectsTestCase, TestCase):
         queryset = pickle.loads(data)
         self.assertIs(queryset.model, CustomObjectType.objects.get(pk=self.cot.pk).get_model())
         self.assertEqual([obj.name for obj in queryset], ['s1'])
+
+    def test_prefetch_cache_pickles_after_another_process_bumps_the_type(self):
+        """
+        A worker still holding the old class pickles it after another process bumped
+        cache_timestamp (e.g. a choice set rename in the web process).
+        """
+        accessor = next(
+            rel.get_accessor_name() for rel in Site._meta.related_objects if rel.related_model is self.model
+        )
+        site = Site.objects.prefetch_related(accessor).get(pk=self.site.pk)
+        # Another process's bump: the DB row moves on, this process's cache does not.
+        CustomObjectType.objects.filter(pk=self.cot.pk).update(cache_timestamp=timezone.now())
+
+        restored = pickle.loads(pickle.dumps(site))
+        self.assertEqual([obj.name for obj in getattr(restored, accessor).all()], ['s1'])
+
+    def test_class_rebuilt_since_it_was_captured_pickles(self):
+        """A prefetch cache captured before the class was rebuilt here unpickles to the new class."""
+        accessor = next(
+            rel.get_accessor_name() for rel in Site._meta.related_objects if rel.related_model is self.model
+        )
+        site = Site.objects.prefetch_related(accessor).get(pk=self.site.pk)
+        CustomObjectType.objects.filter(pk=self.cot.pk).update(cache_timestamp=timezone.now())
+        # e.g. a script creating a custom object after the event payload was captured
+        rebuilt = CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+        self.assertIsNot(rebuilt, self.model)
+
+        restored = pickle.loads(pickle.dumps(site))
+        self.assertIs(getattr(restored, accessor).all().model, rebuilt)
+        self.assertEqual([obj.name for obj in getattr(restored, accessor).all()], ['s1'])
+
+    def test_unpickling_in_a_worker_with_an_outdated_class_rebuilds_it(self):
+        """A queryset on a field added in another process unpickles where the class predates the field."""
+        outdated = (self.model, CustomObjectType.get_cached_timestamp(self.cot.pk))
+        self.create_custom_object_type_field(self.cot, name='notes', label='Notes', type='text')
+        data = pickle.dumps(CustomObjectType.objects.get(pk=self.cot.pk).get_model().objects.filter(notes='x'))
+        # The worker's state: the class from before the field was added, cached and registered.
+        self.addCleanup(CustomObjectType.clear_model_cache, self.cot.pk, all_branches=True)
+        CustomObjectType._model_cache[(self.cot.pk, None)] = outdated
+        django_apps.all_models[APP_LABEL][self.model.__name__.lower()] = self.model
+
+        queryset = pickle.loads(data)
+        self.assertIsNot(queryset.model, self.model)
+        self.assertEqual(list(queryset), [])
+
+    def test_data_pickled_by_name_still_loads(self):
+        """Data pickled by module and name, e.g. a job queued before an upgrade."""
+        data = f'cnetbox_custom_objects.models\n{self.model.__name__}\n.'.encode()
+        self.assertIs(pickle.loads(data), self.model)
+
+    def test_base_class_pickles_by_name(self):
+        self.assertIs(pickle.loads(pickle.dumps(nco_models.CustomObject)), nco_models.CustomObject)
+
+    def test_copying_keeps_the_class(self):
+        # copy treats classes as atomic before consulting copyreg; querysets are copied constantly.
+        self.assertIs(copy.copy(self.model), self.model)
+        self.assertIs(copy.deepcopy(self.model), self.model)
+        self.assertIs(copy.deepcopy(self.model.objects.all()).model, self.model)
 
     def test_module_attribute_lookup_only_resolves_existing_types(self):
         self.assertIs(getattr(nco_models, self.model.__name__), self.model)

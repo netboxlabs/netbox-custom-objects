@@ -1,4 +1,5 @@
 import contextvars
+import copyreg
 import decimal
 import functools
 import logging
@@ -18,6 +19,7 @@ from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.core.validators import MinValueValidator, RegexValidator, ValidationError
 from django.db import DEFAULT_DB_ALIAS, IntegrityError, connection, connections, models, transaction
 from django.db.models import F, ProtectedError, Q
+from django.db.models.base import ModelBase
 from django.db.models.fields.related import ForeignKey, ManyToManyField
 from django.db.models.fields.related_descriptors import ReverseManyToOneDescriptor
 from django.db.models.functions import Lower
@@ -1058,6 +1060,16 @@ class _BaseModelCleanMixin(models.Model):
         return {field.name: (row[i], row[i + 1]) for i, field in zip(range(0, len(row), 2), gfk_fields)}
 
 
+class _GeneratedModelBase(ModelBase):
+    """
+    Metaclass of CustomObject, so generated models pickle by their type's id.
+
+    Pickle normally stores a class by module and name, and refuses to if looking the name up
+    returns another class. A generated class is rebuilt whenever its type changes, so one
+    captured earlier (e.g. by a queryset in a prefetch cache) would no longer pickle.
+    """
+
+
 class CustomObject(
     OwnerMixin,
     BookmarksMixin,
@@ -1074,6 +1086,7 @@ class CustomObject(
     *_custom_object_compat_bases,
     _BaseModelCleanMixin,
     BaseModel,
+    metaclass=_GeneratedModelBase,
 ):
     """
     Base class for dynamically generated custom object models.
@@ -2383,7 +2396,7 @@ class CustomObjectType(NetBoxModel):
             # Without a docstring Django generates one listing every field name, and core's
             # object types API shows it to any user as the model's description.
             '__doc__': 'An object of a Custom Object Type.',
-            # Resolvable through this module's __getattr__, so the class can be pickled.
+            # Pickled by type id (see _reduce_generated_model); __getattr__ resolves it by name.
             '__module__': __name__,
             'custom_object_type': self,
             'custom_object_type_id': self.id,
@@ -5809,7 +5822,9 @@ def __getattr__(name):
     Resolve generated model classes (``Table<id>Model``) by name, so pickle can find them.
 
     They aren't stored on this module because they're rebuilt whenever their type changes;
-    ``get_model()`` returns the current class, for the active branch.
+    ``get_model()`` returns the current class, for the active branch. Generated classes
+    pickle by type id instead, but data pickled by name, e.g. jobs queued before an
+    upgrade, still loads through here.
     """
     cot_id = extract_cot_id_from_model_name(name.lower())
     if cot_id is not None and name == CustomObjectType.get_table_model_name(cot_id):
@@ -5821,3 +5836,23 @@ def __getattr__(name):
             # Unapplied migrations, or a real database failure: keep the traceback.
             logger.warning('Could not resolve %s.%s', __name__, name, exc_info=True)
     raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
+
+
+def _reduce_generated_model(cls):
+    """
+    Pickle a generated class by its type's id, so it pickles even after it was rebuilt.
+
+    Unpickling returns the type's current class for the active branch, as ``get_model()``
+    does. CustomObject itself has no type and pickles by name, as usual.
+    """
+    cot_id = cls.__dict__.get('custom_object_type_id')
+    if cot_id is None:
+        return cls.__qualname__
+    return _load_generated_model, (cot_id,)
+
+
+def _load_generated_model(cot_id):
+    return __getattr__(CustomObjectType.get_table_model_name(cot_id))
+
+
+copyreg.pickle(_GeneratedModelBase, _reduce_generated_model)
