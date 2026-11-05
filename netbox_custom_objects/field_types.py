@@ -2938,11 +2938,7 @@ class CoordinatesFieldType(FieldType):
         }
 
     def get_table_column_field(self, field, **kwargs):
-        return CoordinatesColumn(
-            self.latitude_field_name(field),
-            self.longitude_field_name(field),
-            verbose_name=str(field),
-        )
+        return CoordinatesColumn(self.latitude_field_name(field), self.longitude_field_name(field))
 
     @staticmethod
     def validate_pair(latitude, longitude):
@@ -3252,7 +3248,7 @@ class ArrayFieldType(FieldType):
             def render(self, value):
                 return format_array_value(value) or self.default
 
-        return _ArrayColumn(verbose_name=str(field), orderable=False)
+        return _ArrayColumn(orderable=False)
 
 
 FIELD_TYPE_CLASS = {

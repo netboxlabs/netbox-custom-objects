@@ -21,6 +21,7 @@ from extras.forms import TableConfigForm
 from extras.models import CustomFieldChoiceSet, TableConfig
 from netbox.tables import NetBoxTable
 from netbox_custom_objects.models import CustomObjectTypeField
+from netbox_custom_objects.tables import CustomObjectTable
 from utilities.tables import get_table_for_model
 
 from .base import CustomObjectsTestCase
@@ -263,8 +264,8 @@ class ListExportTestCase(CustomObjectsTestCase, TestCase):
             'plugins:netbox_custom_objects:customobject_list', kwargs={'custom_object_type': self.cot.slug}
         )
 
-    def _export(self, export):
-        response = self.client.get(self.list_url, {'export': export})
+    def _export(self, export, url=None):
+        response = self.client.get(url or self.list_url, {'export': export})
         self.assertEqual(response.status_code, 200)
         content = b''.join(response.streaming_content) if response.streaming else response.content
         return list(csv.DictReader(io.StringIO(content.decode())))
@@ -292,6 +293,33 @@ class ListExportTestCase(CustomObjectsTestCase, TestCase):
         (row,) = self._export('')
         self.assertNotIn('Name', row)
         self.assertNotIn('Custom object type', row)
+
+    def test_saved_config_with_name_or_type_column_validates(self):
+        model = self.cot.get_model()
+        config = TableConfig(
+            name='Contracts',
+            object_type=ObjectType.objects.get_for_model(model),
+            table=get_table_for_model(model).__name__,
+            columns=['id', 'name', 'custom_object_type'],
+            ordering=['name'],
+            user=self.user,
+        )
+        config.full_clean()
+
+    def test_field_named_like_a_table_column(self):
+        cot = self.create_custom_object_type(name='Task', slug='tasks')
+        self.create_custom_object_type_field(cot, name='name', label='Title', type='text', primary=True)
+        self.create_custom_object_type_field(cot, name='actions', label='Next actions', type='text')
+        cot.refresh_from_db()
+        cot.get_model().objects.create(name='Renew', actions='Call Acme')
+        url = reverse('plugins:netbox_custom_objects:customobject_list', kwargs={'custom_object_type': cot.slug})
+
+        (row,) = self._export('', url)
+        self.assertEqual(row['Title'], 'Renew')
+        # The actions column is shared by every type's table, so keeps its heading.
+        self.assertNotEqual(CustomObjectTable.base_columns['actions'].verbose_name, 'Next actions')
+        table = self.client.get(self.list_url).context['table']
+        self.assertEqual(table.columns['name'].header, 'Name')
 
     def test_columns_headed_with_labels(self):
         response = self.client.get(self.list_url)

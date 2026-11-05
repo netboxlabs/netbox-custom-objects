@@ -203,12 +203,18 @@ class CustomObjectTable(NetBoxTable):
     id = tables.Column(linkify=True, verbose_name=_('ID'))
     actions = columns.ActionsColumn()
     tags = CustomObjectTagColumn()
+    # An object has no name of its own, and every row has the same type: these columns are
+    # kept only so that saved table configs naming them stay valid.
+    name = tables.Column(verbose_name=_('Name'), exclude_from_export=True)
+    custom_object_type = tables.Column(verbose_name=_('Custom object type'), exclude_from_export=True)
 
     class Meta(NetBoxTable.Meta):
         model = CustomObject
         fields = (
             'pk',
             'id',
+            'name',
+            'custom_object_type',
             'created',
             'last_updated',
             'tags',
@@ -289,6 +295,9 @@ def get_custom_object_table(custom_object_type, model=None):
             attrs[field.name] = field_type.get_table_column_field(field)
         except NotImplementedError:
             logger.debug('{} field is not implemented; using a default column'.format(field.name))
+            # A field named "name" takes the place of the placeholder column.
+            if field.name == 'name':
+                attrs[field.name] = tables.Column()
         # Link text-based primary fields to their custom objects.
         linkable_field_types = [
             CustomFieldTypeChoices.TYPE_TEXT,
@@ -308,9 +317,11 @@ def get_custom_object_table(custom_object_type, model=None):
     table = type(f'{model._meta.object_name}Table', (CustomObjectTable,), attrs)
     # Head each column with the field's label, as the detail view and forms do; a column
     # generated from the model field would take its name.
+    # A column inherited from CustomObjectTable is shared by every type's table, so is left as it is.
     for field in visible_fields:
-        if field.name in table.base_columns:
-            table.base_columns[field.name].verbose_name = str(field)
+        column = table.base_columns[field.name]
+        if column is not CustomObjectTable.base_columns.get(field.name):
+            column.verbose_name = str(field)
     return table
 
 

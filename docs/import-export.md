@@ -34,6 +34,6 @@ Imports are validated like objects created in the edit form, so required fields,
 
 The **Export** button on a type's list view exports the current view (its visible columns) or all data as CSV. Any [export template](https://netboxlabs.com/docs/netbox/models/extras/exporttemplate/) assigned to the Custom Object Type is listed there too, and can also be used [through the REST API](rest-api.md#export-templates). Export templates can also read other types' objects through the [`custom_objects` template variable](config-context.md#jinja-config-and-export-templates).
 
-The CSV's columns are headed with the fields' labels, and hold plain values as the list shows them: a select field's choice labels, an object field's object names and a URL field's URL. To import an export, change its headings to field names and its values to the forms above.
+The CSV's columns are headed with the fields' labels and hold plain values: a select field's choice labels, an object field's object names, and a URL field's URL without its link title. An export can't be imported as it is: its headings and values differ from the ones listed above.
 
 To copy type *definitions*, rather than objects, between NetBox instances, use [portable schema](portable-schema.md) documents.
