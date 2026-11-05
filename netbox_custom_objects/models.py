@@ -1062,20 +1062,18 @@ class _BaseModelCleanMixin(models.Model):
 
 class _GeneratedModelBase(ModelBase):
     """
-    Metaclass of CustomObject, so generated models pickle by their type's id.
+    Enable pickling of generated model classes by custom object type ID.
 
-    Pickle normally stores a class by module and name, and refuses to if looking the name up
-    returns another class. A generated class is rebuilt whenever its type changes, so one
-    captured earlier (e.g. by a queryset in a prefetch cache) would no longer pickle.
+    Rebuilding a type replaces its model class, so older references cannot be
+    pickled by module and name.
     """
 
 
 def _reduce_generated_model(cls):
     """
-    Pickle a generated class by its type's id, so it pickles even after it was rebuilt.
+    Pickle generated classes by type ID and CustomObject by name.
 
-    Unpickling returns the type's current class for the active branch, as ``get_model()``
-    does. CustomObject itself has no type and pickles by name, as usual.
+    Unpickling resolves the current class for the active branch.
     """
     cot_id = cls.__dict__.get('custom_object_type_id')
     if cot_id is None:
@@ -5841,12 +5839,9 @@ def clear_cache_on_choice_set_save(sender, instance, **kwargs):
 
 def __getattr__(name):
     """
-    Resolve generated model classes (``Table<id>Model``) by name, so pickle can find them.
+    Resolve generated model names to the current class for the active branch.
 
-    They aren't stored on this module because they're rebuilt whenever their type changes;
-    ``get_model()`` returns the current class, for the active branch. Generated classes
-    pickle by type id instead, but data pickled by name, e.g. jobs queued before an
-    upgrade, still loads through here.
+    This also supports jobs pickled by name before the type ID reducer was added.
     """
     cot_id = extract_cot_id_from_model_name(name.lower())
     if cot_id is not None and name == CustomObjectType.get_table_model_name(cot_id):

@@ -1540,7 +1540,6 @@ class CustomObjectPicklingTestCase(CustomObjectsTestCase, TestCase):
         registry = django_apps.all_models[APP_LABEL]
         model_key = self.model.__name__.lower()
         self.addCleanup(CustomObjectType.clear_model_cache, self.cot.pk, all_branches=True)
-        self.addCleanup(registry.__setitem__, model_key, registry[model_key])
         CustomObjectType._model_cache[(self.cot.pk, None)] = outdated
         registry[model_key] = self.model
 
