@@ -31,7 +31,12 @@ from netbox_custom_objects.filtersets import (
     CustomObjectTypeFilterSet,
     get_filterset_class,
 )
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
+from netbox_custom_objects.models import (
+    CustomObjectType,
+    CustomObjectTypeConstraint,
+    CustomObjectTypeField,
+    SchemaChangeRefused,
+)
 from netbox_custom_objects.schema.comparator import FieldOp, diff_document
 from netbox_custom_objects.schema.executor import (
     CircularDependencyError,
@@ -48,7 +53,6 @@ from netbox_custom_objects.schema.executor import (
 )
 from netbox_custom_objects.schema.format import CUSTOM_OBJECTS_APP_LABEL_SLUG
 from netbox_custom_objects.utilities import polymorphic_m2m_field_names
-from utilities.exceptions import AbortRequest
 from utilities.permissions import get_permission_for_model
 
 from . import serializers
@@ -593,7 +597,8 @@ class SchemaApplyView(APIView):
         destructive_slugs: [my-cot]
 
     **400 Bad Request** — circular COT dependency, unresolvable FK target, a constraint
-    that fails validation, or invalid schema document structure.
+    that fails validation, invalid schema document structure, or a branch is active while
+    netbox-branching exempts the models the document changes (``exempt_from_branching``).
 
     Unexpected DB errors (e.g. ``IntegrityError`` from a constraint violation
     unrelated to the COT schema logic) are not caught and will surface as
@@ -607,8 +612,9 @@ class SchemaApplyView(APIView):
     permission_classes = [IsAuthenticatedOrLoginNotRequired, TokenWritePermission]
 
     def post(self, request, *args, **kwargs):
-        # Branch context: this endpoint no longer rejects requests with an active
-        # branch.  Schema-editor calls inside ``apply_diffs`` route through
+        # Branch context: this endpoint applies documents with a branch active, unless
+        # netbox-branching exempts the models they change (see SchemaChangeRefused).
+        # Schema-editor calls inside ``apply_diffs`` route through
         # ``_get_schema_connection()`` in models.py, which selects the active
         # branch's connection when one is set.  The resulting DDL therefore lands
         # in the branch's PostgreSQL schema, and the CustomObjectType /
@@ -691,8 +697,7 @@ class SchemaApplyView(APIView):
                 {'error': 'unsupported_type_change', 'detail': str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        except AbortRequest as exc:
-            # In a branch while netbox-branching exempts the schema models
+        except SchemaChangeRefused as exc:
             return Response(
                 {'error': 'exempt_from_branching', 'detail': exc.message},
                 status=status.HTTP_400_BAD_REQUEST,
