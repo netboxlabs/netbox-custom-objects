@@ -188,7 +188,7 @@ All fields share these base attributes:
 | `label` | no | Display label. Defaults to `name` with underscores replaced by spaces. |
 | `description` | no | Help text shown in the UI. |
 | `group_name` | no | UI grouping. |
-| `primary` | no | Whether this is the primary display field. Setting it clears it on the type's other fields. |
+| `primary` | no | Whether this is the primary display field. Setting this to `true` clears the primary setting on the type's other fields. |
 | `required` | no | Whether the field is required. Default: `false`. |
 | `unique` | no | Whether values must be unique. Default: `false`. |
 | `default` | no | JSON default value. |

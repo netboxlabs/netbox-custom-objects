@@ -198,6 +198,15 @@ class PrimaryFieldAPITestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
         self.assertEqual(self._primaries(), ['code'])
 
+    def test_bulk_update_promoting_one_field_and_changing_the_old_primary(self):
+        field = self.create_custom_object_type_field(self.cot, name='code', type='text')
+        name = self.cot.fields.get(name='name')
+        data = [{'id': field.pk, 'primary': True}, {'id': name.pk, 'label': 'Zone name'}]
+        url = reverse('plugins-api:netbox_custom_objects-api:customobjecttypefield-list')
+        response = self.client.patch(url, json.dumps(data), content_type='application/json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(self._primaries(), ['code'])
+
 
 class SchemaIdReadOnlyTestCase(CustomObjectsTestCase, TestCase):
     """

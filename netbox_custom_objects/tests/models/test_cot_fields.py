@@ -450,6 +450,23 @@ class PrimaryFieldTestCase(CustomObjectsTestCase, TestCase):
         name.save()
         self.assertEqual(self._primaries(), ['name'])
 
+    def test_field_demoted_since_it_was_loaded_stays_demoted(self):
+        name = CustomObjectTypeField.objects.get(pk=self.name.pk)
+        code = CustomObjectTypeField.objects.get(pk=self.code.pk)
+        code.primary = True
+        code.save()
+        # Saving the copy loaded before the promotion doesn't undo it.
+        name.label = 'Zone name'
+        name.save()
+        self.assertEqual(self._primaries(), ['code'])
+
+    def test_save_without_primary_in_update_fields_demotes_nothing(self):
+        code = CustomObjectTypeField.objects.get(pk=self.code.pk)
+        code.primary = True
+        code.label = 'Code'
+        code.save(update_fields=['label'])
+        self.assertEqual(self._primaries(), ['name'])
+
     def test_other_types_keep_their_primary_field(self):
         other = self.create_custom_object_type(name='rack', slug='racks')
         self.create_custom_object_type_field(other, name='name', type='text', primary=True)
