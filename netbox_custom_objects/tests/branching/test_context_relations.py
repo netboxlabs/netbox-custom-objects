@@ -84,6 +84,29 @@ class ObjectFieldBranchContextTestCase(BranchingTestBase, _TestBase):
     def test_source_type_loaded_first(self):
         self._check_main_and_branch(self.services, self.products)
 
+    def test_related_name_change_in_branch_moves_accessor(self):
+        self._check_main_and_branch(self.products, self.services)
+        with activate_branch(self.branch), event_tracking(_make_request(self.user)):
+            field = CustomObjectTypeField.objects.get(custom_object_type=self.services, name='product')
+            field.related_name = 'offerings'
+            field.save()
+            service_model, product_model = self._models(self.services, self.products)
+            product = product_model.objects.get(name='prod-1')
+            self.assertFalse(hasattr(product_model, 'services'))
+            self.assertIs(product.offerings.model, service_model)
+        # Main's accessor is unchanged.
+        service_model, product_model = self._models(self.services, self.products)
+        self.assertIs(product_model.objects.get(name='prod-1').services.model, service_model)
+
+    def test_field_delete_in_branch_removes_accessor(self):
+        self._check_main_and_branch(self.products, self.services)
+        with activate_branch(self.branch), event_tracking(_make_request(self.user)):
+            CustomObjectTypeField.objects.get(custom_object_type=self.services, name='product').delete()
+            _service_model, product_model = self._models(self.services, self.products)
+            self.assertFalse(hasattr(product_model, 'services'))
+        service_model, product_model = self._models(self.services, self.products)
+        self.assertIs(product_model.objects.get(name='prod-1').services.model, service_model)
+
     def test_out_of_date_target_class_is_not_used(self):
         with activate_branch(self.branch):
             (stale_product_model,) = self._models(self.products)

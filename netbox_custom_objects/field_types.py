@@ -189,7 +189,7 @@ class LazyForeignKey(ForeignKey):
         super().contribute_to_related_class(cls, related)
 
     def _resolve_model(self, model):
-        """Resolve the lazy reference to the target's class for the active branch context."""
+        """Resolve the lazy reference to the target's class for the branch context *model* was built for."""
         from django.apps import apps as django_apps
 
         from netbox_custom_objects.models import CustomObjectType, _registration_rolled_back
@@ -198,24 +198,35 @@ class LazyForeignKey(ForeignKey):
         _app_label, model_name = self._to_model_name.rsplit('.', 1)
         cot_id_str = extract_cot_id_from_model_name(model_name.lower())
         cot_id = int(cot_id_str) if cot_id_str is not None else None
-        branch_id = CustomObjectType._active_branch_id()
+        # The source class's own context, which is the active one unless the class is
+        # resolved from elsewhere, e.g. by ready().
+        branch_id = getattr(model, '_context_branch_id', None)
 
         # Main and each branch build their own class for a type, but the app registry holds
         # only one, normally main's.  Prefer this context's own class, so an instance of the
         # target this context builds passes the FK's isinstance checks.
         actual_model = None
+        current_timestamp = None
         if cot_id is not None and cot_id == model.custom_object_type_id:
             # Self-referential: the class being built, which isn't cached or registered yet.
             actual_model = model
         elif cot_id is not None:
-            cached = CustomObjectType.get_cached_model(cot_id, branch_id)
-            cached_timestamp = CustomObjectType.get_cached_timestamp(cot_id, branch_id)
+            try:
+                current_timestamp = _current_cache_timestamp(cot_id)
+            except (OperationalError, ProgrammingError):
+                current_timestamp = None
+            # One read of the entry, so the class and its timestamp come from the same one.
+            with CustomObjectType._global_lock:
+                cached, cached_timestamp = CustomObjectType._model_cache.get((cot_id, branch_id), (None, None))
             # Accept the cached class only on the same terms as get_model(): current, and
             # not built in a transaction that rolled back.
-            if cached is not None and cached_timestamp and not _registration_rolled_back(cached):
-                with contextlib.suppress(OperationalError, ProgrammingError):
-                    if cached_timestamp == _current_cache_timestamp(cot_id):
-                        actual_model = cached
+            if (
+                cached is not None
+                and cached_timestamp
+                and cached_timestamp == current_timestamp
+                and not _registration_rolled_back(cached)
+            ):
+                actual_model = cached
 
         if actual_model is None:
             try:
@@ -240,15 +251,14 @@ class LazyForeignKey(ForeignKey):
             # Only a class built for this context is seeded.  Another context's class
             # would lack this context's fields; until this context builds its own, the
             # FK keeps the registered class, and get_model() repoints it once it does.
-            if cot_id is not None and getattr(actual_model, '_context_branch_id', None) == branch_id:
-                try:
-                    current_timestamp = _current_cache_timestamp(cot_id)
-                except (OperationalError, ProgrammingError):
-                    current_timestamp = None
-                if current_timestamp is not None:
-                    with CustomObjectType._global_lock:
-                        if not CustomObjectType.is_model_cached(cot_id, branch_id):
-                            CustomObjectType._model_cache[(cot_id, branch_id)] = (actual_model, current_timestamp)
+            if (
+                cot_id is not None
+                and current_timestamp is not None
+                and getattr(actual_model, '_context_branch_id', None) == branch_id
+            ):
+                with CustomObjectType._global_lock:
+                    if not CustomObjectType.is_model_cached(cot_id, branch_id):
+                        CustomObjectType._model_cache[(cot_id, branch_id)] = (actual_model, current_timestamp)
 
         self.remote_field.model = actual_model
         self.to = actual_model

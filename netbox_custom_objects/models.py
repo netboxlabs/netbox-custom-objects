@@ -170,21 +170,26 @@ def _reverse_accessors(model):
     return accessors
 
 
-def _retract_reverse_accessors(cot_id, accessors):
-    """Remove listed accessors still owned by *cot_id* in the main context.
+def _retract_reverse_accessors(cot_id, accessors, branch_id=None):
+    """Remove listed accessors still owned by *cot_id* in the given branch context (main by default).
 
+    In a branch, only accessors on that branch's own custom object classes are considered.
     The caller must hold ``CustomObjectType._global_lock``.
     """
     for label, name in accessors:
         app_label, model_name = label.split('.')
-        target_cls = apps.all_models.get(app_label, {}).get(model_name)
+        if branch_id is None:
+            target_cls = apps.all_models.get(app_label, {}).get(model_name)
+        else:
+            target_id = extract_cot_id_from_model_name(model_name) if app_label == APP_LABEL else None
+            target_cls = None if target_id is None else CustomObjectType.get_cached_model(int(target_id), branch_id)
         if target_cls is None:
             continue
         owner = _reverse_accessor_owner(target_cls.__dict__.get(name))
         if (
             owner is not None
             and owner.custom_object_type_id == cot_id
-            and getattr(owner, '_context_branch_id', None) is None
+            and getattr(owner, '_context_branch_id', None) == branch_id
         ):
             delattr(target_cls, name)
 
@@ -1681,6 +1686,9 @@ class CustomObjectType(NetBoxModel):
     _through_model_cache = {}
     # Reverse accessors main's classes have installed, per type: {cot_id: {(target label, name)}}.
     _reverse_accessor_cache = {}
+    # Reverse accessors a branch's classes have installed on that branch's custom object
+    # classes: {(cot_id, branch_id): {(target label, name)}}.
+    _branch_reverse_accessor_cache = {}
     _global_lock = threading.RLock()
     _ON_DELETE_SQL = {
         ObjectFieldOnDeleteChoices.CASCADE: 'CASCADE',
@@ -2493,8 +2501,11 @@ class CustomObjectType(NetBoxModel):
             # interleave their through-model registrations.
             with self._global_lock:
                 # Remove stale accessors first so polymorphic fields can reuse their names.
+                partial = skip_object_fields or skip_cot_object_fields
                 if branch_id is None:
-                    self._update_reverse_accessors(model, partial=skip_object_fields or skip_cot_object_fields)
+                    self._update_reverse_accessors(model, partial=partial)
+                else:
+                    self._update_branch_reverse_accessors(model, branch_id, partial=partial)
 
                 self._after_model_generation(attrs, model)
 
@@ -2617,6 +2628,22 @@ class CustomObjectType(NetBoxModel):
             return
         _retract_reverse_accessors(self.id, previous - current)
         self._reverse_accessor_cache[self.id] = current
+
+    def _update_branch_reverse_accessors(self, model, branch_id, partial):
+        """Update the reverse accessors this type's class installed in a branch context.
+
+        A branch's object fields install their accessors on the branch's own class for the
+        target type (see ``LazyForeignKey``), so an accessor of a field deleted or renamed in
+        the branch is removed from that class.  The caller must hold ``_global_lock``.
+        """
+        key = (self.id, branch_id)
+        previous = self._branch_reverse_accessor_cache.get(key, set())
+        current = _reverse_accessors(model)
+        if partial:
+            self._branch_reverse_accessor_cache[key] = previous | current
+            return
+        _retract_reverse_accessors(self.id, previous - current, branch_id=branch_id)
+        self._branch_reverse_accessor_cache[key] = current
 
     def get_model_with_serializer(self):
         from netbox_custom_objects.api.serializers import get_serializer_class
