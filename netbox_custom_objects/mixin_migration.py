@@ -9,6 +9,9 @@ missing that column.  This module provides:
   heal_all_cots(verbosity, dry_run)          — iterate over all COTs on one connection
   heal_branch(branch, verbosity, dry_run)    — heal_all_cots() against one Branch's schema
   heal_all_branches(verbosity, dry_run)      — heal_branch() for every live Branch
+  copy_polymorphic_through_tables(branch, verbosity, dry_run)
+                                              — give a branch its own copy of each
+                                                polymorphic multi-object through table
   heal_unmasked_fields(cot, model, schema_conn)
                                               — add mixin columns unmasked by a
                                                 field rename/delete
@@ -33,7 +36,7 @@ Safety rules
 
 import logging
 
-from django.db import DEFAULT_DB_ALIAS, connections
+from django.db import DEFAULT_DB_ALIAS, connections, transaction
 
 from netbox_custom_objects.utilities import is_branching_enabled
 
@@ -104,6 +107,15 @@ def _branch_schema_exists(schema_name, using=DEFAULT_DB_ALIAS):
     with connections[using].cursor() as cursor:
         cursor.execute('SELECT 1 FROM information_schema.schemata WHERE schema_name = %s', [schema_name])
         return cursor.fetchone() is not None
+
+
+def _schema_has_table(cursor, schema_name, table_name):
+    """Return True if *schema_name* itself, not its search path, has *table_name*."""
+    cursor.execute(
+        'SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = %s AND tablename = %s)',
+        [schema_name, table_name],
+    )
+    return cursor.fetchone()[0]
 
 
 def _can_auto_add(field):
@@ -395,11 +407,75 @@ def heal_branch(branch, verbosity=1, dry_run=False):
     model variant (a branch may have renamed columns that don't exist in
     main); using=branch.connection_name makes the actual introspection/DDL
     target the branch's own schema, not main's. Both are required together.
+
+    Also copies any polymorphic multi-object through table the branch lacks (see
+    copy_polymorphic_through_tables()); the result's "through_tables" key counts them.
     """
     from netbox_branching.utilities import activate_branch
 
     with activate_branch(branch):
-        return heal_all_cots(verbosity=verbosity, dry_run=dry_run, using=branch.connection_name)
+        result = heal_all_cots(verbosity=verbosity, dry_run=dry_run, using=branch.connection_name)
+    result['through_tables'] = copy_polymorphic_through_tables(branch, verbosity=verbosity, dry_run=dry_run)
+    return result
+
+
+def copy_polymorphic_through_tables(branch, verbosity=1, dry_run=False):
+    """
+    Give *branch* its own copy, rows included, of each polymorphic multi-object through
+    table it lacks.
+
+    netbox-branching copies the through tables of a model's M2M fields into a new branch,
+    but a polymorphic multi-object field isn't an M2M field on ``_meta``, so its table is
+    left out.  The branch connection's search path then falls through to main's table,
+    and the branch's changes, including dropping the table, are made to main's.  Called
+    when a branch is provisioned, and by heal_branch() for branches provisioned before.
+
+    Returns the number of tables copied (or, with *dry_run*, that would be).
+    """
+    from netbox_branching.utilities import activate_branch
+
+    from extras.choices import CustomFieldTypeChoices
+    from netbox.plugins import get_plugin_config
+    from netbox_custom_objects.models import CustomObjectTypeField
+
+    main_schema = get_plugin_config('netbox_branching', 'main_schema')
+    branch_schema = branch.schema_name
+    with activate_branch(branch):
+        tables = [
+            field.through_table_name
+            for field in CustomObjectTypeField.objects.filter(
+                type=CustomFieldTypeChoices.TYPE_MULTIOBJECT, is_polymorphic=True
+            ).select_related('custom_object_type')
+        ]
+
+    copied = 0
+    conn = connections[DEFAULT_DB_ALIAS]
+    quote = conn.ops.quote_name
+    with transaction.atomic(using=DEFAULT_DB_ALIAS), conn.cursor() as cursor:
+        for table in tables:
+            if _schema_has_table(cursor, branch_schema, table) or not _schema_has_table(cursor, main_schema, table):
+                continue
+            copied += 1
+            if verbosity >= 1:
+                logger.info(
+                    'upgrade_custom_objects: %scopying table %s into branch %r',
+                    '[dry run] ' if dry_run else '',
+                    table,
+                    branch.name,
+                )
+            if dry_run:
+                continue
+            source = f'{quote(main_schema)}.{quote(table)}'
+            target = f'{quote(branch_schema)}.{quote(table)}'
+            # INCLUDING ALL gives the copy its own identity sequence, which must start
+            # past the copied ids.
+            cursor.execute(f'CREATE TABLE {target} (LIKE {source} INCLUDING ALL)')
+            cursor.execute(f'INSERT INTO {target} SELECT * FROM {source}')
+            cursor.execute(
+                f"SELECT setval(pg_get_serial_sequence(%s, 'id'), COALESCE(MAX(id), 0) + 1, false) FROM {target}",
+                [target],
+            )
+    return copied
 
 
 def heal_all_branches(verbosity=1, dry_run=False):
@@ -516,7 +592,7 @@ def heal_all_branches(verbosity=1, dry_run=False):
         finally:
             connections[branch.connection_name].close()
 
-        if result['healed']:
+        if result['healed'] or result.get('through_tables'):
             healed += 1
         warnings += result['warnings']
 
