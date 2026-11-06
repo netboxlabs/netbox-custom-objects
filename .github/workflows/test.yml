@@ -23,7 +23,9 @@
 # are not yet safe with `--parallel`, whose workers share one Redis cache.
 #
 # Plugin-specific legs (on top of the scaffold matrix):
-#   - NetBox `feature`, so the upcoming NetBox release is covered too.
+#   - NetBox `feature`, so the upcoming NetBox release is covered too. It
+#     skips the query-count checks: the baselines are shared by every leg
+#     and follow NetBox main.
 #   - `main` with netbox-branching installed: it changes model routing and
 #     wires extra hooks, and some tests run only when it's installed. It is
 #     split into two jobs, so neither comes near the timeout: the tests
@@ -88,6 +90,7 @@ jobs:
         ${{ matrix.branching && 'configuration_branching' || 'configuration' }}
       PYTHONPATH: ${{ github.workspace }}/netbox-custom-objects/testing
       COVERAGE_RCFILE: ${{ github.workspace }}/netbox-custom-objects/pyproject.toml  # yamllint disable-line rule:line-length
+      SKIP_QUERY_COUNTS: ${{ matrix.skip-query-counts && '1' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -109,6 +112,7 @@ jobs:
             coverage: true
           - python-version: '3.12'
             netbox-ref: 'feature'
+            skip-query-counts: true
           - python-version: '3.12'
             netbox-ref: 'main'
             branching: true

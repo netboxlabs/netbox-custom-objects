@@ -38,7 +38,7 @@ from strawberry.scalars import JSON
 from dcim.fields import MACAddressField
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from netbox.config import get_config
-from netbox.tables.columns import BooleanColumn, ColorColumn
+from netbox.tables.columns import BooleanColumn, ColorColumn, ManyToManyColumn
 from netbox_custom_objects.choices import (
     ArrayElementTypeChoices,
     CustomObjectFieldTypeChoices,
@@ -375,8 +375,9 @@ class FieldType:
     def get_table_column_field(self, field, **kwargs):
         raise NotImplementedError
 
-    def render_table_column_linkified(self, record):
-        return linkify(record)
+    def render_table_column_linkified(self, record, bound_column):
+        # The field's own value, not the object's display name, which may be a display expression.
+        return linkify(record, bound_column.name)
 
     def _get_related_content_type(self, field):
         """
@@ -847,6 +848,9 @@ class SelectFieldType(FieldType):
                     return mark_safe(f'<span class="badge text-bg-{escape(color)}">{escape(label)}</span>')
                 return label
 
+            def value(self, value):
+                return choices_dict.get(value, value)
+
         return _SelectLabelColumn()
 
     def get_filterform_field(self, field, **kwargs):
@@ -1006,6 +1010,9 @@ class MultiSelectFieldType(FieldType):
                     )
                     return mark_safe(f'<div class="d-flex flex-wrap gap-1">{badges}</div>')
                 return ', '.join(label for label, _ in pairs)
+
+            def value(self, value):
+                return ', '.join(str(choices_dict.get(v, v)) for v in value or ())
 
         return _MultiSelectLabelColumn()
 
@@ -1770,7 +1777,8 @@ class MultiObjectFieldType(FieldType):
         return ', '.join(str(s) for s in field.all())
 
     def get_table_column_field(self, field, **kwargs):
-        return tables.ManyToManyColumn(linkify_item=True, orderable=False)
+        # NetBox's ManyToManyColumn exports the related objects' names, not their links.
+        return ManyToManyColumn(linkify_item=True, orderable=False)
 
     def get_serializer_field(self, field, **kwargs):
         if field.is_polymorphic:
@@ -2618,21 +2626,73 @@ class PolymorphicObjectReverseManager(_PolymorphicReverseManager):
         )
 
 
-class PolymorphicObjectReverseDescriptor:
-    """Reverse descriptor for polymorphic GFK fields on CO models.
+class _PolymorphicReverseDescriptor:
+    """
+    Base for the reverse descriptors of polymorphic fields.
 
-    Injected onto target model classes by _wire_polymorphic_reverse_descriptors() so
-    that code can do, e.g., ``site.my_co_field.all()`` to retrieve all CO instances
-    whose polymorphic GFK points at that site.
+    Injected onto target model classes by _wire_polymorphic_reverse_descriptors(), but
+    only in the process that wires or unwires it.  In other worker processes the one on
+    a class can be stale: its field deleted or renamed, its related_name changed, the
+    target's type removed from it, or the name taken over by another field.  So it
+    doesn't trust the field that placed it: each use looks up the polymorphic field that
+    has this related_name for the target's type now, and builds the manager from that
+    field.  If there's none, the accessor is missing (raises AttributeError).
+
+    In a branch it uses the field that placed it, whose manager returns no objects if
+    the branch removed the field (#766): the target classes and their accessors are main's.
     """
 
-    def __init__(self, cot_pk, field_name):
+    def __init__(self, cot_pk, field_pk, related_name):
         self.cot_pk = cot_pk
-        self.field_name = field_name
+        self.field_pk = field_pk
+        self.related_name = related_name
+
+    def _fields(self, target_model):
+        from netbox_custom_objects.models import CustomObjectTypeField
+
+        return CustomObjectTypeField.objects.filter(
+            is_polymorphic=True,
+            type__in=(CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT),
+            related_name=self.related_name,
+            related_object_types__pk=ContentType.objects.get_for_model(target_model).pk,
+        )
+
+    def is_live(self, target_model):
+        """True if the field that placed this descriptor still has its name on *target_model*."""
+        return self._fields(target_model).filter(pk=self.field_pk).exists()
+
+    def _manager(self, instance):
+        """The manager of the field that placed this descriptor."""
+        raise NotImplementedError
 
     def __get__(self, instance, owner=None):
         if instance is None:
             return self
+        from netbox_custom_objects.models import CustomObjectType
+
+        if CustomObjectType._active_branch_id() is not None:
+            return self._manager(instance)
+        # Validation allows one field per name and target type; order in case of more.
+        field = self._fields(type(instance)).order_by('pk').first()
+        if field is None:
+            raise AttributeError(f'{type(instance).__name__!r} object has no attribute {self.related_name!r}')
+        if field.type == CustomFieldTypeChoices.TYPE_OBJECT:
+            return PolymorphicObjectReverseManager(instance, field.custom_object_type_id, field.name)
+        return PolymorphicMultiObjectReverseManager(instance, field.custom_object_type_id, field.through_model_name)
+
+
+class PolymorphicObjectReverseDescriptor(_PolymorphicReverseDescriptor):
+    """Reverse descriptor for polymorphic GFK fields on CO models.
+
+    Lets code do, e.g., ``site.my_co_field.all()`` to retrieve all CO instances whose
+    polymorphic GFK points at that site.
+    """
+
+    def __init__(self, cot_pk, field_pk, related_name, field_name):
+        super().__init__(cot_pk, field_pk, related_name)
+        self.field_name = field_name
+
+    def _manager(self, instance):
         return PolymorphicObjectReverseManager(instance, self.cot_pk, self.field_name)
 
 
@@ -2673,21 +2733,18 @@ class PolymorphicMultiObjectReverseManager(_PolymorphicReverseManager):
         return source_model.objects.filter(pk__in=source_ids)
 
 
-class PolymorphicMultiObjectReverseDescriptor:
+class PolymorphicMultiObjectReverseDescriptor(_PolymorphicReverseDescriptor):
     """Reverse descriptor for polymorphic M2M fields on CO models.
 
-    Injected onto target model classes by _wire_polymorphic_reverse_descriptors() so
-    that code can do, e.g., ``site.my_co_field.all()`` to retrieve all CO instances
-    whose polymorphic M2M field includes that site.
+    Lets code do, e.g., ``site.my_co_field.all()`` to retrieve all CO instances whose
+    polymorphic M2M field includes that site.
     """
 
-    def __init__(self, cot_pk, through_model_name):
-        self.cot_pk = cot_pk
+    def __init__(self, cot_pk, field_pk, related_name, through_model_name):
+        super().__init__(cot_pk, field_pk, related_name)
         self.through_model_name = through_model_name
 
-    def __get__(self, instance, owner=None):
-        if instance is None:
-            return self
+    def _manager(self, instance):
         return PolymorphicMultiObjectReverseManager(instance, self.cot_pk, self.through_model_name)
 
 
@@ -2930,11 +2987,7 @@ class CoordinatesFieldType(FieldType):
         }
 
     def get_table_column_field(self, field, **kwargs):
-        return CoordinatesColumn(
-            self.latitude_field_name(field),
-            self.longitude_field_name(field),
-            verbose_name=str(field),
-        )
+        return CoordinatesColumn(self.latitude_field_name(field), self.longitude_field_name(field))
 
     @staticmethod
     def validate_pair(latitude, longitude):
@@ -3244,7 +3297,7 @@ class ArrayFieldType(FieldType):
             def render(self, value):
                 return format_array_value(value) or self.default
 
-        return _ArrayColumn(verbose_name=str(field), orderable=False)
+        return _ArrayColumn(orderable=False)
 
 
 FIELD_TYPE_CLASS = {
