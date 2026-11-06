@@ -38,7 +38,7 @@ def build_filterset_form_class(model):
         try:
             form_field = field_type.get_filterform_field(field)
             if isinstance(form_field, dict):
-                # Polymorphic fields return one form field per allowed type.
+                # Object fields return their form fields by name: one per allowed type if polymorphic.
                 attrs.update(form_field)
                 names = list(form_field)
             elif form_field is not None:
