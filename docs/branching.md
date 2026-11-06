@@ -45,7 +45,7 @@ NetBox runs these system checks at startup:
 Custom Objects needs no branching-specific configuration.
 
 !!! warning
-    If your configuration adds the Custom Object Type models to netbox-branching's `exempt_models`, as earlier versions of these docs recommended, remove them. While they're exempt, creating or deleting a Custom Object Type, or changing a field or constraint, is refused in a branch if its model is exempt. Make those changes with no branch active. Custom objects, and other changes to Custom Object Types, still work in a branch.
+    Remove Custom Object Type models from NetBox Branching's `exempt_models` if you followed the earlier setup guidance. Until then, schema changes to exempt models require leaving the active branch. Custom objects remain editable in branches. Metadata changes to exempt types, such as descriptions, are written to main.
 
 ## How It Works
 

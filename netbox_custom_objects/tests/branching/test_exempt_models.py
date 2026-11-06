@@ -1,10 +1,4 @@
-"""
-Schema changes in a branch while netbox-branching's ``exempt_models`` includes the schema models.
-
-An exempt model's rows are written to main, but the DDL runs on the branch's tables, so its
-schema changes are refused in a branch. Models that aren't exempt, custom object data, and
-schema changes with no branch active are unaffected.
-"""
+"""Check that branching exemptions block schema changes without blocking other edits."""
 
 from django.conf import settings
 from django.db import connection as main_conn
@@ -14,6 +8,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from core.models import ObjectType
 from extras.models import CustomFieldChoiceSet
 from netbox_custom_objects.models import (
     CustomObjectType,
@@ -69,8 +64,20 @@ class ExemptSchemaModelsTestCase(BranchingTestBase, _TestBase):
                 field_schema_ids=[self.name_field.schema_id],
             )
             self.cot.get_model().objects.create(name='web1')
-        self.branch = _provision_branch('Exempt Branch', 'iterative', self.user)
         self.addCleanup(CustomObjectType.clear_model_cache)
+
+    def _provision(self, models):
+        """Exempt *models* for the rest of the test and provision the branch."""
+        self.enterContext(_exempt(models))
+        # netbox-branching sets the object types' features from exempt_models at startup, and
+        # provisioning copies only the tables of those with the branching feature.
+        for label in models:
+            app_label, model = label.split('.')
+            object_type = ObjectType.objects.get(app_label=app_label, model=model)
+            ObjectType.objects.filter(pk=object_type.pk).update(
+                features=[feature for feature in object_type.features if feature != 'branching']
+            )
+        self.branch = _provision_branch('Exempt Branch', 'iterative', self.user)
 
     def _name_and_color(self):
         return [self.name_field.schema_id, self.color_field.schema_id]
@@ -86,6 +93,7 @@ class ExemptSchemaModelsTestCase(BranchingTestBase, _TestBase):
         )
 
     def test_schema_changes_of_exempt_models_are_refused_in_a_branch(self):
+        self._provision(SCHEMA_MODELS)
         before = self._main_state()
 
         def relabel_field():
@@ -93,7 +101,7 @@ class ExemptSchemaModelsTestCase(BranchingTestBase, _TestBase):
             field.label = 'Hostname'
             field.save()
 
-        with _exempt(SCHEMA_MODELS), activate_branch(self.branch), event_tracking(_make_request(self.user)):
+        with activate_branch(self.branch), event_tracking(_make_request(self.user)):
             cot = CustomObjectType.objects.get(pk=self.cot.pk)
             for name, change in (
                 ('create type', lambda: CustomObjectType.objects.create(name='switch', slug='switches')),
@@ -119,33 +127,51 @@ class ExemptSchemaModelsTestCase(BranchingTestBase, _TestBase):
 
         self.assertEqual(self._main_state(), before)
 
-    def test_other_changes_still_work(self):
-        with _exempt(OLD_DOCS_MODELS):
-            with activate_branch(self.branch), event_tracking(_make_request(self.user)):
-                cot = CustomObjectType.objects.get(pk=self.cot.pk)
-                model = cot.get_model()
-                model.objects.create(name='web2', color='red')
-                model.objects.filter(name='web1').update(color='red')
-                self.assertEqual(sorted(model.objects.values_list('name', 'color')), [('web1', 'red'), ('web2', 'red')])
-                # Bumps the cache_timestamp of the types using the choice set.
-                self.choice_set.extra_choices = [['red', 'Red'], ['blue', 'Blue']]
-                self.choice_set.save()
-                # Runs no DDL, so it's written to main like any change to an exempt model.
-                cot.description = 'Physical servers'
-                cot.save()
-                # Its model isn't exempt, so it stays in the branch with its DDL.
-                constraint = CustomObjectTypeConstraint.objects.create(
-                    custom_object_type=cot, name='unique_name_color', field_schema_ids=self._name_and_color()
-                )
-                self.assertIn(constraint.db_name, _db_constraint_names(connections[self.branch.connection_name], cot))
+    def test_deleting_a_type_checks_its_fields_and_constraints(self):
+        with event_tracking(self.request):
+            rack_cot = CustomObjectType.objects.create(name='rack', slug='racks')
+            CustomObjectTypeField.objects.create(custom_object_type=rack_cot, name='name', label='Name', type='text')
+        # The type is branched, but the branch has no table of its own for the exempt constraints.
+        self._provision(SCHEMA_MODELS[2:])
+        before = self._main_state()
 
-            with event_tracking(self.request):
-                CustomObjectTypeField.objects.create(
-                    custom_object_type=CustomObjectType.objects.get(pk=self.cot.pk),
-                    name='rack',
-                    label='Rack',
-                    type='text',
-                )
+        with activate_branch(self.branch), event_tracking(_make_request(self.user)):
+            with self.assertRaisesMessage(SchemaChangeRefused, SCHEMA_MODELS[2]):
+                CustomObjectType.objects.get(pk=self.cot.pk).delete()
+            # A type with no constraints can still be deleted in the branch.
+            CustomObjectType.objects.get(pk=rack_cot.pk).delete()
+            self.assertFalse(CustomObjectType.objects.filter(pk=rack_cot.pk).exists())
+
+        # Main keeps both types, and the server type's constraint.
+        self.assertEqual(self._main_state(), before)
+
+    def test_other_changes_still_work(self):
+        self._provision(OLD_DOCS_MODELS)
+        with activate_branch(self.branch), event_tracking(_make_request(self.user)):
+            cot = CustomObjectType.objects.get(pk=self.cot.pk)
+            model = cot.get_model()
+            model.objects.create(name='web2', color='red')
+            model.objects.filter(name='web1').update(color='red')
+            self.assertEqual(sorted(model.objects.values_list('name', 'color')), [('web1', 'red'), ('web2', 'red')])
+            # Bumps the cache_timestamp of the types using the choice set.
+            self.choice_set.extra_choices = [['red', 'Red'], ['blue', 'Blue']]
+            self.choice_set.save()
+            # Runs no DDL, so it's written to main like any change to an exempt model.
+            cot.description = 'Physical servers'
+            cot.save()
+            # Its model isn't exempt, so it stays in the branch with its DDL.
+            constraint = CustomObjectTypeConstraint.objects.create(
+                custom_object_type=cot, name='unique_name_color', field_schema_ids=self._name_and_color()
+            )
+            self.assertIn(constraint.db_name, _db_constraint_names(connections[self.branch.connection_name], cot))
+
+        with event_tracking(self.request):
+            CustomObjectTypeField.objects.create(
+                custom_object_type=CustomObjectType.objects.get(pk=self.cot.pk),
+                name='rack',
+                label='Rack',
+                type='text',
+            )
 
         cot = CustomObjectType.objects.get(pk=self.cot.pk)
         self.assertEqual(cot.description, 'Physical servers')
@@ -156,21 +182,22 @@ class ExemptSchemaModelsTestCase(BranchingTestBase, _TestBase):
         self.assertEqual(objects, [('web1', None, None)])
 
     def test_sync_replays_schema_changes_of_models_that_are_not_exempt(self):
-        with _exempt(OLD_DOCS_MODELS):
-            with event_tracking(self.request):
-                constraint = CustomObjectTypeConstraint.objects.create(
-                    custom_object_type=CustomObjectType.objects.get(pk=self.cot.pk),
-                    name='unique_name_color',
-                    field_schema_ids=self._name_and_color(),
-                )
-            self.branch.sync(user=self.user, commit=True)
+        self._provision(OLD_DOCS_MODELS)
+        with event_tracking(self.request):
+            constraint = CustomObjectTypeConstraint.objects.create(
+                custom_object_type=CustomObjectType.objects.get(pk=self.cot.pk),
+                name='unique_name_color',
+                field_schema_ids=self._name_and_color(),
+            )
+        self.branch.sync(user=self.user, commit=True)
 
-            with activate_branch(self.branch):
-                self.assertTrue(CustomObjectTypeConstraint.objects.filter(pk=constraint.pk).exists())
-                cot = CustomObjectType.objects.get(pk=self.cot.pk)
-                self.assertIn(constraint.db_name, _db_constraint_names(connections[self.branch.connection_name], cot))
+        with activate_branch(self.branch):
+            self.assertTrue(CustomObjectTypeConstraint.objects.filter(pk=constraint.pk).exists())
+            cot = CustomObjectType.objects.get(pk=self.cot.pk)
+            self.assertIn(constraint.db_name, _db_constraint_names(connections[self.branch.connection_name], cot))
 
     def test_rest_api_and_schema_apply_return_400_in_a_branch(self):
+        self._provision(OLD_DOCS_MODELS)
         self.user.is_superuser = True
         self.user.save()
         client = APIClient()
@@ -182,24 +209,23 @@ class ExemptSchemaModelsTestCase(BranchingTestBase, _TestBase):
         type_def['fields'].append({'id': self.cot.next_schema_id + 1, 'name': 'rack', 'type': 'text'})
         fields_before = sorted(self.cot.fields.values_list('name', flat=True))
 
-        with _exempt(OLD_DOCS_MODELS):
-            response = client.post(
-                reverse('plugins-api:netbox_custom_objects-api:customobjecttypefield-list'),
-                {'custom_object_type': self.cot.pk, 'name': 'rack', 'label': 'Rack', 'type': 'text'},
-                format='json',
-                **headers,
-            )
-            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
-            self.assertIn(', '.join(OLD_DOCS_MODELS), response.json()['detail'])
+        response = client.post(
+            reverse('plugins-api:netbox_custom_objects-api:customobjecttypefield-list'),
+            {'custom_object_type': self.cot.pk, 'name': 'rack', 'label': 'Rack', 'type': 'text'},
+            format='json',
+            **headers,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
+        self.assertIn(', '.join(OLD_DOCS_MODELS), response.json()['detail'])
 
-            response = client.post(
-                reverse('plugins-api:netbox_custom_objects-api:schema-apply'),
-                {'schema': {'schema_version': '1', 'types': [type_def]}},
-                format='json',
-                **headers,
-            )
-            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
-            self.assertEqual(response.json()['error'], 'exempt_from_branching')
-            self.assertIn(', '.join(OLD_DOCS_MODELS), response.json()['detail'])
+        response = client.post(
+            reverse('plugins-api:netbox_custom_objects-api:schema-apply'),
+            {'schema': {'schema_version': '1', 'types': [type_def]}},
+            format='json',
+            **headers,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
+        self.assertEqual(response.json()['error'], 'exempt_from_branching')
+        self.assertIn(', '.join(OLD_DOCS_MODELS), response.json()['detail'])
 
         self.assertEqual(sorted(self.cot.fields.values_list('name', flat=True)), fields_before)

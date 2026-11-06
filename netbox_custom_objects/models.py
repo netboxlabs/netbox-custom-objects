@@ -339,11 +339,9 @@ def exempt_schema_models():
 
 def _check_schema_change_allowed(model):
     """
-    Refuse a schema change to *model* in a branch if netbox-branching exempts the model.
+    Reject schema changes to exempt models while a branch is active.
 
-    An exempt model's rows are written to main, but the DDL runs on the branch's tables, so
-    main would get the rows without their columns or tables. A model that isn't exempt keeps
-    both in the branch, as does a branch sync, which replays only models that aren't exempt.
+    Their rows would be saved to main, but their DDL would run in the branch.
     """
     if _get_schema_connection() is connection:
         return
@@ -2864,6 +2862,13 @@ class CustomObjectType(NetBoxModel):
 
     def delete(self, *args, **kwargs):
         _check_schema_change_allowed(CustomObjectType)
+        # The cascade deletes the type's fields and constraints without calling their delete(),
+        # so check their models here. An exempt model's rows are in main, so the cascade would
+        # delete them there.
+        if self.fields.exists():
+            _check_schema_change_allowed(CustomObjectTypeField)
+        if self.constraints.exists():
+            _check_schema_change_allowed(CustomObjectTypeConstraint)
         # super().delete() resets self.id to None; keep it for the cleanup afterwards.
         cot_id = self.id
         schema_conn = _get_schema_connection()
