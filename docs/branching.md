@@ -44,7 +44,7 @@ NetBox runs these system checks at startup:
 Custom Objects needs no branching-specific configuration.
 
 !!! warning
-    If your configuration adds the Custom Object Type models to netbox-branching's `exempt_models`, as earlier versions of these docs recommended, remove them.
+    If your configuration adds the Custom Object Type models to netbox-branching's `exempt_models`, as earlier versions of these docs recommended, remove them. While they're exempt, Custom Object Types, fields and constraints can't be changed in a branch, only with no branch active. Custom objects can still be changed in a branch.
 
 ## How It Works
 

@@ -102,6 +102,7 @@ from netbox_custom_objects.utilities import (
 )
 from utilities.data import deepmerge, get_config_value_ci
 from utilities.datetime import datetime_from_timestamp
+from utilities.exceptions import AbortRequest
 from utilities.object_types import object_type_name
 from utilities.serialization import deserialize_object as _deserialize_object
 from utilities.string import title
@@ -317,6 +318,33 @@ def _get_schema_connection():
         if branch is not None:
             return connections[branch.connection_name]
     return connection
+
+
+def _check_schema_change_allowed():
+    """
+    Refuse a change to a type, field or constraint in a branch while netbox-branching exempts
+    one of their models, with an AbortRequest that the UI and REST API report as an error.
+
+    An exempt model's rows are written to main, but the DDL runs on the branch's tables, so
+    main would get the rows without their columns or tables.
+    """
+    if _get_schema_connection() is connection:
+        return
+    from netbox_branching.utilities import supports_branching
+
+    exempt = [
+        model._meta.label_lower
+        for model in (CustomObjectType, CustomObjectTypeField, CustomObjectTypeConstraint)
+        if not supports_branching(model)
+    ]
+    if exempt:
+        raise AbortRequest(
+            _(
+                "Custom Object Types, fields and constraints can't be changed in a branch while "
+                "netbox-branching's exempt_models includes {models}. Make the change with no branch "
+                'active, or remove the models from exempt_models.'
+            ).format(models=', '.join(exempt))
+        )
 
 
 def _mark_registered_in_transaction(model):
@@ -2799,6 +2827,9 @@ class CustomObjectType(NetBoxModel):
         super().clean_fields(exclude=exclude)
 
     def save(self, *args, **kwargs):
+        # A cache_timestamp bump changes no schema, and other models' saves make it, e.g. a choice set's.
+        if kwargs.get('update_fields') != ['cache_timestamp']:
+            _check_schema_change_allowed()
         needs_db_create = self._state.adding
 
         # The rendered display_expression is in the search cache; a changed expression needs a reindex.
@@ -2821,6 +2852,7 @@ class CustomObjectType(NetBoxModel):
                 transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
 
     def delete(self, *args, **kwargs):
+        _check_schema_change_allowed()
         # super().delete() resets self.id to None; keep it for the cleanup afterwards.
         cot_id = self.id
         schema_conn = _get_schema_connection()
@@ -4382,6 +4414,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         return _SchemaAwareDeserialized(inner)
 
     def save(self, *args, **kwargs):
+        _check_schema_change_allowed()
         is_new = self._state.adding
 
         schema_conn = _get_schema_connection()
@@ -4615,6 +4648,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         self._original_search_weight = self.search_weight
 
     def delete(self, *args, **kwargs):
+        _check_schema_change_allowed()
         # Dropping the column would drop the database constraint anyway; delete the
         # constraint records first so they are change-logged and leave the model.
         for constraint in self.constraints:
@@ -5301,6 +5335,7 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
         return _SchemaAwareDeserialized(inner)
 
     def save(self, *args, **kwargs):
+        _check_schema_change_allowed()
         schema_conn = _get_schema_connection()
         previous = None
         if not self._state.adding:
@@ -5330,6 +5365,7 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
             super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
+        _check_schema_change_allowed()
         schema_conn = _get_schema_connection()
         model = self.custom_object_type.get_model()
         with transaction.atomic(using=schema_conn.alias):
