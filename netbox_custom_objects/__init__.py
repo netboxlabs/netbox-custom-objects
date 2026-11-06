@@ -104,6 +104,30 @@ def _heal_branch_on_migrate(sender, branch, **kwargs):
         )
 
 
+def _copy_through_tables_on_provision(sender, branch, **kwargs):
+    """netbox-branching's ``post_provision`` receiver: copy the polymorphic multi-object
+    through tables, which netbox-branching doesn't, into the new branch.
+
+    Sent before the branch is marked ready.  On failure the branch is marked failed, as
+    netbox-branching does when its own provisioning fails, since its writes to these
+    tables would otherwise go to main's.  The next ``manage.py migrate`` heals it.
+    """
+    from netbox_branching.choices import BranchStatusChoices
+    from netbox_branching.models import Branch
+
+    from netbox_custom_objects.mixin_migration import copy_polymorphic_through_tables
+
+    try:
+        copy_polymorphic_through_tables(branch, verbosity=0)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            'netbox_custom_objects: error copying polymorphic through tables into branch %s',
+            branch.pk,
+        )
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.FAILED)
+        raise
+
+
 def _register_branching_hooks_once():
     """Register netbox-branching integration hooks at most once per process.
 
@@ -124,6 +148,7 @@ def _register_branching_hooks_once():
     # older release should fail loudly rather than silently skip every hook.
     from netbox_branching.signals import (
         post_merge,
+        post_provision,
         post_revert,
         post_sync,
         pre_merge,
@@ -148,6 +173,7 @@ def _register_branching_hooks_once():
     for sig in (pre_merge, post_merge, pre_sync, post_sync, pre_revert, post_revert):
         sig.connect(_reset_deferred_co_field_data, weak=False)
     branching_post_migrate.connect(_heal_branch_on_migrate, weak=False)
+    post_provision.connect(_copy_through_tables_on_provision, weak=False)
 
     register_branching_resolver(supports_branching_resolver)
     register_objectchange_field_migrator(objectchange_field_migrator)

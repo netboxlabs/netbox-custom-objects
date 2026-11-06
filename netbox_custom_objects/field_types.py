@@ -2079,7 +2079,7 @@ class MultiObjectFieldType(FieldType):
         ``with connection.schema_editor()`` here would flush deferred SQL
         prematurely on PostgreSQL.
         """
-        from netbox_custom_objects.models import CustomObjectType
+        from netbox_custom_objects.models import CustomObjectType, _table_exists
 
         source_model_string = f'{APP_LABEL}.{model.__name__}'
 
@@ -2119,12 +2119,10 @@ class MultiObjectFieldType(FieldType):
         # (opened via _get_schema_connection() by the caller), whereas the module-level
         # ``connection`` always points at the main schema — using it here would let the
         # idempotency guard diverge from where create_model() actually writes.
-        conn = schema_editor.connection
-        table_name = through._meta.db_table
-        with conn.cursor() as cursor:
-            existing_tables = conn.introspection.table_names(cursor)
-            if table_name not in existing_tables:
-                schema_editor.create_model(through)
+        # Only the schema's own tables count: a branch's search path falls through to
+        # main's table, and the branch needs its own.
+        if not _table_exists(through._meta.db_table, schema_editor.connection):
+            schema_editor.create_model(through)
 
     def drop_polymorphic_m2m_table(self, field_instance, model, schema_editor):
         """Drops the DB table for a polymorphic MultiObject through.
@@ -2135,6 +2133,8 @@ class MultiObjectFieldType(FieldType):
         ``schema_editor`` is shared by the caller — opening a nested one would
         flush deferred SQL prematurely on PostgreSQL.
         """
+        from netbox_custom_objects.models import _table_exists
+
         through_model = None
         for tm in getattr(model, '_through_models', None) or ():
             if tm._meta.db_table == field_instance.through_table_name:
@@ -2145,6 +2145,9 @@ class MultiObjectFieldType(FieldType):
                 through_model = model._meta.apps.get_model(APP_LABEL, field_instance.through_model_name)
             except LookupError:
                 return  # already gone
+        # A branch without its own copy would otherwise drop main's table.
+        if not _table_exists(through_model._meta.db_table, schema_editor.connection):
+            return
         schema_editor.delete_model(through_model)
 
 
