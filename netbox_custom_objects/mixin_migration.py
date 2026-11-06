@@ -109,15 +109,6 @@ def _branch_schema_exists(schema_name, using=DEFAULT_DB_ALIAS):
         return cursor.fetchone() is not None
 
 
-def _schema_has_table(cursor, schema_name, table_name):
-    """Return True if *schema_name* itself, not its search path, has *table_name*."""
-    cursor.execute(
-        'SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = %s AND tablename = %s)',
-        [schema_name, table_name],
-    )
-    return cursor.fetchone()[0]
-
-
 def _can_auto_add(field):
     """
     Return True if it is safe to ADD COLUMN for *field* on a table that
@@ -430,19 +421,23 @@ def copy_polymorphic_through_tables(branch, verbosity=1, dry_run=False):
     and the branch's changes, including dropping the table, are made to main's.  Called
     when a branch is provisioned, and by heal_branch() for branches provisioned before.
 
+    Rows whose custom object isn't in the branch are left out: main may have objects the
+    branch doesn't (created since the branch was provisioned), and the branch's own
+    objects can later be given the same ids.
+
     Returns the number of tables copied (or, with *dry_run*, that would be).
     """
     from netbox_branching.utilities import activate_branch
 
     from extras.choices import CustomFieldTypeChoices
     from netbox.plugins import get_plugin_config
-    from netbox_custom_objects.models import CustomObjectTypeField
+    from netbox_custom_objects.models import CustomObjectTypeField, _table_exists
 
     main_schema = get_plugin_config('netbox_branching', 'main_schema')
     branch_schema = branch.schema_name
     with activate_branch(branch):
         tables = [
-            field.through_table_name
+            (field.through_table_name, field.custom_object_type.get_database_table_name())
             for field in CustomObjectTypeField.objects.filter(
                 type=CustomFieldTypeChoices.TYPE_MULTIOBJECT, is_polymorphic=True
             ).select_related('custom_object_type')
@@ -452,8 +447,8 @@ def copy_polymorphic_through_tables(branch, verbosity=1, dry_run=False):
     conn = connections[DEFAULT_DB_ALIAS]
     quote = conn.ops.quote_name
     with transaction.atomic(using=DEFAULT_DB_ALIAS), conn.cursor() as cursor:
-        for table in tables:
-            if _schema_has_table(cursor, branch_schema, table) or not _schema_has_table(cursor, main_schema, table):
+        for table, source_table in tables:
+            if _table_exists(table, conn, schema=branch_schema) or not _table_exists(table, conn, schema=main_schema):
                 continue
             copied += 1
             if verbosity >= 1:
@@ -470,7 +465,10 @@ def copy_polymorphic_through_tables(branch, verbosity=1, dry_run=False):
             # INCLUDING ALL gives the copy its own identity sequence, which must start
             # past the copied ids.
             cursor.execute(f'CREATE TABLE {target} (LIKE {source} INCLUDING ALL)')
-            cursor.execute(f'INSERT INTO {target} SELECT * FROM {source}')
+            cursor.execute(
+                f'INSERT INTO {target} SELECT * FROM {source} '
+                f'WHERE source_id IN (SELECT id FROM {quote(branch_schema)}.{quote(source_table)})'
+            )
             cursor.execute(
                 f"SELECT setval(pg_get_serial_sequence(%s, 'id'), COALESCE(MAX(id), 0) + 1, false) FROM {target}",
                 [target],

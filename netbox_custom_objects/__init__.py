@@ -106,17 +106,26 @@ def _heal_branch_on_migrate(sender, branch, **kwargs):
 
 def _copy_through_tables_on_provision(sender, branch, **kwargs):
     """netbox-branching's ``post_provision`` receiver: copy the polymorphic multi-object
-    through tables, which netbox-branching doesn't, into the new branch."""
-    try:
-        from netbox_custom_objects.mixin_migration import copy_polymorphic_through_tables
+    through tables, which netbox-branching doesn't, into the new branch.
 
+    Sent before the branch is marked ready.  On failure the branch is marked failed, as
+    netbox-branching does when its own provisioning fails, since its writes to these
+    tables would otherwise go to main's.  The next ``manage.py migrate`` heals it.
+    """
+    from netbox_branching.choices import BranchStatusChoices
+    from netbox_branching.models import Branch
+
+    from netbox_custom_objects.mixin_migration import copy_polymorphic_through_tables
+
+    try:
         copy_polymorphic_through_tables(branch, verbosity=0)
     except Exception:
         logging.getLogger(__name__).exception(
-            'netbox_custom_objects: error copying polymorphic through tables into branch %s; '
-            'run manage.py upgrade_custom_objects to retry',
-            getattr(branch, 'pk', branch),
+            'netbox_custom_objects: error copying polymorphic through tables into branch %s',
+            branch.pk,
         )
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.FAILED)
+        raise
 
 
 def _register_branching_hooks_once():
