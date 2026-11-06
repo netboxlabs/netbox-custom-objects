@@ -37,13 +37,16 @@ from netbox_custom_objects.schema.executor import (
     CircularDependencyError,
     DestructiveChangesError,
     InvalidConstraintError,
+    InvalidFieldError,
     InvalidRelatedNameError,
+    InvalidTypeError,
     UnknownChoiceSetError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
     UnsupportedFieldChangeError,
     UnsupportedTypeChangeError,
     apply_diffs,
+    check_field_names,
     schema_transaction,
 )
 from netbox_custom_objects.schema.format import CUSTOM_OBJECTS_APP_LABEL_SLUG
@@ -550,6 +553,10 @@ class SchemaPreviewView(APIView):
 
         diffs = diff_document(schema_doc)
         _check_related_types_visible(request.user, diffs)
+        try:
+            check_field_names(diffs)
+        except InvalidFieldError as exc:
+            return Response({'error': 'invalid_field', 'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response({'diffs': [_serialize_diff(d) for d in diffs]})
 
 
@@ -591,8 +598,8 @@ class SchemaApplyView(APIView):
         detail: "Schema contains destructive ..."
         destructive_slugs: [my-cot]
 
-    **400 Bad Request** — circular COT dependency, unresolvable FK target, a constraint
-    that fails validation, or invalid schema document structure.
+    **400 Bad Request** — circular COT dependency, unresolvable FK target, a type, field or
+    constraint that fails validation, or invalid schema document structure.
 
     Unexpected DB errors (e.g. ``IntegrityError`` from a constraint violation
     unrelated to the COT schema logic) are not caught and will surface as
@@ -683,6 +690,16 @@ class SchemaApplyView(APIView):
         except InvalidRelatedNameError as exc:
             return Response(
                 {'error': 'invalid_related_name', 'detail': str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except InvalidFieldError as exc:
+            return Response(
+                {'error': 'invalid_field', 'detail': str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except InvalidTypeError as exc:
+            return Response(
+                {'error': 'invalid_type', 'detail': str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except UnsupportedTypeChangeError as exc:

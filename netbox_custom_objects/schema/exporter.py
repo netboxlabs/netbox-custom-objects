@@ -31,6 +31,7 @@ from netbox_custom_objects.schema.format import (
     FIELD_DEFAULTS,
     FIELD_TYPE_ATTRS,
     SCHEMA_FORMAT_VERSION,
+    field_attr_default,
 )
 
 logger = logging.getLogger(__name__)
@@ -106,7 +107,7 @@ def _export_field(field) -> dict:
     # ── Base attributes (omit when equal to documented defaults) ────────────
     for attr in _BASE_ATTRS:
         value = getattr(field, attr)
-        if value != FIELD_DEFAULTS.get(attr):
+        if value != field_attr_default(attr, schema_type):
             result[attr] = value
 
     # ── Type-specific attributes ─────────────────────────────────────────────

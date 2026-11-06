@@ -28,7 +28,7 @@ The following attributes are available when creating or editing a Custom Object 
 
 | Attribute | Description |
 |-----------|-------------|
-| `Name` | Internal field name, up to 50 characters. Must be lowercase alphanumeric with single underscores between words (e.g. `rack_unit`), and unique within the Custom Object Type. Some names are reserved because every custom object already uses them, such as `id`, `tags`, `owner`, `created` and `objects`. A name also can't clash with another field's extra columns, such as `<url field>_title` or `<coordinates field>_latitude`. A polymorphic field can't be renamed. |
+| `Name` | Internal field name, up to 50 characters. Must be lowercase alphanumeric with single underscores between words (e.g. `rack_unit`), and unique within the Custom Object Type. Some names are reserved because every custom object already uses them, such as `id`, `tags`, `owner`, `created` and `objects`, or because the type's list views and REST API use them as query parameters, such as `limit`, `offset`, `q` and `ordering`. A field named before its name was reserved keeps it, but a field can't be renamed to a reserved name. A name also can't clash with another field's extra columns, such as `<url field>_title` or `<coordinates field>_latitude`. A polymorphic field can't be renamed. |
 | `Label` | Human-readable display name shown in the UI, up to 50 characters. Defaults to the field name, with underscores replaced by spaces and the first letter capitalized. |
 | `Type` | Data type of the field (see above). A field's type can't be changed to or from `coordinates`, `url`, `array` or `multiobject`, or while the field is part of a constraint. |
 | `Description` | Help text shown below the field in forms. |
