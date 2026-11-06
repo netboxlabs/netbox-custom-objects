@@ -2584,6 +2584,8 @@ class CustomObjectType(NetBoxModel):
                     fk_field.to = model
                     fk_field.__dict__.pop('path_infos', None)
                     fk_field.__dict__.pop('reverse_path_infos', None)
+                    # The reverse accessor goes with it, onto the new class.
+                    fk_field.contribute_to_related_class(model, fk_field.remote_field)
 
                 # Only cache fully-generated models.  Models generated with
                 # skip_object_fields=True or skip_cot_object_fields=True omit FK
