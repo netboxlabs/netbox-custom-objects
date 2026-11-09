@@ -127,6 +127,22 @@ def _constraint_field_refs(data, fields_by_schema_id):
     return {fields_by_schema_id[(cot_id, sid)] for sid in schema_ids if (cot_id, sid) in fields_by_schema_id}
 
 
+def _created_field_refs(data, model_label, created_fields_by_column):
+    """Return the refs of fields created in the same squash that an object's *data* writes.
+
+    The object's model class predates those fields, so a walk over its fields can't find them.
+    """
+    from .utilities import extract_cot_id_from_model_name
+
+    if not data or not model_label:
+        return set()
+    cot_id_str = extract_cot_id_from_model_name(model_label.split('.', 1)[-1])
+    if cot_id_str is None:
+        return set()
+    cot_id = int(cot_id_str)
+    return {created_fields_by_column[(cot_id, key)] for key in data if (cot_id, key) in created_fields_by_column}
+
+
 def add_custom_object_dependencies(sender, collapsed_changes, **kwargs):
     """Extend squash's dependency graph with CO-specific edges.
 
@@ -161,6 +177,18 @@ def add_custom_object_dependencies(sender, collapsed_changes, **kwargs):
         elif action == 'delete':
             deletes_map[key] = cc
 
+    from .models import _occupied_columns
+
+    created_fields_by_column = {}
+    for key, cc in creates_map.items():
+        if not (isinstance(key, tuple) and key[0] == field_label):
+            continue
+        data = cc.postchange_data or {}
+        if data.get('custom_object_type') is None or not data.get('name'):
+            continue
+        for column in _occupied_columns(data['name'], data.get('type')):
+            created_fields_by_column[(data['custom_object_type'], column)] = key
+
     for cc in collapsed_changes.values():
         meta = getattr(cc.model_class, '_meta', None)
         # Detect CO models even when model_class is None (dynamically-generated
@@ -190,7 +218,10 @@ def add_custom_object_dependencies(sender, collapsed_changes, **kwargs):
                 if ref in deletes_map:
                     deletes_map[ref].depends_on.add(cc.key)
                     cc.depended_by.add(ref)
-            for ref in collect_refs(cc.postchange_data):
+            post_refs = collect_refs(cc.postchange_data) | _created_field_refs(
+                cc.postchange_data, model_label, created_fields_by_column
+            )
+            for ref in post_refs:
                 if ref in creates_map:
                     cc.depends_on.add(ref)
                     creates_map[ref].depended_by.add(cc.key)
