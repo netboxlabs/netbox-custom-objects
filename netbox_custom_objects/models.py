@@ -3451,6 +3451,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         self._original_array_element_type = self.array_element_type
         self._original_array_tuple_size = self.array_tuple_size
         self._original_search_weight = self.search_weight
+        self._original_primary = self.primary
 
     def __str__(self):
         return self.label or self.name.replace('_', ' ').capitalize()
@@ -4620,7 +4621,34 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             self.custom_object_type.snapshot()
             self.custom_object_type.save(update_fields=['cache_timestamp'])
 
+            # Only making a field primary demotes the others. A field already primary when
+            # loaded, and demoted since (e.g. earlier in the same bulk update), stays demoted.
+            update_fields = kwargs.get('update_fields')
+            if (
+                self.primary
+                and self._original_primary
+                and not self._state.adding
+                and not CustomObjectTypeField.objects.using(schema_conn.alias).filter(pk=self.pk, primary=True).exists()
+            ):
+                self.primary = False
+
             super().save(*args, **kwargs)
+
+            # Save this field first so nested model builds see its changes.
+            # The type's row lock serializes promotions.
+            # Save each demotion so change logging and branch merges include it.
+            if self.primary and (update_fields is None or 'primary' in update_fields):
+                other_primaries = (
+                    CustomObjectTypeField.objects.using(schema_conn.alias)
+                    .filter(custom_object_type_id=self.custom_object_type_id, primary=True)
+                    .exclude(pk=self.pk)
+                )
+                for field in other_primaries:
+                    # Reuse the type instance to keep the caller's cache timestamp current.
+                    field.custom_object_type = self.custom_object_type
+                    field.snapshot()
+                    field.primary = False
+                    field.save()
 
             # On rename, regenerate now: healing needs the class with the new field
             # set, and runs in this same transaction so a reader can never observe
@@ -4695,8 +4723,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         if needs_reindex:
             _cot_id = self.custom_object_type_id
             transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
-        # Refresh the snapshot so a later save of this instance compares against this one.
+        # Refresh the snapshots so a later save of this instance compares against this one.
         self._original_search_weight = self.search_weight
+        self._original_primary = self.primary
 
     def delete(self, *args, **kwargs):
         # Dropping the column would drop the database constraint anyway; delete the
