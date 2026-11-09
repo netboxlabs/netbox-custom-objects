@@ -67,7 +67,18 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
 
     def test_custom_object_type_field_reserved_name_rejected(self):
         """Field names in RESERVED_FIELD_NAMES must be rejected with ValidationError."""
-        for reserved in ('owner', 'tags', 'id', 'created', 'last_updated', 'local_context_data'):
+        reserved_names = (
+            'owner',
+            'tags',
+            'id',
+            'created',
+            'last_updated',
+            'local_context_data',
+            'limit',
+            'search',
+            'start',
+        )
+        for reserved in reserved_names:
             with self.assertRaises(ValidationError, msg=f'Expected ValidationError for reserved name={reserved!r}'):
                 field = CustomObjectTypeField(
                     custom_object_type=self.custom_object_type,
@@ -75,6 +86,20 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
                     type='text',
                 )
                 field.full_clean()
+
+    def test_rename_to_reserved_name_rejected(self):
+        field = self.create_custom_object_type_field(self.custom_object_type, name='quota', type='integer')
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.name = 'limit'
+        with self.assertRaisesMessage(ValidationError, 'Field name "limit" is reserved'):
+            field.full_clean()
+
+    def test_existing_field_with_reserved_name_can_be_changed(self):
+        # e.g. created before the name was reserved
+        field = self.create_custom_object_type_field(self.custom_object_type, name='limit', type='integer')
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.label = 'Quota'
+        field.full_clean()
 
     def test_from_db_populates_original_snapshot(self):
         """
@@ -294,6 +319,26 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
         with self.assertRaises(Exception):
             self.create_custom_object_type_field(self.custom_object_type, name='test_field', type='integer')
 
+    def test_schema_id_skips_ids_in_use_when_counter_lags(self):
+        """Allocating a field ID also advances a stale counter."""
+        self.create_custom_object_type_field(self.custom_object_type, name='a', type='text')
+        self.create_custom_object_type_field(self.custom_object_type, name='b', type='text')
+        CustomObjectType.objects.filter(pk=self.custom_object_type.pk).update(next_schema_id=1)
+
+        field = self.create_custom_object_type_field(self.custom_object_type, name='c', type='text')
+
+        self.assertEqual(field.schema_id, 3)
+        self.custom_object_type.refresh_from_db()
+        self.assertEqual(self.custom_object_type.next_schema_id, 3)
+
+    def test_schema_id_not_reused_after_field_delete(self):
+        self.create_custom_object_type_field(self.custom_object_type, name='a', type='text')
+        self.create_custom_object_type_field(self.custom_object_type, name='b', type='text').delete()
+
+        field = self.create_custom_object_type_field(self.custom_object_type, name='c', type='text')
+
+        self.assertEqual(field.schema_id, 3)
+
     def test_custom_object_type_field_validation_regex_text_only(self):
         """Test that regex validation can only be set on text fields."""
         # Should work for text field
@@ -410,6 +455,68 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
         deserialized = field.deserialize(serialized)
 
         self.assertEqual(deserialized, test_value)
+
+
+class PrimaryFieldTestCase(CustomObjectsTestCase, TestCase):
+    """Saving a field as primary demotes the type's other primary field."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name='zone', slug='zones')
+        self.name = self.create_custom_object_type_field(self.cot, name='name', type='text', primary=True)
+        self.code = self.create_custom_object_type_field(self.cot, name='code', type='text')
+
+    def _primaries(self):
+        return list(self.cot.fields.filter(primary=True).values_list('name', flat=True))
+
+    def test_new_primary_field_demotes_the_old_one(self):
+        self.create_custom_object_type_field(self.cot, name='title', type='text', primary=True)
+        self.assertEqual(self._primaries(), ['title'])
+
+    def test_existing_field_made_primary_demotes_the_old_one(self):
+        code = CustomObjectTypeField.objects.get(pk=self.code.pk)
+        code.primary = True
+        code.save()
+        self.assertEqual(self._primaries(), ['code'])
+        obj = self.cot.get_model().objects.create(name='Zone A', code='ZA')
+        self.assertEqual(str(obj), 'ZA')
+
+    def test_type_instance_stays_current(self):
+        # The demoted field's save bumps the caller's type instance, so its model isn't rebuilt.
+        code = CustomObjectTypeField.objects.get(pk=self.code.pk)
+        code.primary = True
+        code.save()
+        stored = CustomObjectType.objects.get(pk=self.cot.pk).cache_timestamp
+        self.assertEqual(code.custom_object_type.cache_timestamp, stored)
+
+    def test_saving_the_primary_field_keeps_it_primary(self):
+        name = CustomObjectTypeField.objects.get(pk=self.name.pk)
+        name.label = 'Zone name'
+        name.save()
+        self.assertEqual(self._primaries(), ['name'])
+
+    def test_field_demoted_since_it_was_loaded_stays_demoted(self):
+        name = CustomObjectTypeField.objects.get(pk=self.name.pk)
+        code = CustomObjectTypeField.objects.get(pk=self.code.pk)
+        code.primary = True
+        code.save()
+        # Saving the copy loaded before the promotion doesn't undo it.
+        name.label = 'Zone name'
+        name.save()
+        self.assertEqual(self._primaries(), ['code'])
+
+    def test_save_without_primary_in_update_fields_demotes_nothing(self):
+        code = CustomObjectTypeField.objects.get(pk=self.code.pk)
+        code.primary = True
+        code.label = 'Code'
+        code.save(update_fields=['label'])
+        self.assertEqual(self._primaries(), ['name'])
+
+    def test_other_types_keep_their_primary_field(self):
+        other = self.create_custom_object_type(name='rack', slug='racks')
+        self.create_custom_object_type_field(other, name='name', type='text', primary=True)
+        self.create_custom_object_type_field(self.cot, name='title', type='text', primary=True)
+        self.assertEqual(list(other.fields.filter(primary=True).values_list('name', flat=True)), ['name'])
 
 
 class RelatedNameTestCase(CustomObjectsTestCase, TestCase):

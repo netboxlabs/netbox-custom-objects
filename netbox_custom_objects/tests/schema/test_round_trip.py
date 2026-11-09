@@ -106,7 +106,8 @@ class SchemaRoundTripTestCase(CustomObjectsTestCase, TestCase):
         add('words', 'array', array_element_type='text', validation_regex='^[a-z]+$')
         add('shade', 'color', default='00ff00')
         add('mac', 'mac_address')
-        add('location', 'coordinates')
+        # As validating the field stores it, and the export leaves out.
+        add('location', 'coordinates', search_weight=0)
 
         CustomObjectTypeConstraint.objects.create(
             custom_object_type=cot,

@@ -178,6 +178,35 @@ class FieldAttributeChangesTestCase(BranchingTestBase, _TestBase):
         # __str__ now follows the newly-primary 'title' field.
         self.assertEqual(str(co_main), 'Widget')
 
+    def test_primary_field_promotion_merge(self):
+        """Make another field primary in a branch; main gets one primary field after the merge."""
+        with event_tracking(self.request):
+            cot = CustomObjectType.objects.create(name='promote_cot', slug='promote-cot')
+            for name, primary in (('code', True), ('title', False)):
+                CustomObjectTypeField.objects.create(
+                    custom_object_type=cot, name=name, label=name.title(), type='text', primary=primary
+                )
+            co = cot.get_model().objects.create(code='ABC', title='Widget')
+
+        cot_pk, co_pk = cot.pk, co.pk
+        branch = _provision_branch('Promote Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+
+        # Only the new primary field is saved; the old one is demoted with it.
+        with activate_branch(branch), event_tracking(branch_request):
+            f_title = CustomObjectTypeField.objects.get(custom_object_type=cot, name='title')
+            f_title.snapshot()
+            f_title.primary = True
+            f_title.save()
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        cot_main = CustomObjectType.objects.get(pk=cot_pk)
+        self.assertEqual(list(cot_main.fields.filter(primary=True).values_list('name', flat=True)), ['title'])
+        self.assertEqual(str(cot_main.get_model().objects.get(pk=co_pk)), 'Widget')
+
     def test_field_required_toggle_merge(self):
         """Toggle a field's required flag from False to True across merge.
 
@@ -233,6 +262,42 @@ class FieldAttributeChangesTestCase(BranchingTestBase, _TestBase):
             'required=True must NOT produce NOT NULL — this plugin enforces '
             'required at the form layer only (field_types.py hardcodes null=True).',
         )
+
+    def test_field_added_in_main_after_merging_field_added_in_branch(self):
+        """A merged field can have a schema ID above the parent's counter."""
+        with event_tracking(self.request):
+            cot = CustomObjectType.objects.create(name='sprocket', slug='sprocket')
+            CustomObjectTypeField.objects.create(custom_object_type=cot, name='a', type='text')
+
+        branch = _provision_branch('Schema ID Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+        with activate_branch(branch), event_tracking(branch_request):
+            CustomObjectTypeField.objects.create(custom_object_type_id=cot.pk, name='b', type='text')
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        with event_tracking(self.request):
+            field = CustomObjectTypeField.objects.create(custom_object_type_id=cot.pk, name='c', type='text')
+        self.assertEqual(field.schema_id, 3)
+
+    def test_field_added_in_main_after_merging_type_created_in_branch(self):
+        """A type created in a branch is merged with next_schema_id=0, behind its fields' schema_ids."""
+        branch = _provision_branch('Schema ID Type Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+        with activate_branch(branch), event_tracking(branch_request):
+            cot = CustomObjectType.objects.create(name='cog', slug='cog')
+            CustomObjectTypeField.objects.create(custom_object_type=cot, name='x', type='text')
+            CustomObjectTypeField.objects.create(custom_object_type=cot, name='y', type='text')
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        with event_tracking(self.request):
+            field = CustomObjectTypeField.objects.create(custom_object_type_id=cot.pk, name='z', type='text')
+        self.assertEqual(field.schema_id, 3)
 
 
 # ── Tags + journal entries survive merge ──────────────────────────────────────

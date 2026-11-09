@@ -165,6 +165,49 @@ class CustomObjectTypeFieldValidationAPITestCase(CustomObjectsTestCase, TestCase
         self.assertIs(Site.save, original_save)
 
 
+class PrimaryFieldAPITestCase(CustomObjectsTestCase, TestCase):
+    """Making a field primary through the REST API demotes the type's other primary field."""
+
+    def setUp(self):
+        self.user = create_test_user('primaryuser')
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+
+        perm = ObjectPermission(name='Primary field perm', actions=['add', 'change', 'view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectTypeField))
+
+        self.cot = self.create_custom_object_type(name='zone', slug='zones')
+        self.create_custom_object_type_field(self.cot, name='name', type='text', primary=True)
+
+    def _primaries(self):
+        return list(self.cot.fields.filter(primary=True).values_list('name', flat=True))
+
+    def test_create_primary_field(self):
+        data = {'custom_object_type': self.cot.pk, 'name': 'title', 'type': 'text', 'primary': True}
+        url = reverse('plugins-api:netbox_custom_objects-api:customobjecttypefield-list')
+        response = self.client.post(url, data, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(self._primaries(), ['title'])
+
+    def test_make_existing_field_primary(self):
+        field = self.create_custom_object_type_field(self.cot, name='code', type='text')
+        url = reverse('plugins-api:netbox_custom_objects-api:customobjecttypefield-detail', kwargs={'pk': field.pk})
+        response = self.client.patch(url, json.dumps({'primary': True}), content_type='application/json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(self._primaries(), ['code'])
+
+    def test_bulk_update_promoting_one_field_and_changing_the_old_primary(self):
+        field = self.create_custom_object_type_field(self.cot, name='code', type='text')
+        name = self.cot.fields.get(name='name')
+        data = [{'id': field.pk, 'primary': True}, {'id': name.pk, 'label': 'Zone name'}]
+        url = reverse('plugins-api:netbox_custom_objects-api:customobjecttypefield-list')
+        response = self.client.patch(url, json.dumps(data), content_type='application/json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(self._primaries(), ['code'])
+
+
 class SchemaIdReadOnlyTestCase(CustomObjectsTestCase, TestCase):
     """
     schema_id on CustomObjectTypeField is read-only via the API.
