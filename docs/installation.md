@@ -57,6 +57,8 @@ sudo systemctl restart netbox netbox-rq
 
 No extra configuration is needed to use Custom Objects with NetBox Branching. See [Using Custom Objects with NetBox Branching](branching.md) for the requirements and what is supported.
 
+If you previously added Custom Object Type models to `exempt_models`, remove those exemptions.
+
 ## Next Steps
 
 - [Configuration](configuration.md) lists the plugin's optional settings.
