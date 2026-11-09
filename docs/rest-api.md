@@ -557,19 +557,18 @@ The Custom Object Type and Custom Object Type Field list endpoints accept filter
 
 ## Filtering Custom Objects
 
-Each field of a Custom Object Type gets a filter on that type's endpoint, named after the field, unless the field's **Filter logic** is `disabled`. The `select`, `multiselect`, `color`, `mac_address` and `multiobject` filters can be repeated to match any of several values, e.g. `?environment=production&environment=staging`; the others take a single value.
+Each field of a Custom Object Type gets a filter on that type's endpoint, named after the field, unless the field's **Filter logic** is `disabled`. Every filter except `boolean` and `array` can be repeated to match any of several values, e.g. `?environment=production&environment=staging`, as with NetBox custom fields.
 
 | Field type | Filter |
 |------------|--------|
 | `text`, `longtext`, `url` | `?<field>=` matches part of the value when filter logic is `loose` (the default), or the whole value when it's `exact`. Either way, the core NetBox lookup suffixes are available, e.g. `?<field>__isw=` (starts with) or `?<field>__n=` (does not equal). |
-| `json` | `?<field>=` matches part of the JSON text. |
-| `integer`, `decimal` | `?<field>=` matches the value exactly; suffixes such as `__gte`, `__lt` and `__n` are also available. |
-| `date`, `datetime` | `?<field>=` matches the value exactly. |
+| `json` | `?<field>=` matches part of the JSON text when filter logic is `loose` (the default), or the whole value when it's `exact`. An `exact` filter's value is read as JSON, or as a string if it isn't valid JSON: `?<field>="4"` matches the string and `?<field>=4` the number. Either way, `?<field>__n=` excludes the matches and `?<field>__empty=true` matches objects with no value. |
+| `integer`, `decimal`, `date`, `datetime` | `?<field>=` matches the value exactly; suffixes such as `__gte`, `__lt` and `__n` are also available. |
 | `boolean` | `?<field>=true` or `false`. |
 | `select` | `?<field>=<value>` matches the choice value. |
 | `multiselect` | `?<field>=<value>` matches objects whose selections include the value. |
 | `color`, `mac_address` | `?<field>=` matches the value exactly. |
-| `object` | `?<field>=<id>` or `?<field>_id=<id>` matches the referenced object's ID. |
+| `object` | `?<field>_id=<id>` or `?<field>=<id>` matches the referenced object's ID. |
 | `multiobject` | `?<field>=<id>` matches objects that reference that ID. |
 | polymorphic `object` / `multiobject` | One filter per allowed type, named `<field>_<app_label>_<model>`, e.g. `?linked_resource_dcim_device=7`. |
 | `array` | `?<field>=a,b` matches objects whose list includes every one of the comma-separated values; `?<field>__len=` matches the number of items. |
