@@ -67,7 +67,18 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
 
     def test_custom_object_type_field_reserved_name_rejected(self):
         """Field names in RESERVED_FIELD_NAMES must be rejected with ValidationError."""
-        for reserved in ('owner', 'tags', 'id', 'created', 'last_updated', 'local_context_data'):
+        reserved_names = (
+            'owner',
+            'tags',
+            'id',
+            'created',
+            'last_updated',
+            'local_context_data',
+            'limit',
+            'search',
+            'start',
+        )
+        for reserved in reserved_names:
             with self.assertRaises(ValidationError, msg=f'Expected ValidationError for reserved name={reserved!r}'):
                 field = CustomObjectTypeField(
                     custom_object_type=self.custom_object_type,
@@ -75,6 +86,20 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
                     type='text',
                 )
                 field.full_clean()
+
+    def test_rename_to_reserved_name_rejected(self):
+        field = self.create_custom_object_type_field(self.custom_object_type, name='quota', type='integer')
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.name = 'limit'
+        with self.assertRaisesMessage(ValidationError, 'Field name "limit" is reserved'):
+            field.full_clean()
+
+    def test_existing_field_with_reserved_name_can_be_changed(self):
+        # e.g. created before the name was reserved
+        field = self.create_custom_object_type_field(self.custom_object_type, name='limit', type='integer')
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.label = 'Quota'
+        field.full_clean()
 
     def test_from_db_populates_original_snapshot(self):
         """

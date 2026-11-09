@@ -1110,7 +1110,7 @@ class BooleanFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
 class DateFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """DateFilter with exact lookup is generated for TYPE_DATE fields."""
 
-    match_params = {'start': '2025-01-15'}
+    match_params = {'starts': '2025-01-15'}
 
     @classmethod
     def setUpTestData(cls):
@@ -1119,11 +1119,11 @@ class DateFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
         cls.create_custom_object_type_field(
             cls.cot, name='name', label='Name', type='text', primary=True, required=True
         )
-        cls.create_custom_object_type_field(cls.cot, name='start', label='Start', type='date')
+        cls.create_custom_object_type_field(cls.cot, name='starts', label='Starts', type='date')
 
         model = cls.cot.get_model()
-        cls.obj_match = model.objects.create(name='jan', start=datetime.date(2025, 1, 15))
-        cls.obj_no_match = model.objects.create(name='feb', start=datetime.date(2025, 2, 20))
+        cls.obj_match = model.objects.create(name='jan', starts=datetime.date(2025, 1, 15))
+        cls.obj_no_match = model.objects.create(name='feb', starts=datetime.date(2025, 2, 20))
 
 
 class DateTimeFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):

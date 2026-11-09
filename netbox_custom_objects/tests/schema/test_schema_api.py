@@ -233,6 +233,37 @@ class SchemaPreviewTestCase(_SchemaAPIBase):
 # ---------------------------------------------------------------------------
 
 
+class SchemaPreviewFieldNameTestCase(_SchemaAPIBase):
+    """POST /schema/preview/ reports a field added under a reserved name, or renamed to one."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name='quota', slug='quota')
+        self.field = self.create_custom_object_type_field(self.cot, name='amount', type='integer')
+
+    def _preview(self, type_def):
+        return self.client.post(self.preview_url, data={'schema_version': '1', 'types': [type_def]}, format='json')
+
+    def test_added_field(self):
+        type_def = export_cot(self.cot)
+        type_def['fields'].append({'id': self._next_field_id(self.cot), 'name': 'limit', 'type': 'integer'})
+        resp = self._preview(type_def)
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.data['error'], 'invalid_field')
+        self.assertIn('Field name "limit" is reserved', resp.data['detail'])
+
+    def test_renamed_field(self):
+        type_def = export_cot(self.cot)
+        type_def['fields'][0]['name'] = 'limit'
+        resp = self._preview(type_def)
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.data['error'], 'invalid_field')
+
+    def test_existing_field_with_reserved_name(self):
+        CustomObjectTypeField.objects.filter(pk=self.field.pk).update(name='limit')
+        self.assertEqual(self._preview(export_cot(self.cot)).status_code, status.HTTP_200_OK)
+
+
 class SchemaApplyTestCase(_SchemaAPIBase):
     """POST /schema/apply/ applies the schema document atomically."""
 
@@ -267,6 +298,17 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         self.assertEqual(resp.data['error'], 'unsupported_type_change')
         field.refresh_from_db()
         self.assertEqual(field.type, 'text')
+
+    def test_apply_reserved_field_name_returns_400(self):
+        schema_doc = {
+            'schema_version': '1',
+            'types': [{'name': 'widget', 'slug': 'widget', 'fields': [{'id': 1, 'name': 'objects', 'type': 'json'}]}],
+        }
+        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.data['error'], 'invalid_field')
+        self.assertIn('Field name "objects" is reserved', resp.data['detail'])
+        self.assertFalse(CustomObjectType.objects.filter(slug='widget').exists())
 
     def test_apply_new_cot_creates_cot_in_db(self):
         schema_doc = {
