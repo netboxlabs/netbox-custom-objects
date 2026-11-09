@@ -355,6 +355,32 @@ class MergeReplayModelReuseTestCase(BranchingTestBase, _TestBase):
     def test_squash_merge_uses_field_added_in_branch(self):
         self._assert_field_added_in_branch_is_merged('squash')
 
+    def _assert_field_added_in_branch_is_merged_on_existing_object(self, strategy):
+        with event_tracking(self.request):
+            existing = self.cot.get_model().objects.create(label='existing')
+        branch = _provision_branch(f'Replay field update {strategy}', strategy, self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            CustomObjectTypeField.objects.create(
+                custom_object_type=CustomObjectType.objects.get(pk=self.cot.pk), name='notes', type='text'
+            )
+            model = CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+            obj = model.objects.get(pk=existing.pk)
+            obj.snapshot()
+            obj.notes = 'merged'
+            obj.save()
+        CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+
+        branch.merge(user=self.user, commit=True)
+
+        model = CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+        self.assertEqual(model.objects.get(pk=existing.pk).notes, 'merged')
+
+    def test_iterative_merge_updates_existing_object_with_field_added_in_branch(self):
+        self._assert_field_added_in_branch_is_merged_on_existing_object('iterative')
+
+    def test_squash_merge_updates_existing_object_with_field_added_in_branch(self):
+        self._assert_field_added_in_branch_is_merged_on_existing_object('squash')
+
     def test_resolve_field_aliases_with_current_names_runs_no_queries(self):
         model = CustomObjectType.objects.get(pk=self.cot.pk).get_model()
         data = {'label': 'x', POLY_M2M_SIDECAR_KEY: []}
