@@ -139,3 +139,21 @@ def check_multiobject_display_setting(app_configs, **kwargs):
             id='netbox_custom_objects.W003',
         )
     ]
+
+
+@register()
+def check_exempt_schema_models(app_configs, **kwargs):
+    """Warn if netbox-branching exempts the type, field or constraint model, which earlier docs recommended."""
+    from netbox_custom_objects.models import exempt_schema_models
+
+    exempt = exempt_schema_models()
+    if not exempt:
+        return []
+    return [
+        Warning(
+            f"netbox-branching's exempt_models includes {', '.join(exempt)}, so schema changes to these "
+            'models are refused while a branch is active.',
+            hint="Remove the Custom Objects models from PLUGINS_CONFIG['netbox_branching']['exempt_models'].",
+            id='netbox_custom_objects.W004',
+        )
+    ]

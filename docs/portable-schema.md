@@ -504,6 +504,7 @@ Other `400 Bad Request` responses give an `error` code and a `detail` message:
 | `unsupported_field_change` | The document changes an `array` field's element type or tuple size, or a field's type to or from `array`. |
 | `unsupported_type_change` | The document changes a field's type to or from `coordinates` or `url`. |
 | `invalid_related_name` | A field's `related_name` is already used for its object type, or clashes with an attribute of a polymorphic field's target model. |
+| `exempt_from_branching` | A branch is active, and netbox-branching's `exempt_models` includes the models of the types, fields or constraints the document changes (see [Branching](branching.md)). |
 
 ```yaml
 error: unresolvable_reference

@@ -8,13 +8,16 @@ is installed, so every branch is exercised by mocking its three inputs:
 ``version`` lookup.  No database is required, hence ``SimpleTestCase``.
 """
 
+import unittest
 from importlib.metadata import PackageNotFoundError
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from django.test import SimpleTestCase
+from django.conf import settings
+from django.test import SimpleTestCase, override_settings
 
 from netbox_custom_objects import checks
+from netbox_custom_objects.utilities import is_branching_enabled
 
 
 def _run(*, branching_installed=True, netbox_version='4.6.2', branching_version='1.0.4'):
@@ -109,3 +112,18 @@ class CheckRelatedTabsRegistrationTestCase(SimpleTestCase):
         """A LookupError from get_app_config is tolerated, not raised."""
         with patch.object(checks.apps, 'get_app_config', side_effect=LookupError):
             self.assertEqual(checks.check_related_tabs_registration(app_configs=None), [])
+
+
+@unittest.skipUnless(is_branching_enabled(), 'netbox-branching is not installed')
+class CheckExemptSchemaModelsTestCase(SimpleTestCase):
+    def test_no_exempt_models_is_noop(self):
+        self.assertEqual(checks.check_exempt_schema_models(app_configs=None), [])
+
+    def test_exempt_models_warn(self):
+        models = ['netbox_custom_objects.customobjecttype', 'netbox_custom_objects.customobjecttypefield']
+        plugins_config = {**settings.PLUGINS_CONFIG}
+        plugins_config['netbox_branching'] = {**plugins_config.get('netbox_branching', {}), 'exempt_models': models}
+        with override_settings(PLUGINS_CONFIG=plugins_config):
+            errors = checks.check_exempt_schema_models(app_configs=None)
+        self.assertEqual(_ids(errors), {'netbox_custom_objects.W004'})
+        self.assertIn(', '.join(models), errors[0].msg)
