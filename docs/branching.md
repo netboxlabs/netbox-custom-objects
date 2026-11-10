@@ -60,6 +60,8 @@ Custom Object Types, their fields and constraints, and custom objects work in br
 
 When an upgrade adds columns to Custom Object Type tables, `manage.py migrate` updates every active branch as well as main. Running `manage.py upgrade_custom_objects` with no `--cot` option does the same. Branches that are missing their schema or have migrations pending are skipped, and you can run the command again once those branches are migrated. With `--cot`, only main is updated.
 
+Both also give a branch its own copy of any polymorphic Multi-object field's table that it's missing, copied from main's current contents. New branches get theirs when they're provisioned.
+
 ## Known Limitations
 
 - **Reverting a deleted Custom Object Type doesn't restore its objects.** If a Custom Object Type is deleted in a branch and the branch is merged and then reverted, the type, its fields and its table come back with their original IDs, but its objects don't. Deleting the type drops its table directly, so there is no change record for each object to replay.

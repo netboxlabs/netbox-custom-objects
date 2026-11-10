@@ -494,7 +494,6 @@ class PolymorphicReverseAccessorBranchTestCase(BranchingTestBase, _TestBase):
         self.assertEqual(list(self.site.holders_by_target.all()), [main_co])
 
     def test_multiobject_accessor_uses_branch_model(self):
-        # Reads only: branch writes to a polymorphic through still land in main.
         with event_tracking(self.request):
             self._add_field('multiobject', 'targets', 'holders_by_targets')
             main_model = self._model()
@@ -513,6 +512,9 @@ class PolymorphicReverseAccessorBranchTestCase(BranchingTestBase, _TestBase):
             result = list(self.site.holders_by_targets.all())
             self.assertEqual([type(c) for c in result], [branch_model])
             self.assertEqual([c.pk for c in result], [co.pk])
+            # A write in the branch stays in the branch.
+            branch_model.objects.get(pk=co.pk).targets.remove(self.site)
+            self.assertEqual(list(self.site.holders_by_targets.all()), [])
 
         result = list(self.site.holders_by_targets.all())
         self.assertEqual([type(c) for c in result], [main_model])
