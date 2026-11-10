@@ -27,6 +27,7 @@ from django.db.models.signals import m2m_changed, post_save, pre_delete
 from django.db.utils import OperationalError, ProgrammingError
 from django.dispatch import receiver
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from jinja2 import TemplateError as _JinjaTemplateError
 from jinja2 import Undefined as _JinjaUndefined
@@ -5970,15 +5971,19 @@ def clear_cache_on_choice_set_save(sender, instance, **kwargs):
     (not just clear_model_cache) so every worker regenerates on its next
     get_model() call, not just this process.
     """
-    cot_ids = (
+    cot_ids = list(
         CustomObjectTypeField.objects.filter(choice_set=instance)
         .values_list('custom_object_type_id', flat=True)
         .distinct()
     )
     for cot in CustomObjectType.objects.filter(id__in=cot_ids):
-        CustomObjectType.clear_model_cache(cot.id)
+        # Choice sets aren't branched, so the edit reaches the models of every context, not just the active one.
+        CustomObjectType.clear_model_cache(cot.id, all_branches=True)
         cot.snapshot()
         cot.save(update_fields=['cache_timestamp'])
+    if CustomObjectType._active_branch_id() is not None:
+        # The save above bumps the branch's copy only; main's workers need the bump too, without a change record.
+        CustomObjectType.objects.using(DEFAULT_DB_ALIAS).filter(id__in=cot_ids).update(cache_timestamp=timezone.now())
 
 
 def __getattr__(name):

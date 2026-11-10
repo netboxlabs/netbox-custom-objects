@@ -355,6 +355,32 @@ class MergeReplayModelReuseTestCase(BranchingTestBase, _TestBase):
     def test_squash_merge_uses_field_added_in_branch(self):
         self._assert_field_added_in_branch_is_merged('squash')
 
+    def _assert_field_added_in_branch_is_merged_on_existing_object(self, strategy):
+        with event_tracking(self.request):
+            existing = self.cot.get_model().objects.create(label='existing')
+        branch = _provision_branch(f'Replay field update {strategy}', strategy, self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            CustomObjectTypeField.objects.create(
+                custom_object_type=CustomObjectType.objects.get(pk=self.cot.pk), name='notes', type='text'
+            )
+            model = CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+            obj = model.objects.get(pk=existing.pk)
+            obj.snapshot()
+            obj.notes = 'merged'
+            obj.save()
+        CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+
+        branch.merge(user=self.user, commit=True)
+
+        model = CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+        self.assertEqual(model.objects.get(pk=existing.pk).notes, 'merged')
+
+    def test_iterative_merge_updates_existing_object_with_field_added_in_branch(self):
+        self._assert_field_added_in_branch_is_merged_on_existing_object('iterative')
+
+    def test_squash_merge_updates_existing_object_with_field_added_in_branch(self):
+        self._assert_field_added_in_branch_is_merged_on_existing_object('squash')
+
     def test_resolve_field_aliases_with_current_names_runs_no_queries(self):
         model = CustomObjectType.objects.get(pk=self.cot.pk).get_model()
         data = {'label': 'x', POLY_M2M_SIDECAR_KEY: []}
@@ -497,6 +523,34 @@ class ChoiceSetSearchLifecycleTestCase(BranchingTestBase, _TestBase):
         cs_main = CustomFieldChoiceSet.objects.get(pk=cs_pk)
         keys = {pair[0] for pair in cs_main.extra_choices}
         self.assertIn('z', keys, 'New choice must be present in main after merge')
+
+    def test_choice_set_choices_mutated_in_branch_with_main_model_cached(self):
+        """A choice added inside a branch reaches main's cached model, so the merge accepts it."""
+        with event_tracking(self.request):
+            cs = CustomFieldChoiceSet.objects.create(name='Cached Choices', extra_choices=[['x', 'X'], ['y', 'Y']])
+            cot = CustomObjectType.objects.create(name='cs_cached_cot', slug='cs-cached-cot')
+            CustomObjectTypeField.objects.create(custom_object_type=cot, name='c', type='select', choice_set=cs)
+
+        branch = _provision_branch('CS Cached Branch', 'iterative', self.user)
+        main_cot = CustomObjectType.objects.get(pk=cot.pk)
+        main_cot.get_model()
+
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            cs_branch = CustomFieldChoiceSet.objects.get(pk=cs.pk)
+            cs_branch.snapshot()
+            cs_branch.extra_choices = [['x', 'X'], ['y', 'Y'], ['z', 'Z']]
+            cs_branch.save()
+            CustomObjectType.objects.get(pk=cot.pk).get_model().objects.create(c='z')
+
+        # Other workers rebuild main's model only if main's timestamp moved.
+        self.assertGreater(CustomObjectType.objects.get(pk=cot.pk).cache_timestamp, main_cot.cache_timestamp)
+        main_model = CustomObjectType.objects.get(pk=cot.pk).get_model()
+        self.assertIn('z', dict(main_model._meta.get_field('c').choices))
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+        self.assertTrue(CustomObjectType.objects.get(pk=cot.pk).get_model().objects.filter(c='z').exists())
 
     def test_field_search_weight_change_merge(self):
         """Changing ``search_weight`` is a non-DDL field update.  It must
