@@ -62,7 +62,7 @@ For polymorphic fields: the types of object the field may reference.
 
 ### Related Object Filter
 
-For object and multi-object fields: a JSON dictionary of query parameters that filters the choices offered in the object selector, e.g. `{"status": "active"}`. It only narrows the selector; it doesn't stop other objects from being assigned, for example through the REST API.
+For object and multi-object fields: a JSON dictionary of query parameters that filters the choices offered in the object selector, e.g. `{"status": "active"}`. Each attribute maps to a single value or a list of values, e.g. `{"status": ["active", "planned"]}`; nested dictionaries and lists aren't accepted. It only narrows the selector; it doesn't stop other objects from being assigned, for example through the REST API.
 
 ### Reverse Relation Name
 
