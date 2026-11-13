@@ -287,14 +287,17 @@ def _patch_graphql_view():
     :mod:`netbox_custom_objects.graphql.live`).
 
     Like the ObjectSelectorView patch above, this monkey-patches NetBox because
-    the schema binding leaves no other extension point.  The wrapper is
-    re-decorated with ``csrf_exempt`` because Django copies that marker from
+    the schema binding leaves no other extension point.  Django copies
     ``dispatch.__dict__`` onto the view at ``as_view()`` time (which runs after
-    this patch), and the GraphQL endpoint must accept token-authenticated POSTs.
+    this patch), so the wrapper keeps the original's markers (e.g.
+    ``login_not_required``) and is re-decorated with ``csrf_exempt``, since the
+    GraphQL endpoint must accept token-authenticated POSTs.
     """
     global _graphql_view_patched
     if _graphql_view_patched:
         return
+
+    from functools import wraps
 
     from django.views.decorators.csrf import csrf_exempt
 
@@ -303,6 +306,7 @@ def _patch_graphql_view():
     _original_dispatch = NetBoxGraphQLView.dispatch
 
     @csrf_exempt
+    @wraps(_original_dispatch)
     def _patched_dispatch(self, request, *args, **kwargs):
         from netbox_custom_objects.graphql.live import get_live_schema
 

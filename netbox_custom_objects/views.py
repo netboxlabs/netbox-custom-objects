@@ -1,4 +1,5 @@
 import contextlib
+import inspect
 import logging
 
 from django.apps import apps as django_apps
@@ -1194,10 +1195,12 @@ class CustomObjectDeleteView(RestrictedObjectMixin, generic.ObjectDeleteView):
 
         try:
             dependent_objects = self._get_dependent_objects(obj)
-        except ProtectedError as e:
-            return self._handle_protected_objects(obj, e.protected_objects, request, e)
-        except RestrictedError as e:
-            return self._handle_protected_objects(obj, e.restricted_objects, request, e)
+        except (ProtectedError, RestrictedError) as e:
+            # COMPAT(netbox<4.7.6): _handle_protected_objects() also takes the protected objects.
+            if 'protected_objects' in inspect.signature(self._handle_protected_objects).parameters:
+                protected_objects = e.protected_objects if isinstance(e, ProtectedError) else e.restricted_objects
+                return self._handle_protected_objects(obj, protected_objects, request, e)
+            return self._handle_protected_objects(obj, request, e)
 
         context = {
             'object': obj,
