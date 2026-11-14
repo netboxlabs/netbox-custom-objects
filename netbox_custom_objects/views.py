@@ -6,7 +6,7 @@ from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
 from django.db import router, transaction
 from django.db.models import ProtectedError, Q, RestrictedError
-from django.http import Http404
+from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import resolve, reverse
 from django.utils.html import escape
@@ -36,6 +36,7 @@ from netbox_custom_objects.dynamic_forms import build_filterset_form_class
 from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.tables import CustomObjectTypeConstraintTable, CustomObjectTypeFieldTable
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
+from utilities.error_handlers import handle_protectederror
 from utilities.exceptions import AbortRequest, PermissionsViolation
 from utilities.forms import DeleteForm, restrict_form_fields
 from utilities.forms.fields import ContentTypeChoiceField, DynamicModelChoiceField, DynamicModelMultipleChoiceField
@@ -1188,16 +1189,25 @@ class CustomObjectDeleteView(RestrictedObjectMixin, generic.ObjectDeleteView):
             kwargs={'custom_object_type': custom_object_type},
         )
 
+    def _handle_protected_objects(self, obj, request, exc):
+        """
+        Like core's handler (whose signature differs between NetBox releases): report why the object can't be
+        deleted, then return to it.
+        """
+        handle_protectederror([obj], request, exc)
+
+        if request.htmx:
+            return HttpResponse(headers={'HX-Redirect': obj.get_absolute_url()})
+        return redirect(obj.get_absolute_url())
+
     def get(self, request, *args, **kwargs):
         obj = self.get_object(**kwargs)
         form = DeleteForm(instance=obj, initial=request.GET)
 
         try:
             dependent_objects = self._get_dependent_objects(obj)
-        except ProtectedError as e:
-            return self._handle_protected_objects(obj, e.protected_objects, request, e)
-        except RestrictedError as e:
-            return self._handle_protected_objects(obj, e.restricted_objects, request, e)
+        except (ProtectedError, RestrictedError) as e:
+            return self._handle_protected_objects(obj, request, e)
 
         context = {
             'object': obj,
