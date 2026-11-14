@@ -6,6 +6,7 @@ import contextvars
 import logging
 import sys
 import warnings
+from functools import wraps
 
 from django.db import connection, transaction
 from django.db.migrations.loader import MigrationLoader
@@ -273,6 +274,7 @@ def _patch_choice_set_clean():
 
 
 _graphql_view_patched = False
+_original_graphql_dispatch = None  # core's NetBoxGraphQLView.dispatch, before the patch
 
 
 def _patch_graphql_view():
@@ -293,17 +295,15 @@ def _patch_graphql_view():
     ``login_not_required``) and is re-decorated with ``csrf_exempt``, since the
     GraphQL endpoint must accept token-authenticated POSTs.
     """
-    global _graphql_view_patched
+    global _graphql_view_patched, _original_graphql_dispatch
     if _graphql_view_patched:
         return
-
-    from functools import wraps
 
     from django.views.decorators.csrf import csrf_exempt
 
     from netbox.graphql.views import NetBoxGraphQLView
 
-    _original_dispatch = NetBoxGraphQLView.dispatch
+    _original_dispatch = _original_graphql_dispatch = NetBoxGraphQLView.dispatch
 
     @csrf_exempt
     @wraps(_original_dispatch)

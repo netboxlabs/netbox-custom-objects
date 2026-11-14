@@ -9,6 +9,7 @@ import json
 from django.test import SimpleTestCase, TestCase, override_settings
 from rest_framework import status
 
+import netbox_custom_objects
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 from netbox.graphql.views import NetBoxGraphQLView
 
@@ -264,6 +265,7 @@ class GraphQLViewMarkersTestCase(SimpleTestCase):
         the endpoint from LoginRequiredMiddleware (it authenticates requests itself).
         """
         view = NetBoxGraphQLView.as_view()
-        original_dispatch = NetBoxGraphQLView.dispatch.__wrapped__
+        original_dispatch = netbox_custom_objects._original_graphql_dispatch
+        self.assertIsNotNone(original_dispatch)
         self.assertEqual(getattr(view, 'login_required', True), getattr(original_dispatch, 'login_required', True))
         self.assertTrue(view.csrf_exempt)

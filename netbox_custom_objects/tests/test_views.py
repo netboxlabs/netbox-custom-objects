@@ -2711,6 +2711,7 @@ class ProtectedObjectDeleteViewTestCase(CustomObjectsTestCase, TestCase):
     def test_delete_page_redirects_to_object(self):
         response = self.client.get(self.url, follow=True)
         self.assertRedirects(response, self.rack.get_absolute_url())
+        self.assertContains(response, 'Unable to delete <strong>R1</strong>. 1 dependent objects were found: ')
         self.assertContains(response, 'M1')
 
     def test_htmx_delete_redirects_to_object(self):
