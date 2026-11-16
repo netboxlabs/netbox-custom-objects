@@ -6,10 +6,11 @@ objects reached through a custom object's relationship fields.
 
 import json
 
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from rest_framework import status
 
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
+from netbox.graphql.views import NetBoxGraphQLView
 
 from ..base import CustomObjectsTestCase
 from .base import GraphQLClientMixin
@@ -254,3 +255,12 @@ class GraphQLPermissionTestCase(GraphQLClientMixin, CustomObjectsTestCase, TestC
 
         self.assertEqual(_filter_viewable(AnonymousUser(), [self.site]), [])
         self.assertEqual(_filter_viewable(None, [self.site]), [])
+
+
+class GraphQLViewMarkersTestCase(SimpleTestCase):
+    def test_patched_view_keeps_core_markers(self):
+        """Preserve the original view's login and CSRF markers."""
+        view = NetBoxGraphQLView.as_view()
+        original_dispatch = NetBoxGraphQLView.dispatch.__wrapped__
+        self.assertEqual(getattr(view, 'login_required', True), getattr(original_dispatch, 'login_required', True))
+        self.assertTrue(view.csrf_exempt)
