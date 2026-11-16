@@ -2702,7 +2702,7 @@ class ProtectedObjectDeleteViewTestCase(CustomObjectsTestCase, TestCase):
         rack_cot.refresh_from_db()
         self.rack_model = rack_cot.get_model()
         self.rack = self.rack_model.objects.create(name='R1')
-        mount_model.objects.create(name='M1', rack=self.rack)
+        self.mount = mount_model.objects.create(name='M1', rack=self.rack)
         self.url = reverse(
             'plugins:netbox_custom_objects:customobject_delete',
             kwargs={'custom_object_type': 'racks', 'pk': self.rack.pk},
@@ -2711,8 +2711,11 @@ class ProtectedObjectDeleteViewTestCase(CustomObjectsTestCase, TestCase):
     def test_delete_page_redirects_to_object(self):
         response = self.client.get(self.url, follow=True)
         self.assertRedirects(response, self.rack.get_absolute_url())
-        self.assertContains(response, 'Unable to delete <strong>R1</strong>. 1 dependent objects were found: ')
-        self.assertContains(response, 'M1')
+        self.assertContains(
+            response,
+            f'Unable to delete <strong>R1</strong>. 1 dependent objects were found: '
+            f'<a href="{self.mount.get_absolute_url()}">M1</a>',
+        )
 
     def test_htmx_delete_redirects_to_object(self):
         response = self.client.get(self.url, headers={'hx-request': 'true'})

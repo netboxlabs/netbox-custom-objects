@@ -1190,10 +1190,7 @@ class CustomObjectDeleteView(RestrictedObjectMixin, generic.ObjectDeleteView):
         )
 
     def _handle_protected_objects(self, obj, request, exc):
-        """
-        Like core's handler (whose signature differs between NetBox releases): report why the object can't be
-        deleted, then return to it.
-        """
+        """Handle protected deletions consistently across NetBox versions."""
         handle_protectederror([obj], request, exc)
 
         if request.htmx:

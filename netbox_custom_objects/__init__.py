@@ -274,38 +274,24 @@ def _patch_choice_set_clean():
 
 
 _graphql_view_patched = False
-_original_graphql_dispatch = None  # core's NetBoxGraphQLView.dispatch, before the patch
 
 
 def _patch_graphql_view():
     """
-    Patch NetBox's GraphQL view so custom object types appear without a restart.
+    Provide a live GraphQL schema while preserving NetBox's view attributes.
 
-    NetBox builds its GraphQL schema once at startup and binds it to the view via
-    ``as_view(schema=...)``.  Custom object types are created/deleted at runtime
-    and the app runs across multiple worker processes, so that single bound
-    schema goes stale.  This patch swaps in a per-request, per-process schema
-    that is rebuilt only when the database changes (see
-    :mod:`netbox_custom_objects.graphql.live`).
-
-    Like the ObjectSelectorView patch above, this monkey-patches NetBox because
-    the schema binding leaves no other extension point.  Django copies
-    ``dispatch.__dict__`` onto the view at ``as_view()`` time (which runs after
-    this patch), so the wrapper keeps the original's markers (e.g.
-    ``login_not_required``) and is re-decorated with ``csrf_exempt``, since the
-    GraphQL endpoint must accept token-authenticated POSTs.
+    NetBox binds its schema at startup, so dynamically defined custom
+    object types require a per-request schema. Preserve authentication
+    and CSRF markers when wrapping dispatch().
     """
-    global _graphql_view_patched, _original_graphql_dispatch
+    global _graphql_view_patched
     if _graphql_view_patched:
         return
 
-    from django.views.decorators.csrf import csrf_exempt
-
     from netbox.graphql.views import NetBoxGraphQLView
 
-    _original_dispatch = _original_graphql_dispatch = NetBoxGraphQLView.dispatch
+    _original_dispatch = NetBoxGraphQLView.dispatch
 
-    @csrf_exempt
     @wraps(_original_dispatch)
     def _patched_dispatch(self, request, *args, **kwargs):
         from netbox_custom_objects.graphql.live import get_live_schema
