@@ -20,7 +20,7 @@ from django.contrib.postgres.utils import prefix_validation_error
 from django.contrib.postgres.validators import ArrayMaxLengthValidator, ArrayMinLengthValidator
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
-from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
+from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator, URLValidator
 from django.db import models, router, transaction
 from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
 from django.db.models.manager import Manager
@@ -721,23 +721,53 @@ class DateTimeFieldType(FieldType):
         )
 
 
-# The URL column's length; the form and serializer enforce it too.
+# Lengths of a URL field's two columns; the form and serializer enforce them too.
 URL_MAX_LENGTH = 200
+URL_TITLE_MAX_LENGTH = 200
+
+
+class AllowedSchemesURLValidator(EnhancedURLValidator):
+    """
+    NetBox's EnhancedURLValidator, reading ALLOWED_URL_SCHEMES on every call.  Admins can change
+    it at runtime, and EnhancedURLValidator keeps the list it first read.
+    """
+
+    @property
+    def schemes(self):
+        return get_config().ALLOWED_URL_SCHEMES
+
+    @schemes.setter
+    def schemes(self, value):
+        pass
+
+
+class LaxURLFormField(LaxURLField):
+    default_validators = [AllowedSchemesURLValidator()]
 
 
 class LaxURLModelField(models.URLField):
-    """A URL column validated like NetBox's LaxURLField: any allowed scheme, and hostnames without a domain."""
+    """A URL column validated like the form: any allowed scheme, and hostnames without a domain."""
 
-    default_validators = [EnhancedURLValidator()]
+    default_validators = [AllowedSchemesURLValidator()]
 
 
 class LaxURLSerializerField(drf_serializers.URLField):
-    """DRF's URLField, validated like NetBox's LaxURLField: any allowed scheme, and hostnames without a domain."""
+    """DRF's URLField, validated and normalized like the form."""
 
     def __init__(self, **kwargs):
-        # Skip URLField.__init__(), which adds Django's stricter URLValidator.
-        drf_serializers.CharField.__init__(self, **kwargs)
-        self.validators.append(EnhancedURLValidator(message=self.error_messages['invalid']))
+        super().__init__(**kwargs)
+        # Replace the Django URLValidator that URLField adds.
+        self.validators = [v for v in self.validators if type(v) is not URLValidator]
+        self.validators.append(AllowedSchemesURLValidator(message=self.error_messages['invalid']))
+
+    def to_internal_value(self, data):
+        value = super().to_internal_value(data)
+        # Add https:// to a value without a scheme, as the form does.  A malformed value is left
+        # for the validators to report.
+        if value:
+            with contextlib.suppress(ValidationError):
+                value = forms.URLField(assume_scheme='https').to_python(value)
+        return value
 
 
 class URLFieldType(FieldType):
@@ -795,7 +825,7 @@ class URLFieldType(FieldType):
             # existing installations, which only auto-ADDs a new column when it is
             # nullable or has a Django-level default (see _can_auto_add()).
             self.title_field_name(field): models.CharField(
-                max_length=200,
+                max_length=URL_TITLE_MAX_LENGTH,
                 blank=True,
                 default='',
                 help_text=_('Human-readable text shown instead of the raw URL.'),
@@ -813,7 +843,7 @@ class URLFieldType(FieldType):
         )
 
     def get_form_field(self, field, **kwargs):
-        return LaxURLField(
+        return LaxURLFormField(
             assume_scheme='https',
             max_length=URL_MAX_LENGTH,
             required=field.required,
@@ -827,7 +857,7 @@ class URLFieldType(FieldType):
         (mirrors CoordinatesFieldType.get_form_fields).
         """
         base_label = field.label or field.name.replace('_', ' ').title()
-        url_field = LaxURLField(
+        url_field = LaxURLFormField(
             label=base_label,
             assume_scheme='https',
             max_length=URL_MAX_LENGTH,
@@ -839,7 +869,7 @@ class URLFieldType(FieldType):
         title_field = forms.CharField(
             label=f'{base_label} ({_("link title")})',
             required=False,
-            max_length=200,
+            max_length=URL_TITLE_MAX_LENGTH,
             help_text=_('Text shown as the link instead of the raw URL.'),
         )
         if field.ui_editable != CustomFieldUIEditableChoices.YES:
