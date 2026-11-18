@@ -2924,6 +2924,12 @@ class CustomObjectType(NetBoxModel):
                 transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
 
     def delete(self, *args, **kwargs):
+        # One transaction, so a failure part-way through (e.g. a protection rule on the object
+        # type's cascade) rolls back the whole delete, also for callers that aren't atomic.
+        with transaction.atomic(using=_get_schema_connection().alias):
+            self._delete_type(*args, **kwargs)
+
+    def _delete_type(self, *args, **kwargs):
         _check_schema_change_allowed(CustomObjectType)
         # The cascade deletes the type's fields and constraints without calling their delete(),
         # so check their models here. An exempt model's rows are in main, so the cascade would
@@ -2984,10 +2990,11 @@ class CustomObjectType(NetBoxModel):
                 from netbox_branching.models import ChangeDiff
 
                 ChangeDiff.objects.filter(object_type=object_type).delete()
-            # Keep core's pre_delete handler out of the ObjectType deletion and its cascade: it
-            # can't serialize an ObjectType for its delete event.  The handler returns early
-            # without a current request; clearing it for this context only leaves other threads
-            # logging.
+            # Keep core's pre_delete handler from logging the ObjectType deletion and its cascade:
+            # has_feature() takes an ObjectType instance to mean the model it describes, so the
+            # handler would queue a delete event for the ObjectType itself, which has no
+            # serializer.  The handler returns early without a current request; clearing it for
+            # this context only leaves other threads logging.
             request_token = current_request.set(None)
             try:
                 object_type.delete()

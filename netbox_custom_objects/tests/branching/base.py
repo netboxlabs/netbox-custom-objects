@@ -13,15 +13,14 @@ cannot be rolled back inside a single SAVEPOINT-based transaction.
 import logging
 import os
 import time
-import uuid
 
 from django.contrib.auth import get_user_model
 from django.db import connections
-from django.test import RequestFactory, TransactionTestCase, tag
-from django.urls import reverse
+from django.test import TransactionTestCase, tag
 
 from netbox_custom_objects.tests.base import (
     TransactionCleanupMixin,
+    _make_request,
     _recreate_contenttypes,
 )
 from netbox_custom_objects.utilities import is_branching_enabled
@@ -36,14 +35,6 @@ if HAS_BRANCHING:
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
-
-
-def _make_request(user):
-    """Return a fresh request object suitable for event_tracking."""
-    request = RequestFactory().get(reverse('home'))
-    request.id = uuid.uuid4()
-    request.user = user
-    return request
 
 
 # When netbox-branching is not installed, use ``object`` as the base so that

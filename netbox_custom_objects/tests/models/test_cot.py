@@ -3,7 +3,6 @@ Tests for the CustomObjectType model.
 """
 
 import contextvars
-import uuid
 from unittest.mock import patch
 
 from django.apps import apps as django_apps
@@ -11,7 +10,7 @@ from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import DatabaseError, connection, transaction
 from django.db.models.signals import pre_delete
 from django.db.utils import ProgrammingError
-from django.test import RequestFactory, TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from core.choices import ObjectChangeActionChoices
@@ -24,8 +23,9 @@ from netbox.search import registry
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import ObjectFieldType, TextFieldType
 from netbox_custom_objects.models import CustomObjectType
+from utilities.exceptions import AbortRequest
 
-from ..base import CustomObjectsTestCase
+from ..base import CustomObjectsTestCase, _make_request
 
 
 class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
@@ -345,17 +345,11 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         # Django's cascade-delete collector no longer tries to query the dropped table.
         self.assertNotIn(model_name, django_apps.all_models.get(APP_LABEL, {}))
 
-    def _make_request(self):
-        request = RequestFactory().get(reverse('home'))
-        request.id = uuid.uuid4()
-        request.user = self.user
-        return request
-
     def test_delete_keeps_core_delete_handler_connected_for_other_threads(self):
         """Deleting a type doesn't stop other threads' deletions from being change-logged."""
         cot = self.create_custom_object_type(name='HandlerTest', slug='handler-test')
         site = Site.objects.create(name='Handler Test Site', slug='handler-test-site')
-        other_request = self._make_request()
+        other_request = _make_request(self.user)
 
         def delete_site():
             with event_tracking(other_request):
@@ -369,7 +363,7 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         site_pk = site.pk
         pre_delete.connect(on_pre_delete)
         self.addCleanup(pre_delete.disconnect, on_pre_delete)
-        with event_tracking(self._make_request()):
+        with event_tracking(_make_request(self.user)):
             cot.delete()
 
         self.assertTrue(
@@ -381,24 +375,38 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             ).exists()
         )
 
-    def test_delete_doesnt_log_object_type_cascade(self):
-        """Deleting the type's object type logs nothing for objects that referenced it."""
+    def test_delete_in_request_removes_object_type(self):
+        """Deleting a type in a request removes its object type, also from objects that referenced it."""
         cot = self.create_custom_object_type(name='CascadeTest', slug='cascade-test')
+        cot_id = cot.pk
         object_type = ObjectType.objects.get_for_model(cot.get_model())
         export_template = ExportTemplate.objects.create(name='Cascade Test', template_code='{{ queryset }}')
         export_template.object_types.set([object_type, ObjectType.objects.get_for_model(Site)])
-        request = self._make_request()
+        request = _make_request(self.user)
 
         with event_tracking(request):
             cot.delete()
             self.assertIs(current_request.get(), request)
 
-        self.assertFalse(
-            ObjectChange.objects.filter(
-                changed_object_type=ObjectType.objects.get_for_model(ExportTemplate),
-                changed_object_id=export_template.pk,
-            ).exists()
+        self.assertFalse(CustomObjectType.objects.filter(pk=cot_id).exists())
+        self.assertEqual(
+            list(export_template.object_types.values_list('pk', flat=True)),
+            [ObjectType.objects.get_for_model(Site).pk],
         )
+
+    @override_settings(PROTECTION_RULES={'core.objecttype': [{'app_label': {'neq': APP_LABEL}}]})
+    def test_delete_refused_by_protection_rule_is_rolled_back(self):
+        """A protection rule that refuses the object type's deletion leaves the type in place."""
+        cot = self.create_custom_object_type(name='ProtectedTest', slug='protected-test')
+        cot_id = cot.pk
+        model_meta = cot.get_model()._meta
+
+        with self.assertRaises(AbortRequest):
+            cot.delete()
+
+        self.assertTrue(CustomObjectType.objects.filter(pk=cot_id).exists())
+        self.assertIn(model_meta.db_table, connection.introspection.table_names())
+        self.assertTrue(ObjectType.objects.filter(app_label=APP_LABEL, model=model_meta.model_name).exists())
 
     def test_stale_registry_entry_causes_relation_error_on_related_object_delete(self):
         """
