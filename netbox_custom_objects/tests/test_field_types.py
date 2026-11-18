@@ -11,13 +11,13 @@ from unittest.mock import Mock
 
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ValidationError
-from django.db import connection, models
+from django.db import ProgrammingError, connection, models, transaction
 from django.forms.fields import JSONString
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 
 from core.models import ObjectType
-from dcim.models import Device, DeviceType, ModuleType
+from dcim.models import Device, DeviceType, ModuleType, Site
 from extras.models import CustomFieldChoiceSet
 from netbox.search import get_indexer
 from netbox.tables.columns import ColorColumn
@@ -2168,6 +2168,40 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
         model = self.custom_object_type.get_model()
         self.assertEqual(set(model.objects.get(pk=instance.pk).devices.all()), {device1, device2})
+
+    def _replay_with_sites(self):
+        """Return (model, through model, deserialized object with a site) for a multiobject field 'sites'."""
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name='sites',
+            label='Sites',
+            type='multiobject',
+            related_object_type=self.get_site_object_type(),
+        )
+        model = self.custom_object_type.get_model()
+        site = Site.objects.create(name='Replay Site', slug='replay-site')
+        deserialized = model.deserialize_object({'name': 'Replayed', 'sites': [site.pk]}, pk=9001)
+        return model, model._meta.get_field('sites').remote_field.through, deserialized
+
+    def test_replay_skips_missing_through_table_without_aborting_transaction(self):
+        """A replay whose through table doesn't exist yet saves the object and leaves the transaction usable."""
+        model, through, deserialized = self._replay_with_sites()
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(through)
+
+        with transaction.atomic():
+            deserialized.save()
+            self.assertTrue(model.objects.filter(pk=9001).exists())
+
+    def test_replay_raises_other_database_errors(self):
+        """A replay that fails for another reason than a missing through table raises the error."""
+        _model, through, deserialized = self._replay_with_sites()
+        target_column = through._meta.get_field('target').column
+        with connection.cursor() as cursor:
+            cursor.execute(f'ALTER TABLE "{through._meta.db_table}" DROP COLUMN "{target_column}"')
+
+        with self.assertRaises(ProgrammingError), transaction.atomic():
+            deserialized.save()
 
 
 class PrimaryFieldChangeTestCase(FieldTypeTestCase):

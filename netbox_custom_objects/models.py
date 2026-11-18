@@ -1342,9 +1342,8 @@ class CustomObject(
                 models.Model.save_base(obj, using=_using, raw=True)
                 obj_pk = obj.pk  # captures auto-assigned PK
                 # Re-apply M2M relations.  Skipped quietly when the through
-                # table or column isn't present yet (squash ordering — the
-                # field's own CREATE replays later).  hasattr() narrows the
-                # except below to genuine DB-state mismatches.
+                # table isn't present yet (squash ordering — the field's own
+                # CREATE replays later); any other failure is raised.
                 for accessor, related_pks in m2m_data.items():
                     if not hasattr(obj, accessor):
                         logger.debug(
@@ -1356,8 +1355,12 @@ class CustomObject(
                         continue
                     manager = getattr(obj, accessor)
                     try:
-                        manager.set(related_pks)
+                        # A savepoint, so a failure doesn't abort the replay's transaction.
+                        with transaction.atomic(using=_using):
+                            manager.set(related_pks)
                     except (ProgrammingError, OperationalError):
+                        if _table_exists(manager.through._meta.db_table, conn=connections[_using]):
+                            raise
                         logger.debug(
                             'deserialize_object: deferred M2M %r on %s pk=%s (table absent)',
                             accessor,
