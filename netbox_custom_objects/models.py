@@ -3743,6 +3743,17 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     }
                 )
 
+            # A field to its own type can't take its own name: its reverse accessor would
+            # replace its forward one on the same class.
+            if self.related_name == self.name and self.related_object_type_id == self.custom_object_type.object_type_id:
+                raise ValidationError(
+                    {
+                        'related_name': _(
+                            'Reverse relation name "{name}" is the name of this field. Choose a different name.'
+                        ).format(name=self.related_name)
+                    }
+                )
+
             # Guard against clobbering an existing attribute on the target model class.
             target_cls = self.related_object_type.model_class()
             if target_cls is not None and not _can_claim_related_name(target_cls, self.related_name, polymorphic=False):
@@ -3765,6 +3776,31 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Check the field name isn't reserved (only a new or changed name; see is_reserved_field_name())
         if is_reserved_field_name(self.name, None if self._state.adding else self._original_name):
             raise ValidationError({'name': reserved_field_name_message(self.name)})
+
+        # Nor one a reverse accessor on this type uses, which would replace the field on the class
+        object_type_id = self.custom_object_type.object_type_id if self.custom_object_type_id else None
+        if object_type_id and (self._state.adding or self.name != self._original_name):
+            accessor_field = (
+                CustomObjectTypeField.objects.filter(
+                    Q(related_object_type_id=object_type_id)
+                    | Q(is_polymorphic=True, related_object_types=object_type_id),
+                    related_name=self.name,
+                )
+                .exclude(pk=self.pk)
+                .first()
+            )
+            if accessor_field:
+                raise ValidationError(
+                    {
+                        'name': _(
+                            'Field name "{name}" is the reverse relation name of field "{field}" on "{object_type}".'
+                        ).format(
+                            name=self.name,
+                            field=accessor_field.name,
+                            object_type=accessor_field.custom_object_type,
+                        )
+                    }
+                )
 
         # Validate the field's default value (if any)
         if self.default is not None:
