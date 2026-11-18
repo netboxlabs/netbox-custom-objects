@@ -15,6 +15,7 @@ from django.db import connection, models
 from django.forms.fields import JSONString
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
+from rest_framework.exceptions import ValidationError as DRFValidationError
 
 from core.models import ObjectType
 from dcim.models import Device, DeviceType, ModuleType
@@ -32,6 +33,7 @@ from netbox_custom_objects.field_types import (
     MultiSelectFieldType,
     ObjectFieldType,
     SelectFieldType,
+    URLFieldType,
     _csv_import_to_field_name,
 )
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, _deferred_co_field_data
@@ -1267,6 +1269,39 @@ class URLFieldTypeTestCase(FieldTypeTestCase):
         with self.assertRaises(ValidationError):
             duplicate = model(name='B', website='https://example.com/a')
             duplicate.full_clean()
+
+    def _url_field_validators(self):
+        """Return validate(value) for the URL field's form field, model column and API serializer field."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name='website', label='Website', type='url'
+        )
+        model = self.custom_object_type.get_model()
+        field_type = URLFieldType()
+        form_field = field_type.get_form_field(field)
+        serializer_field = field_type.get_serializer_field(field, model=model)
+
+        def validate_model(value):
+            model(name='Test', website=value).full_clean()
+
+        return {
+            'form': form_field.clean,
+            'model': validate_model,
+            'api': serializer_field.run_validation,
+        }
+
+    def test_url_field_accepts_the_same_values_everywhere(self):
+        """The form, model and REST API accept any allowed scheme and hostnames without a domain."""
+        for name, validate in self._url_field_validators().items():
+            for value in ('http://myserver/', 'ssh://router1', 'https://example.com/path'):
+                with self.subTest(layer=name, value=value):
+                    validate(value)
+
+    def test_url_field_rejects_the_same_values_everywhere(self):
+        """The form, model and REST API reject a disallowed scheme and a URL longer than the column."""
+        for name, validate in self._url_field_validators().items():
+            for value in ('gopher://example.com', f'https://example.com/{"a" * 200}'):
+                with self.subTest(layer=name, value=value), self.assertRaises((ValidationError, DRFValidationError)):
+                    validate(value)
 
     def test_change_existing_field_to_url_rejected(self):
         """An existing non-url field cannot be converted to url."""

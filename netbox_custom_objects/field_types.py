@@ -68,7 +68,7 @@ from utilities.forms.widgets import (
     DateTimePicker,
 )
 from utilities.templatetags.builtins.filters import linkify, render_markdown
-from utilities.validators import ColorValidator
+from utilities.validators import ColorValidator, EnhancedURLValidator
 
 logger = logging.getLogger(__name__)
 
@@ -721,6 +721,25 @@ class DateTimeFieldType(FieldType):
         )
 
 
+# The URL column's length; the form and serializer enforce it too.
+URL_MAX_LENGTH = 200
+
+
+class LaxURLModelField(models.URLField):
+    """A URL column validated like NetBox's LaxURLField: any allowed scheme, and hostnames without a domain."""
+
+    default_validators = [EnhancedURLValidator()]
+
+
+class LaxURLSerializerField(drf_serializers.URLField):
+    """DRF's URLField, validated like NetBox's LaxURLField: any allowed scheme, and hostnames without a domain."""
+
+    def __init__(self, **kwargs):
+        # Skip URLField.__init__(), which adds Django's stricter URLValidator.
+        drf_serializers.CharField.__init__(self, **kwargs)
+        self.validators.append(EnhancedURLValidator(message=self.error_messages['invalid']))
+
+
 class URLFieldType(FieldType):
     """
     A URL field. Expands into two real DB columns: ``<name>``, the URL itself, and
@@ -761,8 +780,12 @@ class URLFieldType(FieldType):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({'default': field.default, 'unique': field.unique})
         return {
-            field.name: models.URLField(
-                null=True, blank=not field.required, validators=regex_validators(field), **field_kwargs
+            field.name: LaxURLModelField(
+                max_length=URL_MAX_LENGTH,
+                null=True,
+                blank=not field.required,
+                validators=regex_validators(field),
+                **field_kwargs,
             ),
             # blank=True, default='' (not null=True): a CharField with null=True lets
             # "no title" be represented as both NULL (ORM/API create omitting the key)
@@ -782,7 +805,8 @@ class URLFieldType(FieldType):
     def get_serializer_field(self, field, **kwargs):
         # Only the URL column follows field.required; the title stays always-optional
         # (see the class docstring), so its auto-built serializer field is left alone.
-        return drf_serializers.URLField(
+        return LaxURLSerializerField(
+            max_length=URL_MAX_LENGTH,
             required=field.required,
             allow_null=not field.required,
             allow_blank=not field.required,
@@ -791,6 +815,7 @@ class URLFieldType(FieldType):
     def get_form_field(self, field, **kwargs):
         return LaxURLField(
             assume_scheme='https',
+            max_length=URL_MAX_LENGTH,
             required=field.required,
             initial=field.default,
             validators=regex_validators(field, html=True),
@@ -805,6 +830,7 @@ class URLFieldType(FieldType):
         url_field = LaxURLField(
             label=base_label,
             assume_scheme='https',
+            max_length=URL_MAX_LENGTH,
             required=field.required,
             initial=field.default,
             help_text=render_markdown(field.description) if field.description else None,
