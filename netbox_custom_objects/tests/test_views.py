@@ -2268,6 +2268,20 @@ class URLFieldLinkTitleViewTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(obj.website, 'https://example.com/')
         self.assertEqual(obj.website_title, '')
 
+    def test_create_accepts_any_allowed_scheme_and_hostname(self):
+        """The add form accepts any scheme in ALLOWED_URL_SCHEMES and hostnames without a domain."""
+        for name, value in (('Router', 'ssh://router1'), ('Server', 'http://myserver/')):
+            with self.subTest(value=value):
+                response = self.client.post(self._add_url(), {'name': name, 'website': value})
+                self.assertEqual(response.status_code, 302, getattr(response, 'content', b''))
+                self.assertEqual(self.model.objects.get(name=name).website, value)
+
+    def test_create_rejects_disallowed_scheme(self):
+        response = self.client.post(self._add_url(), {'name': 'Box', 'website': 'gopher://example.com'})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('website', response.context['form'].errors)
+        self.assertFalse(self.model.objects.filter(name='Box').exists())
+
     def test_list_view_renders_title_as_link_text(self):
         """
         The list view must render the same title-as-link-text HTML as the detail

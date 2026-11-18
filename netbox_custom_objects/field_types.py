@@ -20,7 +20,7 @@ from django.contrib.postgres.utils import prefix_validation_error
 from django.contrib.postgres.validators import ArrayMaxLengthValidator, ArrayMinLengthValidator
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
-from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator, URLValidator
+from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models, router, transaction
 from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
 from django.db.models.manager import Manager
@@ -39,12 +39,21 @@ from dcim.fields import MACAddressField
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from netbox.config import get_config
 from netbox.tables.columns import BooleanColumn, ColorColumn, ManyToManyColumn
+from netbox_custom_objects.api.fields import LaxURLSerializerField
 from netbox_custom_objects.choices import (
     ArrayElementTypeChoices,
     CustomObjectFieldTypeChoices,
     ObjectFieldOnDeleteChoices,
 )
-from netbox_custom_objects.constants import APP_LABEL, CHOICE_VALUE_MAX_LENGTH, DECIMAL_MAX_DIGITS, DECIMAL_PLACES
+from netbox_custom_objects.constants import (
+    APP_LABEL,
+    CHOICE_VALUE_MAX_LENGTH,
+    DECIMAL_MAX_DIGITS,
+    DECIMAL_PLACES,
+    URL_MAX_LENGTH,
+    URL_TITLE_MAX_LENGTH,
+)
+from netbox_custom_objects.model_fields import LaxURLModelField
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name, generate_model
 from utilities.fields import ColorField
 from utilities.forms.fields import (
@@ -57,7 +66,6 @@ from utilities.forms.fields import (
     DynamicModelMultipleChoiceField,
     DynamicMultipleChoiceField,
     JSONField,
-    LaxURLField,
 )
 from utilities.forms.utils import add_blank_choice
 from utilities.forms.widgets import (
@@ -68,7 +76,7 @@ from utilities.forms.widgets import (
     DateTimePicker,
 )
 from utilities.templatetags.builtins.filters import linkify, render_markdown
-from utilities.validators import ColorValidator, EnhancedURLValidator
+from utilities.validators import ColorValidator
 
 logger = logging.getLogger(__name__)
 
@@ -721,55 +729,6 @@ class DateTimeFieldType(FieldType):
         )
 
 
-# Lengths of a URL field's two columns; the form and serializer enforce them too.
-URL_MAX_LENGTH = 200
-URL_TITLE_MAX_LENGTH = 200
-
-
-class AllowedSchemesURLValidator(EnhancedURLValidator):
-    """
-    NetBox's EnhancedURLValidator, reading ALLOWED_URL_SCHEMES on every call.  Admins can change
-    it at runtime, and EnhancedURLValidator keeps the list it first read.
-    """
-
-    @property
-    def schemes(self):
-        return get_config().ALLOWED_URL_SCHEMES
-
-    @schemes.setter
-    def schemes(self, value):
-        pass
-
-
-class LaxURLFormField(LaxURLField):
-    default_validators = [AllowedSchemesURLValidator()]
-
-
-class LaxURLModelField(models.URLField):
-    """A URL column validated like the form: any allowed scheme, and hostnames without a domain."""
-
-    default_validators = [AllowedSchemesURLValidator()]
-
-
-class LaxURLSerializerField(drf_serializers.URLField):
-    """DRF's URLField, validated and normalized like the form."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # Replace the Django URLValidator that URLField adds.
-        self.validators = [v for v in self.validators if type(v) is not URLValidator]
-        self.validators.append(AllowedSchemesURLValidator(message=self.error_messages['invalid']))
-
-    def to_internal_value(self, data):
-        value = super().to_internal_value(data)
-        # Add https:// to a value without a scheme, as the form does.  A malformed value is left
-        # for the validators to report.
-        if value:
-            with contextlib.suppress(ValidationError):
-                value = forms.URLField(assume_scheme='https').to_python(value)
-        return value
-
-
 class URLFieldType(FieldType):
     """
     A URL field. Expands into two real DB columns: ``<name>``, the URL itself, and
@@ -843,6 +802,8 @@ class URLFieldType(FieldType):
         )
 
     def get_form_field(self, field, **kwargs):
+        from netbox_custom_objects.forms.fields import LaxURLFormField
+
         return LaxURLFormField(
             assume_scheme='https',
             max_length=URL_MAX_LENGTH,
@@ -856,6 +817,8 @@ class URLFieldType(FieldType):
         Return the URL and title form fields, keyed by their backing column names
         (mirrors CoordinatesFieldType.get_form_fields).
         """
+        from netbox_custom_objects.forms.fields import LaxURLFormField
+
         base_label = field.label or field.name.replace('_', ' ').title()
         url_field = LaxURLFormField(
             label=base_label,

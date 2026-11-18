@@ -1326,8 +1326,9 @@ class URLFieldTypeTestCase(FieldTypeTestCase):
     def test_url_field_follows_allowed_url_schemes_changes(self):
         """A change to ALLOWED_URL_SCHEMES at runtime applies to the form, model and REST API."""
         validators = self._url_field_validators()
-        for validate in validators.values():
-            validate('gopher://example.com')
+        for name, validate in validators.items():
+            with self.subTest(layer=name):
+                self.assertEqual(validate('gopher://example.com'), ['invalid'])
 
         with override_settings(ALLOWED_URL_SCHEMES=['https', 'gopher']):
             for name, validate in validators.items():
