@@ -1662,18 +1662,6 @@ class MultiObjectFieldType(FieldType):
             },
         )
 
-        # Check if this is a self-referential M2M
-        content_type = self._get_related_content_type(field)
-        custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
-        if content_type.app_label == APP_LABEL:
-            if custom_object_type_id is None:
-                raise ValueError(
-                    f'Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}'
-                )
-        is_self_referential = (
-            content_type.app_label == APP_LABEL and field.custom_object_type.id == custom_object_type_id
-        )
-
         attrs = {
             '__module__': 'netbox_custom_objects.models',
             'Meta': meta,
@@ -1685,7 +1673,7 @@ class MultiObjectFieldType(FieldType):
                 db_column='source_id',
             ),
             'target': models.ForeignKey(
-                'self' if is_self_referential else model_string,
+                model_string,
                 on_delete=models.CASCADE,
                 related_name='+',
                 db_column='target_id',
@@ -1711,11 +1699,9 @@ class MultiObjectFieldType(FieldType):
             # The descriptor manages a through table with (source_id, content_type_id, object_id).
             return PolymorphicM2MDescriptor(through_model_name=field.through_model_name)
 
-        # Check if this is a self-referential M2M
         content_type = self._get_related_content_type(field)
-        custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
         if content_type.app_label == APP_LABEL:
-            if custom_object_type_id is None:
+            if extract_cot_id_from_model_name(content_type.model) is None:
                 raise ValueError(
                     f'Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}'
                 )
@@ -1725,9 +1711,7 @@ class MultiObjectFieldType(FieldType):
         # Remove default from field_kwargs since ManyToManyField doesn't handle defaults the same way
         field_kwargs.update({'unique': field.unique})
 
-        is_self_referential = (
-            content_type.app_label == APP_LABEL and field.custom_object_type.id == custom_object_type_id
-        )
+        is_self_referential = field.related_object_type_id == field.custom_object_type.object_type_id
 
         # For now, we'll create the through model with string references
         # and resolve them later in after_model_generation
@@ -1748,8 +1732,11 @@ class MultiObjectFieldType(FieldType):
         # but does matter to the required-toggle pre-flight check in
         # CustomObjectTypeField.clean(), which queries existing data directly
         # rather than relying on full_clean().
+        # Always the model string: to='self' would make the field symmetrical, which
+        # replaces related_name and adds every link in both directions.
         m2m_field = CustomManyToManyField(
-            to='self' if is_self_referential else model_string,
+            to=model_string,
+            symmetrical=False,
             through=through,
             through_fields=('source', 'target'),
             blank=not field.required,
@@ -1912,31 +1899,11 @@ class MultiObjectFieldType(FieldType):
         if through_model is not None:
             through_model._meta.auto_created = model
 
-        # Skip model resolution for self-referential fields
-        if getattr(field, '_is_self_referential', False):
-            field.remote_field.model = model
-
-            # Update both source and target fields to point to the same model
-            source_field = through_model._meta.get_field('source')
-            target_field = through_model._meta.get_field('target')
-
-            # Resolve the foreign key fields to point to the actual model
-            source_field.remote_field.model = model
-            source_field.related_model = model
-            target_field.remote_field.model = model
-            target_field.related_model = model
-
-            # Also update the field's to attribute to point to the actual model
-            field.to = model
-
-            return
-
-        # For non-self-referential fields, we need to resolve the target model
-        # Use the instance parameter which contains the field definition
-        content_type = self._get_related_content_type(instance)
-
-        # Now we can safely resolve the target model
-        if content_type.app_label == APP_LABEL:
+        is_self_referential = getattr(field, '_is_self_referential', False)
+        if is_self_referential:
+            # The class being built, which isn't in the model cache yet.
+            to_model = model
+        elif (content_type := self._get_related_content_type(instance)).app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
 
             custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
@@ -1944,15 +1911,7 @@ class MultiObjectFieldType(FieldType):
                 raise ValueError(
                     f'Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}'
                 )
-            custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-
-            # For self-referential fields, we need to resolve them to the current model
-            # This doesn't cause recursion because we're not calling get_model() again
-            if custom_object_type.id == instance.custom_object_type.id:
-                # Self-referential field - resolve to current model
-                to_model = model
-            else:
-                to_model = custom_object_type.get_model()
+            to_model = CustomObjectType.objects.get(pk=custom_object_type_id).get_model()
         else:
             to_ct = f'{content_type.app_label}.{content_type.model}'
             to_model = apps.get_model(to_ct)
@@ -1972,6 +1931,13 @@ class MultiObjectFieldType(FieldType):
         # Target field should point to the related model
         target_field.remote_field.model = to_model
         target_field.related_model = to_model
+
+        if is_self_referential:
+            # While this class was being created, Django resolved the lazy target to the
+            # class then registered under its name (the previous one, if any) and
+            # installed the reverse accessor there.  Install it on this class, as
+            # LazyForeignKey does for a self-referential FK.
+            field.contribute_to_related_class(model, field.remote_field)
 
     def create_m2m_table(self, instance, model, field_name, schema_conn=None, field=None):
         """

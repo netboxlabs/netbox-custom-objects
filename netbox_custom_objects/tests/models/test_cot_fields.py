@@ -741,6 +741,55 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
                     field.full_clean()
                 self.assertIn('related_name', cm.exception.message_dict)
 
+    def test_self_referential_related_name_matching_field_name_rejected(self):
+        """A field to its own type can't use its own name as related_name."""
+        for field_type in ('object', 'multiobject'):
+            with self.subTest(field_type=field_type):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.slb_cot,
+                    name='peers',
+                    type=field_type,
+                    related_object_type=self.slb_object_type,
+                    related_name='peers',
+                )
+                with self.assertRaises(ValidationError) as cm:
+                    field.full_clean()
+                self.assertIn('related_name', cm.exception.message_dict)
+
+    def test_field_name_matching_reverse_accessor_rejected(self):
+        """A field can't take the related_name of a field pointing at its type, as a new or a renamed field."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name='slbs',
+            type='multiobject',
+            related_object_type=self.slb_object_type,
+            related_name='certificates',
+        )
+        self.create_custom_object_type_field(
+            self.slb_cot,
+            name='backups',
+            type='multiobject',
+            related_object_type=self.slb_object_type,
+            related_name='primaries',
+        )
+        notes = self.create_custom_object_type_field(self.slb_cot, name='notes', type='text')
+
+        for name in ('certificates', 'primaries'):
+            with self.subTest(name=name):
+                field = CustomObjectTypeField(custom_object_type=self.slb_cot, name=name, type='text')
+                with self.assertRaises(ValidationError) as cm:
+                    field.full_clean()
+                self.assertIn('name', cm.exception.message_dict)
+
+                notes = CustomObjectTypeField.objects.get(pk=notes.pk)
+                notes.name = name
+                with self.assertRaises(ValidationError) as cm:
+                    notes.full_clean()
+                self.assertIn('name', cm.exception.message_dict)
+
+        # The same name on another type is fine.
+        CustomObjectTypeField(custom_object_type=self.cert_cot, name='primaries', type='text').full_clean()
+
     @tag('regression')
     def test_existing_field_owning_reverse_accessor_revalidates(self):
         """Re-cleaning a field whose own reverse accessor is already installed must succeed."""
@@ -872,6 +921,37 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(slb_b.certificates.count(), 1)
         self.assertIn(cert_2, slb_b.certificates.all())
+
+    def test_self_referential_multiobject_field_reverse_manager_returns_correct_objects(self):
+        """A MultiObject field to its own type keeps its related_name and links in one direction only."""
+        self.create_custom_object_type_field(
+            self.slb_cot,
+            name='backups',
+            type='multiobject',
+            related_object_type=self.slb_object_type,
+            related_name='primaries',
+        )
+        slb_model = self.slb_cot.get_model()
+        field = slb_model._meta.get_field('backups')
+        self.assertFalse(field.remote_field.symmetrical)
+        self.assertEqual(field.remote_field.related_name, 'primaries')
+        self.assertIs(field.remote_field.through._meta.get_field('target').related_model, slb_model)
+
+        primary = slb_model.objects.create(name='SLB-A')
+        backup = slb_model.objects.create(name='SLB-B')
+        primary.backups.add(backup)
+
+        self.assertEqual(list(primary.backups.all()), [backup])
+        self.assertEqual(list(backup.backups.all()), [])
+        self.assertEqual(list(backup.primaries.all()), [primary])
+        self.assertEqual(list(primary.primaries.all()), [])
+        self.assertEqual(list(slb_model.objects.filter(primaries=primary)), [backup])
+
+        # The class rebuilt after another field change has it too.
+        self.create_custom_object_type_field(self.slb_cot, name='notes', type='text')
+        slb_model = self.slb_cot.get_model()
+        backup = slb_model.objects.get(pk=backup.pk)
+        self.assertEqual(list(backup.primaries.values_list('pk', flat=True)), [primary.pk])
 
     def test_multiobject_field_without_related_name_has_no_reverse_accessor(self):
         """Without related_name, a MultiObject field has no reverse accessor on the related model."""
