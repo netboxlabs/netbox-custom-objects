@@ -17,7 +17,7 @@ from django.urls import reverse
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange, ObjectType
 from dcim.models import Site
-from extras.models import CustomField
+from extras.models import ExportTemplate
 from netbox.context import current_request
 from netbox.context_managers import event_tracking
 from netbox.search import registry
@@ -385,8 +385,8 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         """Deleting the type's object type logs nothing for objects that referenced it."""
         cot = self.create_custom_object_type(name='CascadeTest', slug='cascade-test')
         object_type = ObjectType.objects.get_for_model(cot.get_model())
-        custom_field = CustomField.objects.create(name='cascade_cf', type='text')
-        custom_field.object_types.set([object_type, ObjectType.objects.get_for_model(Site)])
+        export_template = ExportTemplate.objects.create(name='Cascade Test', template_code='{{ queryset }}')
+        export_template.object_types.set([object_type, ObjectType.objects.get_for_model(Site)])
         request = self._make_request()
 
         with event_tracking(request):
@@ -395,8 +395,8 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
 
         self.assertFalse(
             ObjectChange.objects.filter(
-                changed_object_type=ObjectType.objects.get_for_model(CustomField),
-                changed_object_id=custom_field.pk,
+                changed_object_type=ObjectType.objects.get_for_model(ExportTemplate),
+                changed_object_id=export_template.pk,
             ).exists()
         )
 

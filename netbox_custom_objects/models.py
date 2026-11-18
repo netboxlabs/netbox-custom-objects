@@ -2984,9 +2984,10 @@ class CustomObjectType(NetBoxModel):
                 from netbox_branching.models import ChangeDiff
 
                 ChangeDiff.objects.filter(object_type=object_type).delete()
-            # Keep core's pre_delete handler out of the ObjectType deletion and its cascade,
-            # where it fails on the type's model.  The handler returns early without a current
-            # request; clearing it for this context only leaves other threads logging.
+            # Keep core's pre_delete handler out of the ObjectType deletion and its cascade: it
+            # can't serialize an ObjectType for its delete event.  The handler returns early
+            # without a current request; clearing it for this context only leaves other threads
+            # logging.
             request_token = current_request.set(None)
             try:
                 object_type.delete()
