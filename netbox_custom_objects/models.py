@@ -17,7 +17,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.core.validators import MinValueValidator, RegexValidator, ValidationError
-from django.db import DEFAULT_DB_ALIAS, IntegrityError, connection, connections, models, transaction
+from django.db import DEFAULT_DB_ALIAS, IntegrityError, connection, connections, models, router, transaction
 from django.db.models import F, Max, ProtectedError, Q
 from django.db.models.base import ModelBase
 from django.db.models.fields.related import ForeignKey, ManyToManyField
@@ -1341,33 +1341,35 @@ class CustomObject(
                 _using = using or DEFAULT_DB_ALIAS
                 models.Model.save_base(obj, using=_using, raw=True)
                 obj_pk = obj.pk  # captures auto-assigned PK
-                # Re-apply M2M relations.  Skipped quietly when the through
-                # table isn't present yet (squash ordering — the field's own
-                # CREATE replays later); any other failure is raised.
+                # Re-apply M2M relations.  A field's through table can be missing from
+                # this schema (squash ordering — the field's own CREATE replays later);
+                # check first, as in a branch a query for it would fall through to
+                # main's table.  Its values are then not applied.
                 for accessor, related_pks in m2m_data.items():
                     if not hasattr(obj, accessor):
                         logger.debug(
-                            'deserialize_object: deferred M2M %r on %s pk=%s (descriptor unbound)',
+                            'deserialize_object: skipped M2M %r on %s pk=%s (descriptor unbound)',
                             accessor,
                             table_name,
                             obj_pk,
                         )
                         continue
                     manager = getattr(obj, accessor)
-                    try:
-                        # A savepoint, so a failure doesn't abort the replay's transaction.
-                        with transaction.atomic(using=_using):
-                            manager.set(related_pks)
-                    except (ProgrammingError, OperationalError):
-                        if _table_exists(manager.through._meta.db_table, conn=connections[_using]):
-                            raise
+                    through = manager.through
+                    # Only this plugin's through tables can be missing.  Check the connection
+                    # the manager writes through, which the router picks.
+                    through_conn = connections[router.db_for_write(through, instance=obj)]
+                    if through._meta.app_label == APP_LABEL and not _table_exists(
+                        through._meta.db_table, conn=through_conn
+                    ):
                         logger.debug(
-                            'deserialize_object: deferred M2M %r on %s pk=%s (table absent)',
+                            'deserialize_object: skipped M2M %r on %s pk=%s (through table absent)',
                             accessor,
                             table_name,
                             obj_pk,
-                            exc_info=True,
                         )
+                        continue
+                    manager.set(related_pks)
                 # Replay polymorphic M2M directly via the through, pinned to
                 # _using.  Bypasses manager.add() → m2m_changed →
                 # handle_changed_object, which can route across DB aliases.
