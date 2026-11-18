@@ -873,6 +873,37 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(slb_b.certificates.count(), 1)
         self.assertIn(cert_2, slb_b.certificates.all())
 
+    def test_self_referential_multiobject_field_reverse_manager_returns_correct_objects(self):
+        """A MultiObject field to its own type keeps its related_name and links in one direction only."""
+        self.create_custom_object_type_field(
+            self.slb_cot,
+            name='backups',
+            type='multiobject',
+            related_object_type=self.slb_object_type,
+            related_name='primaries',
+        )
+        slb_model = self.slb_cot.get_model()
+        field = slb_model._meta.get_field('backups')
+        self.assertFalse(field.remote_field.symmetrical)
+        self.assertEqual(field.remote_field.related_name, 'primaries')
+        self.assertIs(field.remote_field.through._meta.get_field('target').related_model, slb_model)
+
+        primary = slb_model.objects.create(name='SLB-A')
+        backup = slb_model.objects.create(name='SLB-B')
+        primary.backups.add(backup)
+
+        self.assertEqual(list(primary.backups.all()), [backup])
+        self.assertEqual(list(backup.backups.all()), [])
+        self.assertEqual(list(backup.primaries.all()), [primary])
+        self.assertEqual(list(primary.primaries.all()), [])
+        self.assertEqual(list(slb_model.objects.filter(primaries=primary)), [backup])
+
+        # The class rebuilt after another field change has it too.
+        self.create_custom_object_type_field(self.slb_cot, name='notes', type='text')
+        slb_model = self.slb_cot.get_model()
+        backup = slb_model.objects.get(pk=backup.pk)
+        self.assertEqual(list(backup.primaries.values_list('pk', flat=True)), [primary.pk])
+
     def test_multiobject_field_without_related_name_has_no_reverse_accessor(self):
         """Without related_name, a MultiObject field has no reverse accessor on the related model."""
         self.create_custom_object_type_field(
