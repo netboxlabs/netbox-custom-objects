@@ -37,7 +37,7 @@ from packaging.version import InvalidVersion, Version
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange, ObjectType
 from core.models.object_types import ObjectTypeManager
-from core.signals import _signals_received, handle_deleted_object
+from core.signals import _signals_received
 from dcim.fields import MACAddressField
 from extras.choices import (
     CustomFieldFilterLogicChoices,
@@ -50,6 +50,7 @@ from extras.models import ConfigContext, ConfigContextModel, CustomField, Custom
 from extras.models.customfields import SEARCH_TYPES
 from extras.utils import is_taggable, run_validators
 from netbox.config import get_config
+from netbox.context import current_request
 from netbox.models import BaseModel, ChangeLoggedModel, NetBoxModel
 from netbox.models.features import (
     BookmarksMixin,
@@ -2983,13 +2984,14 @@ class CustomObjectType(NetBoxModel):
                 from netbox_branching.models import ChangeDiff
 
                 ChangeDiff.objects.filter(object_type=object_type).delete()
-            # Temporarily disconnect the pre_delete handler to skip the ObjectType deletion
-            # TODO: Remove this disconnect/reconnect after ObjectType has been exempted from handle_deleted_object
-            pre_delete.disconnect(handle_deleted_object)
+            # Keep core's pre_delete handler out of the ObjectType deletion and its cascade,
+            # where it fails on the type's model.  The handler returns early without a current
+            # request; clearing it for this context only leaves other threads logging.
+            request_token = current_request.set(None)
             try:
                 object_type.delete()
             finally:
-                pre_delete.connect(handle_deleted_object)
+                current_request.reset(request_token)
 
         with schema_conn.schema_editor() as schema_editor:
             # Drop through tables before the main table (FKs).  Existence checks

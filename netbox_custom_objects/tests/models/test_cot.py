@@ -2,17 +2,24 @@
 Tests for the CustomObjectType model.
 """
 
+import contextvars
+import uuid
 from unittest.mock import patch
 
 from django.apps import apps as django_apps
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import DatabaseError, connection, transaction
+from django.db.models.signals import pre_delete
 from django.db.utils import ProgrammingError
-from django.test import TestCase
+from django.test import RequestFactory, TestCase
 from django.urls import reverse
 
-from core.models import ObjectType
+from core.choices import ObjectChangeActionChoices
+from core.models import ObjectChange, ObjectType
 from dcim.models import Site
+from extras.models import CustomField
+from netbox.context import current_request
+from netbox.context_managers import event_tracking
 from netbox.search import registry
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import ObjectFieldType, TextFieldType
@@ -337,6 +344,61 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         # After deletion the model must be removed from the app registry so that
         # Django's cascade-delete collector no longer tries to query the dropped table.
         self.assertNotIn(model_name, django_apps.all_models.get(APP_LABEL, {}))
+
+    def _make_request(self):
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+        return request
+
+    def test_delete_keeps_core_delete_handler_connected_for_other_threads(self):
+        """Deleting a type doesn't stop other threads' deletions from being change-logged."""
+        cot = self.create_custom_object_type(name='HandlerTest', slug='handler-test')
+        site = Site.objects.create(name='Handler Test Site', slug='handler-test-site')
+        other_request = self._make_request()
+
+        def delete_site():
+            with event_tracking(other_request):
+                site.delete()
+
+        def on_pre_delete(sender, instance, **kwargs):
+            # A fresh context stands in for another thread handling its own request.
+            if sender is ObjectType and site.pk is not None:
+                contextvars.Context().run(delete_site)
+
+        site_pk = site.pk
+        pre_delete.connect(on_pre_delete)
+        self.addCleanup(pre_delete.disconnect, on_pre_delete)
+        with event_tracking(self._make_request()):
+            cot.delete()
+
+        self.assertTrue(
+            ObjectChange.objects.filter(
+                changed_object_type=ObjectType.objects.get_for_model(Site),
+                changed_object_id=site_pk,
+                action=ObjectChangeActionChoices.ACTION_DELETE,
+                request_id=other_request.id,
+            ).exists()
+        )
+
+    def test_delete_doesnt_log_object_type_cascade(self):
+        """Deleting the type's object type logs nothing for objects that referenced it."""
+        cot = self.create_custom_object_type(name='CascadeTest', slug='cascade-test')
+        object_type = ObjectType.objects.get_for_model(cot.get_model())
+        custom_field = CustomField.objects.create(name='cascade_cf', type='text')
+        custom_field.object_types.set([object_type, ObjectType.objects.get_for_model(Site)])
+        request = self._make_request()
+
+        with event_tracking(request):
+            cot.delete()
+            self.assertIs(current_request.get(), request)
+
+        self.assertFalse(
+            ObjectChange.objects.filter(
+                changed_object_type=ObjectType.objects.get_for_model(CustomField),
+                changed_object_id=custom_field.pk,
+            ).exists()
+        )
 
     def test_stale_registry_entry_causes_relation_error_on_related_object_delete(self):
         """
