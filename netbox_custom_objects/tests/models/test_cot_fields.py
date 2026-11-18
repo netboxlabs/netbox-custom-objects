@@ -419,6 +419,45 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
             )
             field.full_clean()
 
+    def test_related_object_filter_validation(self):
+        site_ot = ObjectType.objects.get_for_model(Site)
+
+        valid_filters = (
+            {'status': 'active'},
+            {'status': ['active', 'planned']},
+            {'id': 1, 'is_active': True, 'tenant': None, 'region_id': '$region'},
+            {'vid': [1, 2.5, False, None]},
+        )
+        for related_object_filter in valid_filters:
+            with self.subTest(related_object_filter=related_object_filter):
+                CustomObjectTypeField(
+                    custom_object_type=self.custom_object_type,
+                    name='test_field',
+                    type='object',
+                    related_object_type=site_ot,
+                    related_object_filter=related_object_filter,
+                ).full_clean()
+
+        # Nested dicts and lists can't be rendered as query parameters
+        invalid_filters = (
+            {'and': [{'attr': 'status', 'value': 'active'}, {'attr': 'name', 'value': 'test'}]},
+            {'status': {'value': 'active'}},
+            {'status': [['active']]},
+            {'status': ('active', ['planned'])},
+            {'status': ['active', ('planned',)]},
+        )
+        for related_object_filter in invalid_filters:
+            with self.subTest(related_object_filter=related_object_filter):
+                with self.assertRaises(ValidationError) as cm:
+                    CustomObjectTypeField(
+                        custom_object_type=self.custom_object_type,
+                        name='test_field',
+                        type='multiobject',
+                        related_object_type=site_ot,
+                        related_object_filter=related_object_filter,
+                    ).full_clean()
+                self.assertIn('related_object_filter', cm.exception.message_dict)
+
     def test_custom_object_type_field_get_absolute_url(self):
         """
         Test get_absolute_url method.
