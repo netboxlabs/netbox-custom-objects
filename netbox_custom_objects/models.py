@@ -37,7 +37,7 @@ from packaging.version import InvalidVersion, Version
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange, ObjectType
 from core.models.object_types import ObjectTypeManager
-from core.signals import _signals_received, handle_deleted_object
+from core.signals import _signals_received
 from dcim.fields import MACAddressField
 from extras.choices import (
     CustomFieldFilterLogicChoices,
@@ -50,6 +50,7 @@ from extras.models import ConfigContext, ConfigContextModel, CustomField, Custom
 from extras.models.customfields import SEARCH_TYPES
 from extras.utils import is_taggable, run_validators
 from netbox.config import get_config
+from netbox.context import current_request
 from netbox.models import BaseModel, ChangeLoggedModel, NetBoxModel
 from netbox.models.features import (
     BookmarksMixin,
@@ -2923,6 +2924,12 @@ class CustomObjectType(NetBoxModel):
                 transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
 
     def delete(self, *args, **kwargs):
+        # One transaction, so a failure part-way through (e.g. a protection rule on the object
+        # type's cascade) rolls back the whole delete, also for callers that aren't atomic.
+        with transaction.atomic(using=_get_schema_connection().alias):
+            self._delete_type(*args, **kwargs)
+
+    def _delete_type(self, *args, **kwargs):
         _check_schema_change_allowed(CustomObjectType)
         # The cascade deletes the type's fields and constraints without calling their delete(),
         # so check their models here. An exempt model's rows are in main, so the cascade would
@@ -2983,13 +2990,16 @@ class CustomObjectType(NetBoxModel):
                 from netbox_branching.models import ChangeDiff
 
                 ChangeDiff.objects.filter(object_type=object_type).delete()
-            # Temporarily disconnect the pre_delete handler to skip the ObjectType deletion
-            # TODO: Remove this disconnect/reconnect after ObjectType has been exempted from handle_deleted_object
-            pre_delete.disconnect(handle_deleted_object)
+            # Keep core's pre_delete handler from logging the ObjectType deletion and its cascade:
+            # has_feature() takes an ObjectType instance to mean the model it describes, so the
+            # handler would queue a delete event for the ObjectType itself, which has no
+            # serializer.  The handler returns early without a current request; clearing it for
+            # this context only leaves other threads logging.
+            request_token = current_request.set(None)
             try:
                 object_type.delete()
             finally:
-                pre_delete.connect(handle_deleted_object)
+                current_request.reset(request_token)
 
         with schema_conn.schema_editor() as schema_editor:
             # Drop through tables before the main table (FKs).  Existence checks
