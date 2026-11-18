@@ -13,8 +13,11 @@ from django.test import TestCase
 
 import netbox_custom_objects as nco
 import netbox_custom_objects.models as nco_models
+from core.models import ObjectType
 from netbox_custom_objects.graphql.live import _active_branch_key
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from tenancy.models import Tenant
+from utilities.relations import get_related_models
 
 from ..base import CustomObjectsTestCase
 
@@ -200,6 +203,42 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         finally:
             sys.argv = original_argv
             nco._migrations_checked = original_checked
+
+
+class PluginConfigGetModelsTestCase(CustomObjectsTestCase, TestCase):
+    """get_models() yields each generated model once, so related object lists show a type once."""
+
+    def setUp(self):
+        super().setUp()
+        self.config = django_apps.get_app_config('netbox_custom_objects')
+        self.cot = self.create_custom_object_type(name='lines', slug='lines')
+        tenant_type = ObjectType.objects.get_for_model(Tenant)
+        self.create_custom_object_type_field(self.cot, name='tenant', type='object', related_object_type=tenant_type)
+        self.create_custom_object_type_field(
+            self.cot, name='tenants', type='multiobject', related_object_type=tenant_type
+        )
+        self.model = self.cot.get_model()
+        # Generated models are only yielded once ready() has run and model creation is allowed,
+        # as in a running server; under the test runner neither is the case.
+        for patcher in (
+            patch.object(nco, '_app_ready', True),
+            patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_get_models_yields_each_model_once(self):
+        for include_auto_created in (False, True):
+            with self.subTest(include_auto_created=include_auto_created):
+                models = list(self.config.get_models(include_auto_created=include_auto_created))
+                self.assertEqual(len(models), len(set(models)))
+                self.assertIn(self.model, models)
+
+    def test_related_objects_list_type_once(self):
+        # A target's Related Objects panel lists the models get_related_models() returns.
+        django_apps.clear_cache()
+        related = [model for model, _field in get_related_models(Tenant) if model is self.model]
+        self.assertEqual(len(related), 1)
 
 
 class _BranchingImportBlocker(importlib.abc.MetaPathFinder):
