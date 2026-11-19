@@ -667,7 +667,7 @@ class CustomObjectsPluginConfig(PluginConfig):
             logger.exception('related_tabs.register_tabs() failed; continuing without tabs')
             self._register_tabs_error = f'{type(exc).__name__}: {exc}'
 
-    def _lacks_current_fields(self, model, model_name, cot_id):
+    def _lacks_current_fields(self, model, cot_id):
         """True if the registered class *model* misses a field that its type now has.
 
         A field change evicts the type's cached model but leaves the registered class in place, so only an
@@ -677,9 +677,8 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         context_branch_id = getattr(model, '_context_branch_id', None)
         if (
-            extract_cot_id_from_model_name(model_name.lower()) is None
+            CustomObjectType.is_model_cached(cot_id, context_branch_id)
             or context_branch_id != CustomObjectType._active_branch_id()
-            or CustomObjectType.is_model_cached(cot_id, context_branch_id)
             or self._dynamic_model_creation_unsafe()
         ):
             return False
@@ -709,11 +708,12 @@ class CustomObjectsPluginConfig(PluginConfig):
             # test runner, but this class already exists, so tests must rebuild it
             # too (the same guard CustomObjectType.get_model() uses).
             cot_id = getattr(model, 'custom_object_type_id', None)
-            if cot_id is None:
+            # On a static model with a foreign key to the type, this name holds the key's descriptor, not an id.
+            if not isinstance(cot_id, int):
                 return model
             from .models import CustomObjectType, _registration_rolled_back
 
-            stale = self._lacks_current_fields(model, model_name, cot_id)
+            stale = self._lacks_current_fields(model, cot_id)
             if not stale and (getattr(model, '_registered_in', None) is None or not _registration_rolled_back(model)):
                 return model
             if self._dynamic_model_creation_unsafe():
