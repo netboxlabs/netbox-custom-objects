@@ -552,6 +552,27 @@ class ChoiceSetSearchLifecycleTestCase(BranchingTestBase, _TestBase):
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
         self.assertTrue(CustomObjectType.objects.get(pk=cot.pk).get_model().objects.filter(c='z').exists())
 
+    def test_choice_set_choices_mutated_in_branch_reach_type_created_in_main_after_branch(self):
+        """A choice added inside a branch reaches a type that main gained after the branch was created."""
+        with event_tracking(self.request):
+            cs = CustomFieldChoiceSet.objects.create(name='Late Choices', extra_choices=[['x', 'X'], ['y', 'Y']])
+        branch = _provision_branch('CS Late Branch', 'iterative', self.user)
+        with event_tracking(self.request):
+            late_cot = CustomObjectType.objects.create(name='cs_late_cot', slug='cs-late-cot')
+            CustomObjectTypeField.objects.create(custom_object_type=late_cot, name='c', type='select', choice_set=cs)
+        late_cot = CustomObjectType.objects.get(pk=late_cot.pk)
+        late_cot.get_model()
+
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            cs_branch = CustomFieldChoiceSet.objects.get(pk=cs.pk)
+            cs_branch.snapshot()
+            cs_branch.extra_choices = [['x', 'X'], ['y', 'Y'], ['z', 'Z']]
+            cs_branch.save()
+
+        self.assertGreater(CustomObjectType.objects.get(pk=late_cot.pk).cache_timestamp, late_cot.cache_timestamp)
+        main_model = CustomObjectType.objects.get(pk=late_cot.pk).get_model()
+        self.assertIn('z', dict(main_model._meta.get_field('c').choices))
+
     def test_field_search_weight_change_merge(self):
         """Changing ``search_weight`` is a non-DDL field update.  It must
         survive merge as an ORM-level change; reindexing happens via

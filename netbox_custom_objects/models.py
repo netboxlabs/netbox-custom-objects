@@ -6043,7 +6043,7 @@ def clear_cache_on_choice_set_save(sender, instance, **kwargs):
     (not just clear_model_cache) so every worker regenerates on its next
     get_model() call, not just this process.
     """
-    cot_ids = list(
+    cot_ids = (
         CustomObjectTypeField.objects.filter(choice_set=instance)
         .values_list('custom_object_type_id', flat=True)
         .distinct()
@@ -6054,8 +6054,16 @@ def clear_cache_on_choice_set_save(sender, instance, **kwargs):
         cot.snapshot()
         cot.save(update_fields=['cache_timestamp'])
     if CustomObjectType._active_branch_id() is not None:
-        # The save above bumps the branch's copy only; main's workers need the bump too, without a change record.
-        CustomObjectType.objects.using(DEFAULT_DB_ALIAS).filter(id__in=cot_ids).update(cache_timestamp=timezone.now())
+        # The save above bumps the branch's copies only, and the branch can't see a type main gained after it was
+        # created; main's workers need the bump too, without a change record.
+        main_cot_ids = (
+            CustomObjectTypeField.objects.using(DEFAULT_DB_ALIAS)
+            .filter(choice_set_id=instance.pk)
+            .values('custom_object_type_id')
+        )
+        CustomObjectType.objects.using(DEFAULT_DB_ALIAS).filter(id__in=main_cot_ids).update(
+            cache_timestamp=timezone.now()
+        )
 
 
 def __getattr__(name):
