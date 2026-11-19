@@ -218,6 +218,8 @@ class PluginConfigGetModelsTestCase(CustomObjectsTestCase, TestCase):
             self.cot, name='tenants', type='multiobject', related_object_type=tenant_type
         )
         self.model = self.cot.get_model()
+        # get_related_models() caches Tenant's reverse relations; clear them once the patches stop.
+        self.addCleanup(django_apps.clear_cache)
         # Generated models are only yielded once ready() has run and model creation is allowed,
         # as in a running server; under the test runner neither is the case.
         for patcher in (
@@ -230,9 +232,12 @@ class PluginConfigGetModelsTestCase(CustomObjectsTestCase, TestCase):
     def test_get_models_yields_each_model_once(self):
         for include_auto_created in (False, True):
             with self.subTest(include_auto_created=include_auto_created):
-                models = list(self.config.get_models(include_auto_created=include_auto_created))
-                self.assertEqual(len(models), len(set(models)))
-                self.assertIn(self.model, models)
+                labels = [m._meta.label_lower for m in self.config.get_models(include_auto_created)]
+                self.assertEqual(len(labels), len(set(labels)))
+                self.assertIn(self.model._meta.label_lower, labels)
+                self.assertTrue(self.model._through_models)
+                for through_model in self.model._through_models:
+                    self.assertEqual(through_model._meta.label_lower in labels, include_auto_created)
 
     def test_related_objects_list_type_once(self):
         # A target's Related Objects panel lists the models get_related_models() returns.
