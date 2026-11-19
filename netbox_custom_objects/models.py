@@ -17,7 +17,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.core.validators import MinValueValidator, RegexValidator, ValidationError
-from django.db import DEFAULT_DB_ALIAS, IntegrityError, connection, connections, models, transaction
+from django.db import DEFAULT_DB_ALIAS, IntegrityError, connection, connections, models, router, transaction
 from django.db.models import F, Max, ProtectedError, Q
 from django.db.models.base import ModelBase
 from django.db.models.fields.related import ForeignKey, ManyToManyField
@@ -1342,36 +1342,50 @@ class CustomObject(
                 _using = using or DEFAULT_DB_ALIAS
                 models.Model.save_base(obj, using=_using, raw=True)
                 obj_pk = obj.pk  # captures auto-assigned PK
-                # Re-apply M2M relations.  Skipped quietly when the through
-                # table or column isn't present yet (squash ordering — the
-                # field's own CREATE replays later).  hasattr() narrows the
-                # except below to genuine DB-state mismatches.
+                # Re-apply M2M relations.  A field's through table can be missing from
+                # this schema (squash ordering — the field's own CREATE replays later);
+                # check first, as in a branch a query for it would fall through to
+                # main's table.  Its values are then not applied.
                 for accessor, related_pks in m2m_data.items():
                     if not hasattr(obj, accessor):
                         logger.debug(
-                            'deserialize_object: deferred M2M %r on %s pk=%s (descriptor unbound)',
+                            'deserialize_object: skipped M2M %r on %s pk=%s (descriptor unbound)',
                             accessor,
                             table_name,
                             obj_pk,
                         )
                         continue
                     manager = getattr(obj, accessor)
-                    try:
-                        manager.set(related_pks)
-                    except (ProgrammingError, OperationalError):
+                    through = manager.through
+                    # Only this plugin's through tables can be missing.  Check the connection
+                    # the manager writes through, which the router picks.
+                    through_conn = connections[router.db_for_write(through, instance=obj)]
+                    if through._meta.app_label == APP_LABEL and not _table_exists(
+                        through._meta.db_table, conn=through_conn
+                    ):
                         logger.debug(
-                            'deserialize_object: deferred M2M %r on %s pk=%s (table absent)',
+                            'deserialize_object: skipped M2M %r on %s pk=%s (through table absent)',
                             accessor,
                             table_name,
                             obj_pk,
-                            exc_info=True,
                         )
+                        continue
+                    manager.set(related_pks)
                 # Replay polymorphic M2M directly via the through, pinned to
                 # _using.  Bypasses manager.add() → m2m_changed →
                 # handle_changed_object, which can route across DB aliases.
                 schema_conn_local = connections[_using]
                 for field_name, rows in poly_m2m_data.items():
                     through_table = through_table_name_for(cot_id, field_name)
+                    # The same check as above: these queries are unqualified too.
+                    if not _table_exists(through_table, conn=schema_conn_local):
+                        logger.debug(
+                            'deserialize_object: skipped polymorphic M2M %r on %s pk=%s (through table absent)',
+                            field_name,
+                            table_name,
+                            obj_pk,
+                        )
+                        continue
                     _apply_poly_m2m_rows(schema_conn_local, through_table, obj_pk, rows)
                 # Stash full data for deferred column updates (squash ordering fix).
                 deferred = _deferred_co_field_data.get()
