@@ -1766,6 +1766,11 @@ class CustomObjectType(NetBoxModel):
     # content_type.model_class() resolves to a class with main's column set —
     # branches may have renamed columns that don't exist in main.
     _model_cache = {}
+    # Registered classes found to have every field after their cache entry was evicted, with the cache generation
+    # of that check: {(cot_id, branch_id): (model, generation)}.
+    _complete_evicted_models = {}
+    # Bumped by every cache clear, so a completeness answer given before a clear is never reused.
+    _cache_generation = 0
     # Per-(cot, branch) through-model registry: {(cot_id, branch_id): {name: through}}.
     # Each context owns its through class so the source FK is set once at
     # generation time and never mutated to follow another context's CO class.
@@ -1931,6 +1936,8 @@ class CustomObjectType(NetBoxModel):
         clears everything.
         """
         with cls._global_lock:
+            cls._cache_generation += 1
+            cls._complete_evicted_models.clear()
             if custom_object_type_id is not None:
                 if all_branches:
                     for key in list(cls._model_cache):

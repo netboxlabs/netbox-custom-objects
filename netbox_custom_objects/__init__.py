@@ -679,18 +679,28 @@ class CustomObjectsPluginConfig(PluginConfig):
         if (
             CustomObjectType.is_model_cached(cot_id, context_branch_id)
             or context_branch_id != CustomObjectType._active_branch_id()
+        ):
+            return False
+        key = (cot_id, context_branch_id)
+        # Read before the query, so a cache clear that runs during it makes this answer unusable.
+        generation = CustomObjectType._cache_generation
+        if (
+            CustomObjectType._complete_evicted_models.get(key) == (model, generation)
             or self._dynamic_model_creation_unsafe()
         ):
             return False
         known_field_ids = set(getattr(model, '_field_objects', None) or {})
         try:
-            return (
+            stale = (
                 CustomObjectTypeField.objects.filter(custom_object_type_id=cot_id)
                 .exclude(pk__in=known_field_ids)
                 .exists()
             )
         except (ProgrammingError, OperationalError):
             return False
+        if not stale:
+            CustomObjectType._complete_evicted_models[key] = (model, generation)
+        return stale
 
     def get_model(self, model_name, require_ready=True):
         self.apps.check_apps_ready()
