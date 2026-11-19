@@ -19,6 +19,8 @@ APP_LABEL = 'netbox_custom_objects'
 DECIMAL_MAX_DIGITS = 16
 DECIMAL_PLACES = 4
 CHOICE_VALUE_MAX_LENGTH = 100
+URL_MAX_LENGTH = 200
+URL_TITLE_MAX_LENGTH = 200
 
 # Convention for config-context aggregation (issue #98): a single, non-polymorphic
 # OBJECT field named as the key and pointing at the given (app_label, model) feeds the

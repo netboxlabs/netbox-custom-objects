@@ -1688,3 +1688,54 @@ class ObjectFieldWithoutNetBoxSerializerTestCase(CustomObjectsTestCase, TestCase
                 self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
                 self.assertIn(field, response.data)
         self.assertFalse(self.model.objects.filter(name='Object 2').exists())
+
+
+class URLFieldAPITestCase(CustomObjectsTestCase, TestCase):
+    """Creating a custom object with a URL field through the REST API validates it like the form."""
+
+    def setUp(self):
+        self.user = create_test_user('urlfielduser')
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f'Token {create_token(self.user)}')
+
+        self.cot = CustomObjectsTestCase.create_custom_object_type(name='URLTest', slug='url-test')
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot, name='name', type='text', primary=True, required=True
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(self.cot, name='website', type='url')
+        self.model = self.cot.get_model()
+
+        perm = ObjectPermission(name=f'url-field-{uuid.uuid4().hex[:8]}', actions=['add', 'view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def tearDown(self):
+        CustomObjectType.clear_model_cache()
+        super().tearDown()
+
+    def _create(self, name, website):
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': self.cot.slug},
+        )
+        return self.client.post(url, {'name': name, 'website': website}, format='json')
+
+    def test_create_accepts_any_allowed_scheme_and_hostname(self):
+        for name, value, stored in (
+            ('Router', 'ssh://router1', 'ssh://router1'),
+            ('Server', 'http://myserver/', 'http://myserver/'),
+            ('Site', 'example.com', 'https://example.com'),
+        ):
+            with self.subTest(value=value):
+                response = self._create(name, value)
+                self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+                self.assertEqual(self.model.objects.get(name=name).website, stored)
+
+    def test_create_rejects_disallowed_scheme_and_overlong_url(self):
+        for value in ('gopher://example.com', f'https://example.com/{"a" * 200}'):
+            with self.subTest(value=value):
+                response = self._create('Box', value)
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn('website', response.data)
+        self.assertFalse(self.model.objects.filter(name='Box').exists())

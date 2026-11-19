@@ -39,12 +39,21 @@ from dcim.fields import MACAddressField
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from netbox.config import get_config
 from netbox.tables.columns import BooleanColumn, ColorColumn, ManyToManyColumn
+from netbox_custom_objects.api.fields import LaxURLSerializerField
 from netbox_custom_objects.choices import (
     ArrayElementTypeChoices,
     CustomObjectFieldTypeChoices,
     ObjectFieldOnDeleteChoices,
 )
-from netbox_custom_objects.constants import APP_LABEL, CHOICE_VALUE_MAX_LENGTH, DECIMAL_MAX_DIGITS, DECIMAL_PLACES
+from netbox_custom_objects.constants import (
+    APP_LABEL,
+    CHOICE_VALUE_MAX_LENGTH,
+    DECIMAL_MAX_DIGITS,
+    DECIMAL_PLACES,
+    URL_MAX_LENGTH,
+    URL_TITLE_MAX_LENGTH,
+)
+from netbox_custom_objects.model_fields import LaxURLModelField
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name, generate_model
 from utilities.fields import ColorField
 from utilities.forms.fields import (
@@ -57,7 +66,6 @@ from utilities.forms.fields import (
     DynamicModelMultipleChoiceField,
     DynamicMultipleChoiceField,
     JSONField,
-    LaxURLField,
 )
 from utilities.forms.utils import add_blank_choice
 from utilities.forms.widgets import (
@@ -761,8 +769,12 @@ class URLFieldType(FieldType):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({'default': field.default, 'unique': field.unique})
         return {
-            field.name: models.URLField(
-                null=True, blank=not field.required, validators=regex_validators(field), **field_kwargs
+            field.name: LaxURLModelField(
+                max_length=URL_MAX_LENGTH,
+                null=True,
+                blank=not field.required,
+                validators=regex_validators(field),
+                **field_kwargs,
             ),
             # blank=True, default='' (not null=True): a CharField with null=True lets
             # "no title" be represented as both NULL (ORM/API create omitting the key)
@@ -772,7 +784,7 @@ class URLFieldType(FieldType):
             # existing installations, which only auto-ADDs a new column when it is
             # nullable or has a Django-level default (see _can_auto_add()).
             self.title_field_name(field): models.CharField(
-                max_length=200,
+                max_length=URL_TITLE_MAX_LENGTH,
                 blank=True,
                 default='',
                 help_text=_('Human-readable text shown instead of the raw URL.'),
@@ -782,15 +794,19 @@ class URLFieldType(FieldType):
     def get_serializer_field(self, field, **kwargs):
         # Only the URL column follows field.required; the title stays always-optional
         # (see the class docstring), so its auto-built serializer field is left alone.
-        return drf_serializers.URLField(
+        return LaxURLSerializerField(
+            max_length=URL_MAX_LENGTH,
             required=field.required,
             allow_null=not field.required,
             allow_blank=not field.required,
         )
 
     def get_form_field(self, field, **kwargs):
-        return LaxURLField(
+        from netbox_custom_objects.forms.fields import LaxURLFormField
+
+        return LaxURLFormField(
             assume_scheme='https',
+            max_length=URL_MAX_LENGTH,
             required=field.required,
             initial=field.default,
             validators=regex_validators(field, html=True),
@@ -801,10 +817,13 @@ class URLFieldType(FieldType):
         Return the URL and title form fields, keyed by their backing column names
         (mirrors CoordinatesFieldType.get_form_fields).
         """
+        from netbox_custom_objects.forms.fields import LaxURLFormField
+
         base_label = field.label or field.name.replace('_', ' ').title()
-        url_field = LaxURLField(
+        url_field = LaxURLFormField(
             label=base_label,
             assume_scheme='https',
+            max_length=URL_MAX_LENGTH,
             required=field.required,
             initial=field.default,
             help_text=render_markdown(field.description) if field.description else None,
@@ -813,7 +832,7 @@ class URLFieldType(FieldType):
         title_field = forms.CharField(
             label=f'{base_label} ({_("link title")})',
             required=False,
-            max_length=200,
+            max_length=URL_TITLE_MAX_LENGTH,
             help_text=_('Text shown as the link instead of the raw URL.'),
         )
         if field.ui_editable != CustomFieldUIEditableChoices.YES:

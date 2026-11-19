@@ -13,8 +13,9 @@ from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import connection, models
 from django.forms.fields import JSONString
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
+from rest_framework.exceptions import ValidationError as DRFValidationError
 
 from core.models import ObjectType
 from dcim.models import Device, DeviceType, ModuleType
@@ -32,6 +33,7 @@ from netbox_custom_objects.field_types import (
     MultiSelectFieldType,
     ObjectFieldType,
     SelectFieldType,
+    URLFieldType,
     _csv_import_to_field_name,
 )
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, _deferred_co_field_data
@@ -1267,6 +1269,84 @@ class URLFieldTypeTestCase(FieldTypeTestCase):
         with self.assertRaises(ValidationError):
             duplicate = model(name='B', website='https://example.com/a')
             duplicate.full_clean()
+
+    def _url_field_validators(self):
+        """
+        Return, per layer (form, model, REST API), a function that validates a value for a URL field
+        and returns the error codes raised for the field (empty if the value is valid).
+        """
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name='website', label='Website', type='url'
+        )
+        model = self.custom_object_type.get_model()
+        field_type = URLFieldType()
+        form_field = field_type.get_form_field(field)
+        serializer_field = field_type.get_serializer_field(field, model=model)
+
+        def validate_form(value):
+            try:
+                form_field.clean(value)
+            except ValidationError as e:
+                return [error.code for error in e.error_list]
+            return []
+
+        def validate_model(value):
+            try:
+                model(name='Test', website=value).full_clean()
+            except ValidationError as e:
+                return [error.code for error in e.error_dict.get('website', [])]
+            return []
+
+        def validate_api(value):
+            try:
+                serializer_field.run_validation(value)
+            except DRFValidationError as e:
+                return e.get_codes()
+            return []
+
+        return {'form': validate_form, 'model': validate_model, 'api': validate_api}
+
+    def test_url_field_accepts_the_same_values_everywhere(self):
+        """The form, model and REST API accept any allowed scheme and hostnames without a domain."""
+        for name, validate in self._url_field_validators().items():
+            for value in ('http://myserver/', 'ssh://router1', 'https://example.com/path'):
+                with self.subTest(layer=name, value=value):
+                    self.assertEqual(validate(value), [])
+
+    def test_url_field_rejects_the_same_values_everywhere(self):
+        """The form, model and REST API reject a disallowed scheme and a URL longer than the column."""
+        for name, validate in self._url_field_validators().items():
+            for value, code in (
+                ('gopher://example.com', 'invalid'),
+                (f'https://example.com/{"a" * 200}', 'max_length'),
+            ):
+                with self.subTest(layer=name, value=value):
+                    self.assertEqual(validate(value), [code])
+
+    def test_url_field_follows_allowed_url_schemes_changes(self):
+        """A change to ALLOWED_URL_SCHEMES at runtime applies to the form, model and REST API."""
+        validators = self._url_field_validators()
+        for name, validate in validators.items():
+            with self.subTest(layer=name):
+                self.assertEqual(validate('gopher://example.com'), ['invalid'])
+
+        with override_settings(ALLOWED_URL_SCHEMES=['https', 'gopher']):
+            for name, validate in validators.items():
+                with self.subTest(layer=name):
+                    self.assertEqual(validate('gopher://example.com'), [])
+
+    def test_url_field_api_adds_https_to_value_without_scheme(self):
+        """The REST API stores a URL without a scheme as https, as the form does."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name='website', label='Website', type='url'
+        )
+        model = self.custom_object_type.get_model()
+        field_type = URLFieldType()
+
+        self.assertEqual(field_type.get_form_field(field).clean('example.com'), 'https://example.com')
+        self.assertEqual(
+            field_type.get_serializer_field(field, model=model).run_validation('example.com'), 'https://example.com'
+        )
 
     def test_change_existing_field_to_url_rejected(self):
         """An existing non-url field cannot be converted to url."""
