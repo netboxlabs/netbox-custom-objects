@@ -2203,6 +2203,23 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
         with self.assertRaises(ProgrammingError), transaction.atomic():
             deserialized.save()
 
+    def test_replay_skips_missing_polymorphic_through_table(self):
+        """A replay whose polymorphic through table doesn't exist yet saves the object."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name='things', label='Things', type='multiobject', is_polymorphic=True
+        )
+        field.related_object_types.set([self.get_site_object_type()])
+        model = self.custom_object_type.get_model()
+        obj = model.objects.create(name='Original')
+        obj.things.add(Site.objects.create(name='Replay Site', slug='replay-site'))
+        data = model.objects.get(pk=obj.pk).serialize_object()
+        with connection.cursor() as cursor:
+            cursor.execute(f'DROP TABLE "{field.through_table_name}"')
+
+        with transaction.atomic():
+            model.deserialize_object({**data, 'name': 'Replayed'}, pk=9001).save()
+            self.assertTrue(model.objects.filter(pk=9001).exists())
+
 
 class PrimaryFieldChangeTestCase(FieldTypeTestCase):
     """Test changing which field is designated as the primary (display) field.

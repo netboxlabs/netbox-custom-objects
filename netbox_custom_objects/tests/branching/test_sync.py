@@ -136,6 +136,36 @@ class ReplayMissingThroughTableTestCase(BranchingTestBase, _TestBase):
             cursor.execute(f'SELECT COUNT(*) FROM "{through_table}"')
             self.assertEqual(cursor.fetchone()[0], 0)
 
+    def test_replay_skips_polymorphic_through_table_missing_from_branch(self):
+        """The same for a polymorphic multi-object value."""
+        cot = CustomObjectType.objects.create(name='replay_cot', slug='replay-cot')
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot, name='name', label='Name', type='text', primary=True
+        )
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=cot, name='things', label='Things', type='multiobject', is_polymorphic=True
+        )
+        field.related_object_types.set([ObjectType.objects.get_for_model(Site)])
+        site = Site.objects.create(name='Replay Site', slug='replay-site')
+        model = cot.get_model()
+        obj = model.objects.create(name='Original')
+        obj.things.add(site)
+        data = model.objects.get(pk=obj.pk).serialize_object()
+        through_table = field.through_table_name
+        branch = _provision_branch('Replay Branch', 'iterative', self.user)
+        # Provisioning doesn't copy polymorphic through tables yet; drop the copy if it does.
+        with connections[branch.connection_name].cursor() as cursor:
+            cursor.execute(f'DROP TABLE IF EXISTS "{branch.schema_name}"."{through_table}"')
+
+        with activate_branch(branch):
+            model = CustomObjectType.objects.get(pk=cot.pk).get_model()
+            model.deserialize_object({**data, 'name': 'Replayed'}, pk=9001).save(using=branch.connection_name)
+            self.assertTrue(model.objects.filter(pk=9001).exists())
+
+        with connection.cursor() as cursor:
+            cursor.execute(f'SELECT source_id FROM "{through_table}"')
+            self.assertEqual(cursor.fetchall(), [(obj.pk,)])
+
 
 # ── Concurrent-edit tests (both main and branch modified before sync/merge) ───
 

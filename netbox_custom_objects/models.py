@@ -1376,6 +1376,15 @@ class CustomObject(
                 schema_conn_local = connections[_using]
                 for field_name, rows in poly_m2m_data.items():
                     through_table = through_table_name_for(cot_id, field_name)
+                    # The same check as above: these queries are unqualified too.
+                    if not _table_exists(through_table, conn=schema_conn_local):
+                        logger.debug(
+                            'deserialize_object: skipped polymorphic M2M %r on %s pk=%s (through table absent)',
+                            field_name,
+                            table_name,
+                            obj_pk,
+                        )
+                        continue
                     _apply_poly_m2m_rows(schema_conn_local, through_table, obj_pk, rows)
                 # Stash full data for deferred column updates (squash ordering fix).
                 deferred = _deferred_co_field_data.get()
