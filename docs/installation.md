@@ -7,7 +7,7 @@
 * PostgreSQL (required — Custom Object Types are backed by real database tables)
 * Redis (required — used for background jobs such as search reindexing, and for the cache that keeps NetBox's worker processes in step when a Custom Object Type is deleted)
 
-Using Custom Objects with [NetBox Branching](branching.md) requires NetBox v4.6.2 or later and netbox-branching v1.2.4 or later.
+Using Custom Objects with [NetBox Branching](branching.md) requires NetBox v4.6.2 or later and netbox-branching v1.0.4 or later.
 
 ## Installation
 

@@ -179,7 +179,7 @@ jobs:
 
       - name: Install netbox-branching
         if: ${{ matrix.branching }}
-        run: pip install 'netboxlabs-netbox-branching>=1.2.4,<2.0.0'
+        run: pip install 'netboxlabs-netbox-branching>=1.0.4,<2.0.0'
 
       - name: Tune PostgreSQL for test performance
         run: |

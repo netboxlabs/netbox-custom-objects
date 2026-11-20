@@ -8,8 +8,6 @@ the branching integration relies on APIs that only landed in those releases:
 - ``serializer_resolver`` / ``register_serializer_resolver`` — NetBox 4.6.2
 - ``register_branching_resolver``, ``register_objectchange_field_migrator``,
   and the ``squash_dependency_graph_built`` signal — netbox-branching 1.0.4
-- copying the tables of models a branching resolver makes branchable (such as
-  polymorphic multi-object through tables) into new branches — netbox-branching 1.2.4
 
 Users who never install netbox-branching keep the broader compatibility
 window declared by PluginConfig.
@@ -30,7 +28,7 @@ from netbox_custom_objects.utilities import is_branching_enabled
 # COMPAT(netbox<4.6.2): once min_version reaches this floor, remove this constant and
 # the NetBox version check (E001) in check_branching_compatibility().
 REQUIRED_NETBOX_VERSION_FOR_BRANCHING = '4.6.2'
-REQUIRED_BRANCHING_VERSION = '1.2.4'
+REQUIRED_BRANCHING_VERSION = '1.0.4'
 
 # The package is published under two distribution names depending on the
 # release channel; try both before concluding the version is unknowable.

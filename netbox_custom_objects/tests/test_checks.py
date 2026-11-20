@@ -20,7 +20,7 @@ from netbox_custom_objects import checks
 from netbox_custom_objects.utilities import is_branching_enabled
 
 
-def _run(*, branching_installed=True, netbox_version='4.6.2', branching_version='1.2.4'):
+def _run(*, branching_installed=True, netbox_version='4.6.2', branching_version='1.0.4'):
     """Invoke the check with each input mocked.
 
     ``netbox_version`` / ``branching_version`` may be a version string, or an
@@ -58,17 +58,17 @@ class CheckBranchingCompatibilityTestCase(SimpleTestCase):
 
     def test_both_versions_satisfied(self):
         """Versions at the floor produce no errors."""
-        self.assertEqual(_run(netbox_version='4.6.2', branching_version='1.2.4'), [])
+        self.assertEqual(_run(netbox_version='4.6.2', branching_version='1.0.4'), [])
 
     def test_newer_versions_satisfied(self):
-        self.assertEqual(_run(netbox_version='4.7.0', branching_version='1.3.0'), [])
+        self.assertEqual(_run(netbox_version='4.7.0', branching_version='1.1.0'), [])
 
     def test_netbox_too_old(self):
-        errors = _run(netbox_version='4.6.1', branching_version='1.2.4')
+        errors = _run(netbox_version='4.6.1', branching_version='1.0.4')
         self.assertEqual(_ids(errors), {'netbox_custom_objects.E001'})
 
     def test_branching_too_old(self):
-        errors = _run(netbox_version='4.6.2', branching_version='1.2.3')
+        errors = _run(netbox_version='4.6.2', branching_version='1.0.3')
         self.assertEqual(_ids(errors), {'netbox_custom_objects.E002'})
 
     def test_both_too_old(self):
@@ -77,11 +77,11 @@ class CheckBranchingCompatibilityTestCase(SimpleTestCase):
 
     def test_missing_release_skips_netbox_check(self):
         """A missing settings.RELEASE skips E001 but still evaluates branching."""
-        errors = _run(netbox_version=AttributeError, branching_version='1.2.3')
+        errors = _run(netbox_version=AttributeError, branching_version='1.0.3')
         self.assertEqual(_ids(errors), {'netbox_custom_objects.E002'})
 
     def test_unparsable_netbox_version_skips_netbox_check(self):
-        errors = _run(netbox_version='not-a-version', branching_version='1.2.4')
+        errors = _run(netbox_version='not-a-version', branching_version='1.0.4')
         self.assertEqual(errors, [])
 
     def test_unresolvable_branching_version_warns(self):

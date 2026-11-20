@@ -40,8 +40,8 @@ NetBox runs these checks at startup and with `manage.py check`:
 | Check | Level | Meaning |
 |-------|-------|---------|
 | `netbox_custom_objects.E001` | Error | NetBox Branching is installed, but NetBox is older than 4.6.2. |
-| `netbox_custom_objects.E002` | Error | NetBox Branching is installed, but it's older than 1.2.4. |
-| `netbox_custom_objects.W001` | Warning | NetBox Branching is installed, but its version can't be determined, so the 1.2.4 requirement can't be verified. |
+| `netbox_custom_objects.E002` | Error | NetBox Branching is installed, but it's older than 1.0.4. |
+| `netbox_custom_objects.W001` | Warning | NetBox Branching is installed, but its version can't be determined, so the 1.0.4 requirement can't be verified. |
 | `netbox_custom_objects.W002` | Warning | The [Custom Objects tab](related-objects-tab.md) failed to register at startup, so it won't appear on object pages. The NetBox log has the full error. |
 | `netbox_custom_objects.W003` | Warning | `max_multiobject_display` isn't a positive integer, so `3` is used. |
 | `netbox_custom_objects.W004` | Warning | NetBox Branching's `exempt_models` includes Custom Objects models, so schema changes to them are refused while a branch is active (see [Branching](branching.md)). |
