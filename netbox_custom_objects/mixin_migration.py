@@ -415,11 +415,11 @@ def copy_polymorphic_through_tables(branch, verbosity=1, dry_run=False):
     Give *branch* its own copy, rows included, of each polymorphic multi-object through
     table it lacks.
 
-    netbox-branching copies the through tables of a model's M2M fields into a new branch,
-    but a polymorphic multi-object field isn't an M2M field on ``_meta``, so its table is
-    left out.  The branch connection's search path then falls through to main's table,
-    and the branch's changes, including dropping the table, are made to main's.  Called
-    when a branch is provisioned, and by heal_branch() for branches provisioned before.
+    netbox-branching before 1.2.4 left these tables out of a new branch, since a
+    polymorphic multi-object field isn't an M2M field on ``_meta``.  The branch
+    connection's search path then falls through to main's table, and the branch's
+    changes, including dropping the table, are made to main's.  Newer releases copy them
+    when a branch is provisioned; heal_branch() calls this for branches provisioned before.
 
     Rows whose custom object isn't in the branch are left out: main may have objects the
     branch doesn't (created since the branch was provisioned), and the branch's own

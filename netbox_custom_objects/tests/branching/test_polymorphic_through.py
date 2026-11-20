@@ -1,13 +1,11 @@
 """
 A polymorphic multi-object field's through table in a branch.
 
-netbox-branching copies the through tables of a model's M2M fields into a branch, but a
-polymorphic multi-object field isn't an M2M field on ``_meta``, so the branch needs its own
-copy of the table made for it.  Without one, the branch connection's search path falls
-through to main's table, and changes made in the branch are written to main.
+netbox-branching copies the table into a new branch, since the branching resolver makes its
+model branchable.  Branches provisioned before that have none, and the branch connection's
+search path falls through to main's table, so changes made in the branch are written to main;
+healing gives them their own copy.
 """
-
-from unittest import mock
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection as main_conn
@@ -21,8 +19,6 @@ from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import HAS_BRANCHING, BranchingTestBase, _make_request, _provision_branch, _TestBase
 
 if HAS_BRANCHING:
-    from netbox_branching.choices import BranchStatusChoices
-    from netbox_branching.models import Branch
     from netbox_branching.utilities import activate_branch
 
     from netbox.context_managers import event_tracking
@@ -104,7 +100,7 @@ class PolymorphicThroughTableBranchTestCase(BranchingTestBase, _TestBase):
     def test_heal_copies_table_missing_from_existing_branch(self):
         self._create_holder()
         branch = _provision_branch('Poly Branch', 'iterative', self.user)
-        # As provisioned before the fix: no copy of the table.
+        # As provisioned by netbox-branching before 1.2.4: no copy of the table.
         with main_conn.cursor() as cursor:
             cursor.execute(f'DROP TABLE IF EXISTS "{branch.schema_name}"."{self.field.through_table_name}"')
 
@@ -128,22 +124,6 @@ class PolymorphicThroughTableBranchTestCase(BranchingTestBase, _TestBase):
         self.assertEqual(self._main_rows(newer.pk), [self.site_a.pk])
         self.assertEqual(self._rows(branch.schema_name, newer.pk), [])
         self.assertEqual(self._rows(branch.schema_name), [self.site_a.pk, self.site_b.pk])
-
-    def test_failed_copy_fails_provisioning(self):
-        self._create_holder()
-        branch = Branch(name='Poly Branch', merge_strategy='iterative')
-        branch.save(provision=False)
-        with (
-            mock.patch(
-                'netbox_custom_objects.mixin_migration.copy_polymorphic_through_tables',
-                side_effect=RuntimeError('copy failed'),
-            ),
-            self.assertRaisesMessage(RuntimeError, 'copy failed'),
-        ):
-            branch.provision(user=self.user)
-
-        branch.refresh_from_db()
-        self.assertEqual(branch.status, BranchStatusChoices.FAILED)
 
     def test_field_synced_into_branch_gets_its_own_table(self):
         branch = _provision_branch('Poly Branch', 'iterative', self.user)

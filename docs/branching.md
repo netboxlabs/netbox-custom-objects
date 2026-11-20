@@ -10,7 +10,7 @@ Custom Objects fully supports [NetBox Branching](https://netboxlabs.com/docs/ext
 Using Custom Objects together with NetBox Branching requires:
 
 - NetBox 4.6.2 or later
-- netbox-branching 1.0.4 or later (published on PyPI as `netboxlabs-netbox-branching`)
+- netbox-branching 1.2.4 or later (published on PyPI as `netboxlabs-netbox-branching`)
 
 These requirements apply only when `netbox_branching` is in `PLUGINS`. Without it, the standard [compatibility matrix](https://github.com/netboxlabs/netbox-custom-objects/blob/main/COMPATIBILITY.md) applies.
 
@@ -19,8 +19,8 @@ NetBox runs these system checks at startup:
 | Check | Level | Meaning |
 |-------|-------|---------|
 | `netbox_custom_objects.E001` | Error | NetBox is older than 4.6.2. |
-| `netbox_custom_objects.E002` | Error | netbox-branching is older than 1.0.4. |
-| `netbox_custom_objects.W001` | Warning | netbox-branching is installed, but its version can't be determined (for example, an editable checkout without package metadata), so the 1.0.4 requirement can't be verified. |
+| `netbox_custom_objects.E002` | Error | netbox-branching is older than 1.2.4. |
+| `netbox_custom_objects.W001` | Warning | netbox-branching is installed, but its version can't be determined (for example, an editable checkout without package metadata), so the 1.2.4 requirement can't be verified. |
 | `netbox_custom_objects.W004` | Warning | netbox-branching's `exempt_models` includes Custom Objects models (see below). |
 
 ## Setup
@@ -60,7 +60,7 @@ Custom Object Types, their fields and constraints, and custom objects work in br
 
 When an upgrade adds columns to Custom Object Type tables, `manage.py migrate` updates every active branch as well as main. Running `manage.py upgrade_custom_objects` with no `--cot` option does the same. Branches that are missing their schema or have migrations pending are skipped, and you can run the command again once those branches are migrated. With `--cot`, only main is updated.
 
-Both also give a branch its own copy of any polymorphic Multi-object field's table that it's missing, copied from main's current contents. New branches get theirs when they're provisioned.
+Both also give a branch its own copy of any polymorphic Multi-object field's table that it's missing, copied from main's current contents. Branches provisioned with netbox-branching 1.2.4 or later already have theirs.
 
 ## Known Limitations
 
