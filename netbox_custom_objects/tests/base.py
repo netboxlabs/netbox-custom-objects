@@ -3,11 +3,13 @@ import contextlib
 import logging
 import re
 import time
+import uuid
 
 from django.apps import apps as django_apps
 from django.contrib.contenttypes.management import create_contenttypes
 from django.db import connection, connections
-from django.test import Client, override_settings
+from django.test import Client, RequestFactory, override_settings
+from django.urls import reverse
 
 from core.models import ObjectChange, ObjectType
 from extras.models import CustomFieldChoiceSet
@@ -21,6 +23,14 @@ from users.models import ObjectPermission, Token
 from utilities.testing import create_test_user
 
 logger = logging.getLogger(__name__)
+
+
+def _make_request(user):
+    """Return a fresh request object suitable for event_tracking."""
+    request = RequestFactory().get(reverse('home'))
+    request.id = uuid.uuid4()
+    request.user = user
+    return request
 
 
 def create_token(user):

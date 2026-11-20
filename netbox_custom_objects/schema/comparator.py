@@ -65,6 +65,8 @@ from netbox_custom_objects.schema.format import (
     FIELD_DEFAULTS,
     FIELD_TYPE_ATTRS,
     SCHEMA_TYPE_TO_CHOICES,
+    field_attr_default,
+    normalize_field_attr,
 )
 
 # COT-level attributes that may change between schema versions.
@@ -220,7 +222,9 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
     # ── base scalar attributes ───────────────────────────────────────────────
     for attr in FIELD_BASE_ATTRS:
         db_val = getattr(db_field, attr)
-        schema_val = schema_field.get(attr, FIELD_DEFAULTS.get(attr))
+        # As the apply would store it, so a value it normalizes isn't a change on every apply.
+        schema_val = schema_field.get(attr, field_attr_default(attr, schema_type))
+        schema_val = normalize_field_attr(attr, schema_type, schema_val)
         if db_val != schema_val:
             changes[attr] = (db_val, schema_val)
 

@@ -257,6 +257,14 @@ class FilterFormTestCase(CustomObjectPageTestCase):
         # Like core, fields hidden only from display (ui_visible) can still be filtered.
         self.assertIn('internal', form.fields)
 
+    def test_related_objects_link_shows_its_filter(self):
+        # The site's Related Objects panel links here with ?site_id=<pk>.
+        self.model.objects.create(name='Beta')
+        response = self._get(self._url('list'), data={'site_id': self.site.pk})
+        self.assertEqual([row.record for row in response.context['table'].rows], [self.obj])
+        self.assertIn('site_id', response.context['filter_form'].changed_data)
+        self.assertContains(response, 'Site: HQ')
+
     def test_fieldsets_group_fields(self):
         fieldsets = build_filterset_form_class(self.model).fieldsets
         self.assertEqual(
@@ -264,7 +272,7 @@ class FilterFormTestCase(CustomObjectPageTestCase):
             [
                 (None, ['q', 'filter_id', 'tag']),
                 ('Zone', ['code', 'internal', 'name', 'notes']),
-                ('Details', ['site']),
+                ('Details', ['site_id']),
                 ('Ownership', ['owner_group_id', 'owner_id']),
             ],
         )

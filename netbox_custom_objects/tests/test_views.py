@@ -2268,6 +2268,20 @@ class URLFieldLinkTitleViewTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(obj.website, 'https://example.com/')
         self.assertEqual(obj.website_title, '')
 
+    def test_create_accepts_any_allowed_scheme_and_hostname(self):
+        """The add form accepts any scheme in ALLOWED_URL_SCHEMES and hostnames without a domain."""
+        for name, value in (('Router', 'ssh://router1'), ('Server', 'http://myserver/')):
+            with self.subTest(value=value):
+                response = self.client.post(self._add_url(), {'name': name, 'website': value})
+                self.assertEqual(response.status_code, 302, getattr(response, 'content', b''))
+                self.assertEqual(self.model.objects.get(name=name).website, value)
+
+    def test_create_rejects_disallowed_scheme(self):
+        response = self.client.post(self._add_url(), {'name': 'Box', 'website': 'gopher://example.com'})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('website', response.context['form'].errors)
+        self.assertFalse(self.model.objects.filter(name='Box').exists())
+
     def test_list_view_renders_title_as_link_text(self):
         """
         The list view must render the same title-as-link-text HTML as the detail
@@ -2702,7 +2716,7 @@ class ProtectedObjectDeleteViewTestCase(CustomObjectsTestCase, TestCase):
         rack_cot.refresh_from_db()
         self.rack_model = rack_cot.get_model()
         self.rack = self.rack_model.objects.create(name='R1')
-        mount_model.objects.create(name='M1', rack=self.rack)
+        self.mount = mount_model.objects.create(name='M1', rack=self.rack)
         self.url = reverse(
             'plugins:netbox_custom_objects:customobject_delete',
             kwargs={'custom_object_type': 'racks', 'pk': self.rack.pk},
@@ -2711,7 +2725,11 @@ class ProtectedObjectDeleteViewTestCase(CustomObjectsTestCase, TestCase):
     def test_delete_page_redirects_to_object(self):
         response = self.client.get(self.url, follow=True)
         self.assertRedirects(response, self.rack.get_absolute_url())
-        self.assertContains(response, 'M1')
+        self.assertContains(
+            response,
+            f'Unable to delete <strong>R1</strong>. 1 dependent objects were found: '
+            f'<a href="{self.mount.get_absolute_url()}">M1</a>',
+        )
 
     def test_htmx_delete_redirects_to_object(self):
         response = self.client.get(self.url, headers={'hx-request': 'true'})

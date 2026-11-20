@@ -19,6 +19,8 @@ APP_LABEL = 'netbox_custom_objects'
 DECIMAL_MAX_DIGITS = 16
 DECIMAL_PLACES = 4
 CHOICE_VALUE_MAX_LENGTH = 100
+URL_MAX_LENGTH = 200
+URL_TITLE_MAX_LENGTH = 200
 
 # Convention for config-context aggregation (issue #98): a single, non-polymorphic
 # OBJECT field named as the key and pointing at the given (app_label, model) feeds the
@@ -35,7 +37,9 @@ CONFIG_CONTEXT_DIMENSION_FIELDS = {
     'cluster': ('virtualization', 'cluster'),
 }
 
-# Field names that are reserved and cannot be used for custom object fields.
+# Field names that are reserved and cannot be used for custom object fields: attributes
+# every custom object has, and the query parameters, filters and filterset methods of a
+# type's list views and REST API, which a filter for the field would replace.
 # Keep in alphabetical order for ease of reading error message.
 RESERVED_FIELD_NAMES = [
     '_meta',
@@ -43,33 +47,60 @@ RESERVED_FIELD_NAMES = [
     'DoesNotExist',
     'MultipleObjectsReturned',
     'bookmarks',
+    'brief',
     'clean',
     'clone',
     'contacts',
     'created',
+    'created_by_request',
     'custom_field_data',
     'custom_object_type',
     'custom_object_type_id',
     'delete',
+    'embedded',
+    'export',
+    'fields',
+    'filter',
+    'filter_id',
+    'filter_owner_group_id',
+    'format',
     'full_clean',
+    'get_filters',
     'get_absolute_url',
     'id',
     'images',
     'jobs',
     'journal_entries',
     'last_updated',
+    'limit',
     'local_context_data',
     'model',
+    'modified_by_request',
     'objects',
+    'offset',
+    'omit',
+    'ordering',
     'owner',
+    'owner_group',
+    'owner_group_id',
+    'owner_id',
+    'page',
+    'per_page',
     'pk',
+    'q',
     'refresh_from_db',
     'save',
+    'search',
     'serialize_object',
     'snapshot',
+    'sort',
+    'start',
     'subscriptions',
+    'tag',
+    'tag_id',
     'tags',
     'to_objectchange',
+    'updated_by_request',
 ]
 
 # Search weight for a custom object's rendered display_expression (see CustomObject._display).

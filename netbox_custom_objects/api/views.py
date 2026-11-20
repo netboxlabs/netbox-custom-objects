@@ -31,19 +31,27 @@ from netbox_custom_objects.filtersets import (
     CustomObjectTypeFilterSet,
     get_filterset_class,
 )
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
+from netbox_custom_objects.models import (
+    CustomObjectType,
+    CustomObjectTypeConstraint,
+    CustomObjectTypeField,
+    SchemaChangeRefused,
+)
 from netbox_custom_objects.schema.comparator import FieldOp, diff_document
 from netbox_custom_objects.schema.executor import (
     CircularDependencyError,
     DestructiveChangesError,
     InvalidConstraintError,
+    InvalidFieldError,
     InvalidRelatedNameError,
+    InvalidTypeError,
     UnknownChoiceSetError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
     UnsupportedFieldChangeError,
     UnsupportedTypeChangeError,
     apply_diffs,
+    check_field_names,
     schema_transaction,
 )
 from netbox_custom_objects.schema.format import CUSTOM_OBJECTS_APP_LABEL_SLUG
@@ -550,6 +558,10 @@ class SchemaPreviewView(APIView):
 
         diffs = diff_document(schema_doc)
         _check_related_types_visible(request.user, diffs)
+        try:
+            check_field_names(diffs)
+        except InvalidFieldError as exc:
+            return Response({'error': 'invalid_field', 'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response({'diffs': [_serialize_diff(d) for d in diffs]})
 
 
@@ -591,8 +603,9 @@ class SchemaApplyView(APIView):
         detail: "Schema contains destructive ..."
         destructive_slugs: [my-cot]
 
-    **400 Bad Request** — circular COT dependency, unresolvable FK target, a constraint
-    that fails validation, or invalid schema document structure.
+    **400 Bad Request** — circular COT dependency, unresolvable FK target, a type, field or
+    constraint that fails validation, invalid schema document structure, or a branch is active
+    while netbox-branching exempts the models the document changes (``exempt_from_branching``).
 
     Unexpected DB errors (e.g. ``IntegrityError`` from a constraint violation
     unrelated to the COT schema logic) are not caught and will surface as
@@ -606,14 +619,7 @@ class SchemaApplyView(APIView):
     permission_classes = [IsAuthenticatedOrLoginNotRequired, TokenWritePermission]
 
     def post(self, request, *args, **kwargs):
-        # Branch context: this endpoint no longer rejects requests with an active
-        # branch.  Schema-editor calls inside ``apply_diffs`` route through
-        # ``_get_schema_connection()`` in models.py, which selects the active
-        # branch's connection when one is set.  The resulting DDL therefore lands
-        # in the branch's PostgreSQL schema, and the CustomObjectType /
-        # CustomObjectTypeField writes flow through netbox-branching's router.
-        # See ``_schema_add_field`` / ``_schema_remove_field`` / ``_schema_alter_field``
-        # and ``CustomObjectType.save`` for the routing details.
+        # Model methods handle routing and block schema changes to exempt models while a branch is active.
         if not (
             request.user.has_perm('netbox_custom_objects.add_customobjecttype')
             and request.user.has_perm('netbox_custom_objects.change_customobjecttype')
@@ -685,9 +691,24 @@ class SchemaApplyView(APIView):
                 {'error': 'invalid_related_name', 'detail': str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        except InvalidFieldError as exc:
+            return Response(
+                {'error': 'invalid_field', 'detail': str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except InvalidTypeError as exc:
+            return Response(
+                {'error': 'invalid_type', 'detail': str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         except UnsupportedTypeChangeError as exc:
             return Response(
                 {'error': 'unsupported_type_change', 'detail': str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except SchemaChangeRefused as exc:
+            return Response(
+                {'error': 'exempt_from_branching', 'detail': exc.message},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

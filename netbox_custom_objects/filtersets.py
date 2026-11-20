@@ -1,4 +1,6 @@
 import copy
+import functools
+import json
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -7,6 +9,7 @@ import django_filters
 from django import forms as django_forms
 from django.apps import apps as django_apps
 from django.db.models import Q, QuerySet
+from django.db.models.query import EmptyQuerySet
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.timezone import is_aware, make_aware
 from django.utils.translation import gettext_lazy as _
@@ -16,17 +19,34 @@ from extras.choices import CustomFieldFilterLogicChoices, CustomFieldTypeChoices
 from extras.models import CachedValue, CustomFieldChoiceSet
 from netbox.filtersets import ChangeLoggedModelFilterSet, NetBoxModelFilterSet
 from users.models import Owner, OwnerGroup
-from utilities.filters import MultiValueCharFilter, MultiValueMACAddressFilter
+from utilities.filters import (
+    MultiValueCharFilter,
+    MultiValueDateFilter,
+    MultiValueDateTimeFilter,
+    MultiValueDecimalFilter,
+    MultiValueMACAddressFilter,
+    MultiValueNumberFilter,
+    multivalue_field_factory,
+)
 
 from .choices import ConstraintTypeChoices, CustomObjectFieldTypeChoices
 from .constants import APP_LABEL
 from .models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
+
+try:
+    from django.db.models import JSONNull
+except ImportError:
+    # COMPAT(netbox<4.7.0): Django before 6.1 has no JSONNull, and None in an exact lookup
+    # means JSON null.
+    JSONNull = None
 
 __all__ = (
     'ArrayContainsFilter',
     'CustomObjectTypeConstraintFilterSet',
     'CustomObjectTypeFieldFilterSet',
     'CustomObjectTypeFilterSet',
+    'JSONEmptyFilter',
+    'JSONValueFilter',
     'NonPolymorphicMultiObjectFilter',
     'NonPolymorphicObjectFilter',
     'NonPolymorphicObjectIdFilter',
@@ -42,6 +62,9 @@ class _IntegerListField(django_forms.Field):
     ints.  Designed for multi-valued PK inputs that should not be validated
     against a model queryset.
     """
+
+    # Reads every value of a repeated query parameter, not just the last.
+    widget = django_forms.SelectMultiple
 
     def to_python(self, value):
         if value in (None, '', [], ()):
@@ -67,12 +90,12 @@ class PolymorphicObjectFilter(django_filters.Filter):
     """
     Filter for one allowed type of a polymorphic GFK object field.
 
-    Accepts a raw integer PK; no model-queryset validation is performed.
-    The content_type_id is baked in at construction time, so only custom
-    objects whose GFK points to *this* content type AND has the submitted
-    object_id are returned.
+    Accepts one or more raw integer PKs (OR semantics); no model-queryset
+    validation is performed. The content_type_id is baked in at construction
+    time, so only custom objects whose GFK points to *this* content type AND
+    has one of the submitted object_ids are returned.
 
-    Using IntegerField (not ModelChoiceField) means the filter is applied
+    Using _IntegerListField (not ModelChoiceField) means the filter is applied
     even when the submitted PK doesn't correspond to any existing object —
     the DB query simply returns an empty set rather than bypassing the filter
     entirely (which ModelChoiceField would do via ValidationError → missing
@@ -83,7 +106,7 @@ class PolymorphicObjectFilter(django_filters.Filter):
     attempting to validate the virtual filter name against real model fields.
     """
 
-    field_class = django_forms.IntegerField
+    field_class = _IntegerListField
 
     def __init__(self, *, content_type_id, gfk_field_name, **kwargs):
         self.content_type_id = content_type_id
@@ -92,12 +115,12 @@ class PolymorphicObjectFilter(django_filters.Filter):
         super().__init__(**kwargs)
 
     def filter(self, qs, value):
-        if value is None:
+        if not value:
             return qs
         return qs.filter(
             **{
                 f'{self.gfk_field_name}_content_type_id': self.content_type_id,
-                f'{self.gfk_field_name}_object_id': value,
+                f'{self.gfk_field_name}_object_id__in': value,
             }
         )
 
@@ -201,6 +224,7 @@ class ArrayValuesFilter(django_filters.Filter):
 class NonPolymorphicObjectFilter(django_filters.Filter):
     """
     Filter for non-polymorphic FK Object fields on dynamically-generated COT models.
+    Accepts one or more PKs (OR semantics).
 
     Inherits from django_filters.Filter (not ModelChoiceFilter) so that
     NetBoxModelFilterSet.get_additional_lookups() exits early without attempting
@@ -213,21 +237,22 @@ class NonPolymorphicObjectFilter(django_filters.Filter):
     check_query_object_type, consistent with the fix for issue #508.
     """
 
-    field_class = django_forms.ModelChoiceField
+    field_class = django_forms.ModelMultipleChoiceField
 
     def __init__(self, *args, queryset, **kwargs):
         kwargs.setdefault('required', False)
         super().__init__(*args, queryset=queryset, **kwargs)
 
     def filter(self, qs, value):
-        if value is None:
+        # An empty selection cleans to queryset.none().
+        if value is None or isinstance(value, EmptyQuerySet):
             return qs
-        return qs.filter(**{f'{self.field_name}_id': value.pk})
+        return qs.filter(**{f'{self.field_name}_id__in': value})
 
 
 class NonPolymorphicObjectIdFilter(django_filters.Filter):
     """
-    Accepts a raw integer PK for a non-polymorphic FK Object field.
+    Accepts one or more raw integer PKs (OR semantics) for a non-polymorphic FK Object field.
 
     Registered as ``<field_name>_id`` alongside ``NonPolymorphicObjectFilter``
     (which accepts a model-instance input under ``<field_name>``).  NetBox's
@@ -235,23 +260,23 @@ class NonPolymorphicObjectIdFilter(django_filters.Filter):
     ``?tenant_id=5``), so without this entry those links would silently return
     unfiltered results (issue #561).
 
-    Uses IntegerField (not ModelChoiceField) so the filter is applied even when
-    the submitted PK doesn't correspond to an existing object.  Inherits from
+    Uses _IntegerListField (not ModelMultipleChoiceField) so the filter is applied
+    even when a submitted PK doesn't correspond to an existing object.  Inherits from
     django_filters.Filter (not NumberFilter / ModelChoiceFilter) for the same
     reason as NonPolymorphicObjectFilter: avoids get_additional_lookups()
     introspecting _meta after apps.clear_cache().
     """
 
-    field_class = django_forms.IntegerField
+    field_class = _IntegerListField
 
     def __init__(self, **kwargs):
         kwargs.setdefault('required', False)
         super().__init__(**kwargs)
 
     def filter(self, qs, value):
-        if value is None:
+        if not value:
             return qs
-        return qs.filter(**{f'{self.field_name}': value})
+        return qs.filter(**{f'{self.field_name}__in': value})
 
 
 class NonPolymorphicMultiObjectFilter(django_filters.Filter):
@@ -278,6 +303,48 @@ class NonPolymorphicMultiObjectFilter(django_filters.Filter):
             return qs
         pks = list(value.values_list('pk', flat=True))
         return qs.filter(**{f'{self.field_name}__in': pks}).distinct()
+
+
+def _json_null():
+    """The value an exact lookup on a JSON field takes to match JSON null."""
+    return JSONNull() if JSONNull is not None else None
+
+
+class JSONValueFilter(django_filters.Filter):
+    """
+    Filter for a JSON field with exact filter logic: objects whose value equals any of the
+    given values. Each value is read as JSON, or as a string if it isn't valid JSON, so
+    ``"4"`` matches the string and ``4`` the number. ``NaN`` and ``Infinity``, which Python
+    reads but PostgreSQL's JSON doesn't, are strings too.
+
+    A plain Filter rather than a CharFilter, so NetBox doesn't derive string lookup
+    variants (__ic, __isw, ...) from it, which would compare the serialized JSON.
+    """
+
+    field_class = multivalue_field_factory(django_forms.CharField)
+
+    def filter(self, qs, value):
+        if not value:
+            return qs
+        q = Q()
+        for v in value:
+            try:
+                parsed = json.loads(v)
+                json.dumps(parsed, allow_nan=False)
+            except ValueError:
+                parsed = v
+            q |= Q(**{self.field_name: _json_null() if parsed is None else parsed})
+        return self.get_method(qs)(q)
+
+
+class JSONEmptyFilter(django_filters.BooleanFilter):
+    """Filter for a JSON field's ``__empty`` lookup: true matches objects with no value, or JSON null."""
+
+    def filter(self, qs, value):
+        if value is None:
+            return qs
+        empty = Q(**{f'{self.field_name}__isnull': True}) | Q(**{self.field_name: _json_null()})
+        return qs.filter(empty) if value else qs.exclude(empty)
 
 
 @dataclass
@@ -314,16 +381,17 @@ class FilterSpec:
         return self.filter_class(**filter_kwargs)
 
 
+# The filter classes match NetBox core's CustomField.to_filter(), so a repeated filter
+# matches any of its values, and NetBox adds the same lookup suffixes (__gte, __n, ...).
 FIELD_TYPE_FILTERS = {
-    CustomFieldTypeChoices.TYPE_TEXT: FilterSpec(django_filters.CharFilter, lookup_expr='icontains'),
-    CustomFieldTypeChoices.TYPE_LONGTEXT: FilterSpec(django_filters.CharFilter, lookup_expr='icontains'),
-    CustomFieldTypeChoices.TYPE_INTEGER: FilterSpec(django_filters.NumberFilter, lookup_expr='exact'),
-    CustomFieldTypeChoices.TYPE_DECIMAL: FilterSpec(django_filters.NumberFilter, lookup_expr='exact'),
+    CustomFieldTypeChoices.TYPE_TEXT: FilterSpec(MultiValueCharFilter, lookup_expr='icontains'),
+    CustomFieldTypeChoices.TYPE_LONGTEXT: FilterSpec(MultiValueCharFilter, lookup_expr='icontains'),
+    CustomFieldTypeChoices.TYPE_INTEGER: FilterSpec(MultiValueNumberFilter, lookup_expr='exact'),
+    CustomFieldTypeChoices.TYPE_DECIMAL: FilterSpec(MultiValueDecimalFilter, lookup_expr='exact'),
     CustomFieldTypeChoices.TYPE_BOOLEAN: FilterSpec(django_filters.BooleanFilter),
-    CustomFieldTypeChoices.TYPE_DATE: FilterSpec(django_filters.DateFilter, lookup_expr='exact'),
-    CustomFieldTypeChoices.TYPE_DATETIME: FilterSpec(django_filters.DateTimeFilter, lookup_expr='exact'),
-    CustomFieldTypeChoices.TYPE_URL: FilterSpec(django_filters.CharFilter, lookup_expr='icontains'),
-    CustomFieldTypeChoices.TYPE_JSON: FilterSpec(django_filters.CharFilter, lookup_expr='icontains'),
+    CustomFieldTypeChoices.TYPE_DATE: FilterSpec(MultiValueDateFilter, lookup_expr='exact'),
+    CustomFieldTypeChoices.TYPE_DATETIME: FilterSpec(MultiValueDateTimeFilter, lookup_expr='exact'),
+    CustomFieldTypeChoices.TYPE_URL: FilterSpec(MultiValueCharFilter, lookup_expr='icontains'),
     CustomFieldTypeChoices.TYPE_SELECT: FilterSpec(
         django_filters.MultipleChoiceFilter, extra_kwargs={'choices': lambda f: f.choices}
     ),
@@ -339,8 +407,8 @@ FIELD_TYPE_FILTERS = {
 }
 
 # Field types whose base filter's lookup_expr is driven by field.filter_logic,
-# mirroring NetBox core's CustomField.to_filter(). TYPE_JSON has no core "exact"
-# mode to mirror, so it's excluded and always stays icontains.
+# mirroring NetBox core's CustomField.to_filter(). JSON fields, which core doesn't
+# filter, have their own filters (_build_json_filters).
 FILTER_LOGIC_AWARE_TYPES = (
     CustomFieldTypeChoices.TYPE_TEXT,
     CustomFieldTypeChoices.TYPE_LONGTEXT,
@@ -521,6 +589,25 @@ def _build_polymorphic_filters(field) -> dict:
     return filters
 
 
+def _build_json_filters(field) -> dict:
+    """
+    Build a JSON field's filters: the value itself (equal to the JSON value with exact filter
+    logic, or containing the text with loose), its negation (``__n``) and ``__empty``.
+    """
+    label = field.label or field.name
+    if field.filter_logic == CustomFieldFilterLogicChoices.FILTER_EXACT:
+        value_filter = functools.partial(JSONValueFilter, field_name=field.name, label=label)
+    else:
+        value_filter = functools.partial(
+            MultiValueCharFilter, field_name=field.name, lookup_expr='icontains', label=label
+        )
+    return {
+        field.name: value_filter(),
+        f'{field.name}__n': value_filter(exclude=True),
+        f'{field.name}__empty': JSONEmptyFilter(field_name=field.name, label=label),
+    }
+
+
 def build_filter_for_field(field) -> dict:
     """
     Build django-filter Filter instances for a CustomObjectTypeField.
@@ -544,13 +631,16 @@ def build_filter_for_field(field) -> dict:
     if field.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
         base_label = field.label or field.name
         return {
-            f'{field.name}_latitude': django_filters.NumberFilter(
+            f'{field.name}_latitude': MultiValueDecimalFilter(
                 field_name=f'{field.name}_latitude', label=f'{base_label} (latitude)'
             ),
-            f'{field.name}_longitude': django_filters.NumberFilter(
+            f'{field.name}_longitude': MultiValueDecimalFilter(
                 field_name=f'{field.name}_longitude', label=f'{base_label} (longitude)'
             ),
         }
+
+    if field.type == CustomFieldTypeChoices.TYPE_JSON:
+        return _build_json_filters(field)
 
     if field.type == CustomObjectFieldTypeChoices.TYPE_ARRAY:
         label = field.label or field.name
@@ -743,6 +833,21 @@ def get_filterset_class(model):
             reference_filter = copy.deepcopy(filters[field_name])
             reference_filter.lookup_expr = 'exact'
             filters.update(cls.get_additional_lookups(field_name, reference_filter))
+        # COMPAT(netbox<4.7.3): NetBox kept a numeric or date filter's class for its __empty
+        # variant, which looks up isnull, so the variant rejected true and false.
+        for name, existing in filters.items():
+            if (
+                name.endswith('__empty')
+                and existing.lookup_expr == 'isnull'
+                and not isinstance(existing, django_filters.BooleanFilter)
+            ):
+                filters[name] = django_filters.BooleanFilter(
+                    field_name=existing.field_name,
+                    lookup_expr='isnull',
+                    label=existing.label,
+                    exclude=existing.exclude,
+                    distinct=existing.distinct,
+                )
         return filters
 
     attrs['get_filters'] = classmethod(get_filters)

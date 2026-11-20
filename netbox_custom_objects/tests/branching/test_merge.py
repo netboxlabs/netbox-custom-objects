@@ -178,6 +178,35 @@ class FieldAttributeChangesTestCase(BranchingTestBase, _TestBase):
         # __str__ now follows the newly-primary 'title' field.
         self.assertEqual(str(co_main), 'Widget')
 
+    def test_primary_field_promotion_merge(self):
+        """Make another field primary in a branch; main gets one primary field after the merge."""
+        with event_tracking(self.request):
+            cot = CustomObjectType.objects.create(name='promote_cot', slug='promote-cot')
+            for name, primary in (('code', True), ('title', False)):
+                CustomObjectTypeField.objects.create(
+                    custom_object_type=cot, name=name, label=name.title(), type='text', primary=primary
+                )
+            co = cot.get_model().objects.create(code='ABC', title='Widget')
+
+        cot_pk, co_pk = cot.pk, co.pk
+        branch = _provision_branch('Promote Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+
+        # Only the new primary field is saved; the old one is demoted with it.
+        with activate_branch(branch), event_tracking(branch_request):
+            f_title = CustomObjectTypeField.objects.get(custom_object_type=cot, name='title')
+            f_title.snapshot()
+            f_title.primary = True
+            f_title.save()
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        cot_main = CustomObjectType.objects.get(pk=cot_pk)
+        self.assertEqual(list(cot_main.fields.filter(primary=True).values_list('name', flat=True)), ['title'])
+        self.assertEqual(str(cot_main.get_model().objects.get(pk=co_pk)), 'Widget')
+
     def test_field_required_toggle_merge(self):
         """Toggle a field's required flag from False to True across merge.
 

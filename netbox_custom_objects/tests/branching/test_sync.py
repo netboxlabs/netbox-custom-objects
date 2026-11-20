@@ -4,8 +4,10 @@ Syncing changes made in main into a branch, including changes made on both sides
 
 import unittest
 
-from django.db import connections
+from django.db import connection, connections
 
+from core.models import ObjectType
+from dcim.models import Site
 from netbox_custom_objects.models import (
     CustomObjectType,
     CustomObjectTypeField,
@@ -96,6 +98,73 @@ class BranchSyncTestCase(BranchingTestBase, _TestBase):
             BranchModel = cot_branch.get_model()
             co_branch = BranchModel.objects.get(pk=co_pk)
             self.assertEqual(co_branch.title, 'main object')
+
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class ReplayMissingThroughTableTestCase(BranchingTestBase, _TestBase):
+    def test_replay_skips_through_table_missing_from_branch(self):
+        """
+        Replaying an object with a multi-object value into a branch whose copy of the
+        field's through table is missing saves the object and leaves main's through
+        table alone, though the branch's queries for that table would reach main's.
+        """
+        cot = CustomObjectType.objects.create(name='replay_cot', slug='replay-cot')
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot, name='name', label='Name', type='text', primary=True
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot,
+            name='sites',
+            label='Sites',
+            type='multiobject',
+            related_object_type=ObjectType.objects.get_for_model(Site),
+        )
+        site = Site.objects.create(name='Replay Site', slug='replay-site')
+        through_table = cot.get_model()._meta.get_field('sites').remote_field.through._meta.db_table
+        branch = _provision_branch('Replay Branch', 'iterative', self.user)
+        with connections[branch.connection_name].cursor() as cursor:
+            cursor.execute(f'DROP TABLE "{branch.schema_name}"."{through_table}"')
+
+        with activate_branch(branch):
+            model = CustomObjectType.objects.get(pk=cot.pk).get_model()
+            model.deserialize_object({'name': 'Replayed', 'sites': [site.pk]}, pk=9001).save(
+                using=branch.connection_name
+            )
+            self.assertTrue(model.objects.filter(pk=9001).exists())
+
+        with connection.cursor() as cursor:
+            cursor.execute(f'SELECT COUNT(*) FROM "{through_table}"')
+            self.assertEqual(cursor.fetchone()[0], 0)
+
+    def test_replay_skips_polymorphic_through_table_missing_from_branch(self):
+        """The same for a polymorphic multi-object value."""
+        cot = CustomObjectType.objects.create(name='replay_cot', slug='replay-cot')
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot, name='name', label='Name', type='text', primary=True
+        )
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=cot, name='things', label='Things', type='multiobject', is_polymorphic=True
+        )
+        field.related_object_types.set([ObjectType.objects.get_for_model(Site)])
+        site = Site.objects.create(name='Replay Site', slug='replay-site')
+        model = cot.get_model()
+        obj = model.objects.create(name='Original')
+        obj.things.add(site)
+        data = model.objects.get(pk=obj.pk).serialize_object()
+        through_table = field.through_table_name
+        branch = _provision_branch('Replay Branch', 'iterative', self.user)
+        # Provisioning doesn't copy polymorphic through tables yet; drop the copy if it does.
+        with connections[branch.connection_name].cursor() as cursor:
+            cursor.execute(f'DROP TABLE IF EXISTS "{branch.schema_name}"."{through_table}"')
+
+        with activate_branch(branch):
+            model = CustomObjectType.objects.get(pk=cot.pk).get_model()
+            model.deserialize_object({**data, 'name': 'Replayed'}, pk=9001).save(using=branch.connection_name)
+            self.assertTrue(model.objects.filter(pk=9001).exists())
+
+        with connection.cursor() as cursor:
+            cursor.execute(f'SELECT source_id FROM "{through_table}"')
+            self.assertEqual(cursor.fetchall(), [(obj.pk,)])
 
 
 # ── Concurrent-edit tests (both main and branch modified before sync/merge) ───
