@@ -204,8 +204,8 @@ class UniquenessConstraintTestError(Exception):
     pass
 
 
-def _table_exists(table_name, conn=None, schema=None):
-    """Return True if *table_name* exists in *conn*'s own schema, or in *schema* if given.
+def _table_exists(table_name, conn=None):
+    """Return True if *table_name* exists in *conn*'s own schema.
 
     Defaults to the global ``connection`` (main schema).  When the caller is
     operating inside a branch context, pass the branch's connection so the
@@ -218,9 +218,8 @@ def _table_exists(table_name, conn=None, schema=None):
         conn = connection
     with conn.cursor() as cursor:
         cursor.execute(
-            'SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_tables '
-            'WHERE schemaname = COALESCE(%s, current_schema()) AND tablename = %s)',
-            [schema, table_name],
+            'SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = current_schema() AND tablename = %s)',
+            [table_name],
         )
         return cursor.fetchone()[0]
 
