@@ -16,6 +16,7 @@ from django.db.utils import OperationalError, ProgrammingError
 
 from netbox.plugins import PluginConfig
 
+from .branching import merging_branch_model
 from .constants import APP_LABEL as APP_LABEL
 from .utilities import (
     extract_cot_id_from_model_name,
@@ -143,14 +144,18 @@ def _register_branching_hooks_once():
 
     from .branching import (
         add_custom_object_dependencies,
+        mark_merging_branch,
         objectchange_field_migrator,
         remove_unmerged_object_types,
         supports_branching_resolver,
+        unmark_merging_branch,
     )
 
     for sig in (pre_merge, post_merge, pre_sync, post_sync, pre_revert, post_revert):
         sig.connect(_reset_deferred_co_field_data, weak=False)
     branching_post_migrate.connect(_heal_branch_on_migrate, weak=False)
+    pre_merge.connect(mark_merging_branch, weak=False)
+    post_merge.connect(unmark_merging_branch, weak=False)
     post_delete.connect(remove_unmerged_object_types, sender=Branch, weak=False)
 
     register_branching_resolver(supports_branching_resolver)
@@ -713,13 +718,15 @@ class CustomObjectsPluginConfig(PluginConfig):
         except LookupError:
             pass
         else:
-            # The registry is process-wide, so a class built for a branch also answers
-            # lookups in main.
-            if getattr(model, '_context_branch_id', None) is not None:
+            # The registry is process-wide, so a type's model built for one branch also
+            # answers lookups in main and in other branches.  A through model has no type
+            # id of its own.
+            context_branch_id = getattr(model, '_context_branch_id', None)
+            if context_branch_id is not None and isinstance(getattr(model, 'custom_object_type_id', None), int):
                 from .models import CustomObjectType
 
-                if CustomObjectType._active_branch_id() is None:
-                    return self._get_main_model(model, model_name)
+                if context_branch_id != CustomObjectType._active_branch_id():
+                    return self._get_context_model(model, model_name)
             # A dynamic model built inside a transaction that then rolled back no
             # longer matches its table; rebuild it (issue #767).  See
             # CustomObjectType.get_model() and _mark_registered_in_transaction.
@@ -761,7 +768,7 @@ class CustomObjectsPluginConfig(PluginConfig):
             obj = CustomObjectType.objects.get(pk=custom_object_type_id)
             return obj.get_model()
         except CustomObjectType.DoesNotExist:
-            if model := self._get_merging_branch_model(custom_object_type_id):
+            if model := merging_branch_model(custom_object_type_id):
                 return model
             raise LookupError(f"App '{self.label}' doesn't have a '{model_name}' model.") from None
         except (ProgrammingError, OperationalError):
@@ -773,54 +780,32 @@ class CustomObjectsPluginConfig(PluginConfig):
             # which could be missing or have an absent column.
             raise LookupError(f"App '{self.label}' doesn't have a '{model_name}' model.")
 
-    def _get_main_model(self, model, model_name):
-        """Main's class for *model*, which was built for a branch.
+    def _get_context_model(self, model, model_name):
+        """The active context's class for *model*, which was built for another branch.
 
-        Raises ``LookupError`` if main has no such type, e.g. one created in a branch
-        that hasn't been merged, as a process that never built it would.  Otherwise
-        netbox-branching would replicate the type's table, which main doesn't have,
-        into new branches.  The exception is a type of a branch being merged; see
-        _get_merging_branch_model().
+        Raises ``LookupError`` if the type isn't in the active context, e.g. one created
+        in a branch that hasn't been merged, as a process that never built it would.
+        Otherwise netbox-branching would replicate the type's table, which main doesn't
+        have, into new branches.  The exception is a type of the branch this process is
+        merging; see merging_branch_model().
         """
         from .models import CustomObjectType
 
         cot_id = model.custom_object_type_id
-        main_model = CustomObjectType.get_cached_model(cot_id)
-        if main_model is not None:
-            return main_model
+        context_model = CustomObjectType.get_cached_model(cot_id, CustomObjectType._active_branch_id())
+        if context_model is not None:
+            return context_model
         if self._dynamic_model_creation_unsafe():
             return model
         try:
             return CustomObjectType.objects.get(pk=cot_id).get_model()
         except CustomObjectType.DoesNotExist:
-            if merging_model := self._get_merging_branch_model(cot_id):
-                return merging_model
-            raise LookupError(f"App '{self.label}' doesn't have a '{model_name}' model.") from None
+            pass
         except (ProgrammingError, OperationalError):
             return model
-
-    @staticmethod
-    def _get_merging_branch_model(cot_id):
-        """The model of a type that main doesn't have yet but a branch being merged does,
-        built in that branch; or None.
-
-        netbox-branching's squash merge looks up the model of every changed object
-        before it applies any change, so before the branch's new types exist in main.
-        """
-        if not is_branching_enabled():
-            return None
-        from netbox_branching.choices import BranchStatusChoices
-        from netbox_branching.models import Branch
-        from netbox_branching.utilities import activate_branch
-
-        from .models import CustomObjectType
-
-        for branch in Branch.objects.filter(status=BranchStatusChoices.MERGING):
-            with activate_branch(branch):
-                cot = CustomObjectType.objects.filter(pk=cot_id).first()
-                if cot is not None:
-                    return cot.get_model()
-        return None
+        if merging_model := merging_branch_model(cot_id):
+            return merging_model
+        raise LookupError(f"App '{self.label}' doesn't have a '{model_name}' model.")
 
     def get_models(self, include_auto_created=False, include_swapped=False):
         """Return all models for this plugin, including custom object type models."""

@@ -90,6 +90,8 @@ def evict_deleted_models(**kwargs):
 
 
 def _evict_deleted_types():
+    from django.contrib.contenttypes.models import ContentType
+
     from netbox_custom_objects.models import CustomObjectType
 
     registered = {}
@@ -115,6 +117,9 @@ def _evict_deleted_types():
         CustomObjectType.clear_model_cache(cot_id, all_branches=True)
         CustomObjectType.unregister_model(model)
         logger.debug('Unregistered model %s of a deleted Custom Object Type', model_name)
+    if deleted:
+        # The types' object types may be gone too.
+        ContentType.objects.clear_cache()
     return True
 
 
