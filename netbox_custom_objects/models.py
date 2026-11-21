@@ -27,6 +27,7 @@ from django.db.models.signals import m2m_changed, post_save, pre_delete
 from django.db.utils import OperationalError, ProgrammingError
 from django.dispatch import receiver
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from jinja2 import TemplateError as _JinjaTemplateError
 from jinja2 import Undefined as _JinjaUndefined
@@ -1765,6 +1766,11 @@ class CustomObjectType(NetBoxModel):
     # content_type.model_class() resolves to a class with main's column set —
     # branches may have renamed columns that don't exist in main.
     _model_cache = {}
+    # Registered classes found to have every field after their cache entry was evicted, with the cache generation
+    # of that check: {(cot_id, branch_id): (model, generation)}.
+    _complete_evicted_models = {}
+    # Bumped by every cache clear, so a completeness answer given before a clear is never reused.
+    _cache_generation = 0
     # Per-(cot, branch) through-model registry: {(cot_id, branch_id): {name: through}}.
     # Each context owns its through class so the source FK is set once at
     # generation time and never mutated to follow another context's CO class.
@@ -1930,6 +1936,8 @@ class CustomObjectType(NetBoxModel):
         clears everything.
         """
         with cls._global_lock:
+            cls._cache_generation += 1
+            cls._complete_evicted_models.clear()
             if custom_object_type_id is not None:
                 if all_branches:
                     for key in list(cls._model_cache):
@@ -6048,9 +6056,21 @@ def clear_cache_on_choice_set_save(sender, instance, **kwargs):
         .distinct()
     )
     for cot in CustomObjectType.objects.filter(id__in=cot_ids):
-        CustomObjectType.clear_model_cache(cot.id)
+        # Choice sets aren't branched, so the edit reaches the models of every context, not just the active one.
+        CustomObjectType.clear_model_cache(cot.id, all_branches=True)
         cot.snapshot()
         cot.save(update_fields=['cache_timestamp'])
+    if CustomObjectType._active_branch_id() is not None:
+        # The save above bumps the branch's copies only, and the branch can't see a type main gained after it was
+        # created; main's workers need the bump too, without a change record.
+        main_cot_ids = (
+            CustomObjectTypeField.objects.using(DEFAULT_DB_ALIAS)
+            .filter(choice_set_id=instance.pk)
+            .values('custom_object_type_id')
+        )
+        CustomObjectType.objects.using(DEFAULT_DB_ALIAS).filter(id__in=main_cot_ids).update(
+            cache_timestamp=timezone.now()
+        )
 
 
 def __getattr__(name):
