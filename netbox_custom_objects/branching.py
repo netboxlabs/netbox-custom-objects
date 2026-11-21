@@ -3,6 +3,13 @@
 Registered from ``__init__.ready()`` only when netbox-branching is installed.
 """
 
+import logging
+
+from django.apps import apps
+from django.db import connection
+
+logger = logging.getLogger(__name__)
+
 
 def supports_branching_resolver(model):
     """Mark CustomObject M2M through models as branchable.
@@ -235,3 +242,65 @@ def add_custom_object_dependencies(sender, collapsed_changes, **kwargs):
                 if ref != cc.key and ref in deletes_map:
                     deletes_map[ref].depends_on.add(cc.key)
                     cc.depended_by.add(ref)
+
+
+def remove_unmerged_object_types(sender, instance, **kwargs):
+    """``post_delete`` receiver for netbox-branching's ``Branch``: remove the object types
+    of Custom Object Types that exist neither in main nor in any remaining branch.
+
+    A type's object type is created in main even when the type is created in a branch, and
+    is left behind when the branch is deleted without being merged.  The deleted branch's
+    ChangeDiffs, which protect it, are gone by now.
+    """
+    from django.contrib.contenttypes.models import ContentType
+    from django.db import transaction
+    from django.db.models import ProtectedError
+    from netbox_branching.models import Branch
+
+    from core.models import ObjectType
+    from netbox.context import current_request
+    from netbox_custom_objects.constants import APP_LABEL
+    from netbox_custom_objects.models import CustomObjectType
+    from netbox_custom_objects.utilities import extract_cot_id_from_model_name
+
+    candidates = {}
+    for object_type in ObjectType.objects.filter(app_label=APP_LABEL):
+        cot_id = extract_cot_id_from_model_name(object_type.model)
+        if cot_id is not None:
+            candidates[int(cot_id)] = object_type
+    orphan_ids = set(candidates) - set(CustomObjectType.objects.filter(pk__in=candidates).values_list('pk', flat=True))
+    if not orphan_ids:
+        return
+
+    quote = connection.ops.quote_name
+    with connection.cursor() as cursor:
+        for branch in Branch.objects.exclude(pk=instance.pk):
+            if not orphan_ids:
+                return
+            table = f'{quote(branch.schema_name)}.{quote(CustomObjectType._meta.db_table)}'
+            cursor.execute('SELECT to_regclass(%s)', [table])
+            if cursor.fetchone()[0] is None:
+                continue
+            cursor.execute(f'SELECT id FROM {table} WHERE id = ANY(%s)', [list(orphan_ids)])
+            orphan_ids -= {row[0] for row in cursor.fetchall()}
+
+    for cot_id in sorted(orphan_ids):
+        object_type = candidates[cot_id]
+        # As in CustomObjectType.delete(): keep core's pre_delete handler out of it.
+        request_token = current_request.set(None)
+        try:
+            with transaction.atomic():
+                object_type.delete()
+        except ProtectedError:
+            logger.warning(
+                'Not removing object type %s of a Custom Object Type that no longer exists: still referenced',
+                object_type,
+            )
+            continue
+        finally:
+            current_request.reset(request_token)
+        model = apps.all_models.get(APP_LABEL, {}).get(object_type.model)
+        if model is not None:
+            CustomObjectType.unregister_model(model)
+        CustomObjectType.clear_model_cache(cot_id, all_branches=True)
+    ContentType.objects.clear_cache()
