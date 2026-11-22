@@ -1,6 +1,7 @@
 """
 Polymorphic object and multi-object fields at the model layer: deleting referenced
-objects, cycle detection and reverse descriptors.
+objects, cycle detection, reverse descriptors, and assigning a multi-object field's
+serialized rows.
 """
 
 from django.apps import apps
@@ -1339,3 +1340,50 @@ class StaleReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
 
         self.assertIn('co_stale_rev', Site.__dict__)
         self.assertEqual([obj.pk for obj in self.site.co_stale_rev.all()], [co.pk])
+
+
+# ---------------------------------------------------------------------------
+# Assigning a polymorphic multi-object field's serialized rows
+# ---------------------------------------------------------------------------
+
+
+class PolymorphicMultiObjectAssignmentTestCase(CustomObjectsTestCase, TestCase):
+    """netbox-branching applies a change to an existing object by assigning the field's
+    serialized rows; anything else must still go through the field's manager."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name='holder', slug='holders')
+        self.create_custom_object_type_field(self.cot, name='name', type='text', primary=True)
+        self.create_polymorphic_field(self.cot, [self.get_site_object_type()], name='targets', type='multiobject')
+        self.model = self.cot.get_model()
+        self.site_a = Site.objects.create(name='Site A', slug='site-a')
+        self.site_b = Site.objects.create(name='Site B', slug='site-b')
+
+    @staticmethod
+    def _rows(*sites):
+        return [{'content_type': 'dcim.site', 'object_id': site.pk} for site in sites]
+
+    def test_serialized_rows_replace_targets_on_save(self):
+        holder = self.model.objects.create(name='holder-1')
+        holder.targets.add(self.site_a)
+
+        holder.targets = self._rows(self.site_b)
+        self.assertEqual(list(holder.targets.all()), [self.site_a])
+        holder.save()
+
+        self.assertEqual(list(holder.targets.all()), [self.site_b])
+
+    def test_serialized_rows_on_new_object(self):
+        holder = self.model(name='holder-1')
+
+        holder.targets = self._rows(self.site_a, self.site_b)
+        holder.save()
+
+        self.assertEqual(sorted(site.pk for site in holder.targets.all()), [self.site_a.pk, self.site_b.pk])
+
+    def test_assigning_objects_raises(self):
+        holder = self.model.objects.create(name='holder-1')
+
+        with self.assertRaisesMessage(AttributeError, "Use 'targets.set(objs)'"):
+            holder.targets = [self.site_a]

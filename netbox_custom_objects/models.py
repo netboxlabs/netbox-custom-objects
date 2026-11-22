@@ -1523,6 +1523,39 @@ class CustomObject(
         # An indication that the model is a generated table model.
         return True
 
+    def save(self, *args, **kwargs):
+        pending = self.__dict__.pop('_pending_polymorphic_m2m_rows', None)
+        # An existing object's rows are applied first, so its change record has them.
+        if pending and not self._state.adding:
+            self._apply_polymorphic_m2m_rows(
+                pending, kwargs.get('using') or router.db_for_write(type(self), instance=self)
+            )
+            pending = None
+        super().save(*args, **kwargs)
+        if pending:
+            self._apply_polymorphic_m2m_rows(pending, self._state.db)
+
+    def _apply_polymorphic_m2m_rows(self, rows_by_field, using):
+        """Replace the rows of polymorphic multi-object fields with *rows_by_field*, as
+        ``{field_name: [{'content_type': 'app_label.model', 'object_id': id}, ...]}``, on
+        connection *using*."""
+        schema_conn = connections[using]
+        for field_name, rows in rows_by_field.items():
+            through_table = through_table_name_for(self.custom_object_type_id, field_name)
+            # Only this schema's own table: in a branch, an unqualified query for a table it
+            # lacks falls through to main's.
+            if not _table_exists(through_table, conn=schema_conn):
+                logger.warning(
+                    'Not setting %r on %s pk=%s: its table %s is missing from this schema',
+                    field_name,
+                    self._meta.db_table,
+                    self.pk,
+                    through_table,
+                )
+                continue
+            _apply_poly_m2m_rows(schema_conn, through_table, self.pk, rows)
+            getattr(self, '_prefetched_objects_cache', {}).pop(field_name, None)
+
     def delete(self, *args, **kwargs):
         # Two prep steps before super() so the deletion collector doesn't
         # raise traversing reverse FKs from through models:
