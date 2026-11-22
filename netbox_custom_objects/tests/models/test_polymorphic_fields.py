@@ -4,16 +4,19 @@ objects, cycle detection, reverse descriptors, and assigning a multi-object fiel
 serialized rows.
 """
 
+from unittest import mock
+
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import connection, transaction
+from django.db import DatabaseError, connection, models, transaction
 from django.test import TestCase
 
-from core.models import ObjectType
+from core.models import ObjectChange, ObjectType
 from dcim.models import Device, Site
 from ipam.choices import PrefixStatusChoices
 from ipam.models import Prefix
+from netbox.context_managers import event_tracking
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import (
     FIELD_TYPE_CLASS,
@@ -25,7 +28,7 @@ from netbox_custom_objects.models import (
     CustomObjectTypeField,
     _unwire_polymorphic_reverse_descriptors,
 )
-from netbox_custom_objects.tests.base import CustomObjectsTestCase
+from netbox_custom_objects.tests.base import CustomObjectsTestCase, _make_request
 
 # ---------------------------------------------------------------------------
 # Referenced-object deletion
@@ -1387,3 +1390,69 @@ class PolymorphicMultiObjectAssignmentTestCase(CustomObjectsTestCase, TestCase):
 
         with self.assertRaisesMessage(AttributeError, "Use 'targets.set(objs)'"):
             holder.targets = [self.site_a]
+
+    def test_deserialized_object_without_polymorphic_field_list_gets_targets(self):
+        # As in a change recorded without the list of polymorphic fields serialize_object() adds.
+        deserialized = self.model.deserialize_object({'name': 'holder-1', 'targets': self._rows(self.site_a)})
+
+        deserialized.save()
+
+        holder = self.model.objects.get(pk=deserialized.object.pk)
+        self.assertEqual(list(holder.targets.all()), [self.site_a])
+
+    def test_none_clears_targets(self):
+        holder = self.model.objects.create(name='holder-1')
+        holder.targets.add(self.site_a)
+
+        holder.targets = None
+        holder.save()
+
+        self.assertEqual(list(holder.targets.all()), [])
+
+    def test_change_record_of_new_object_has_targets(self):
+        holder = self.model(name='holder-1')
+        holder.targets = self._rows(self.site_a)
+
+        with event_tracking(_make_request(self.user)):
+            holder.save()
+
+        change = ObjectChange.objects.get(
+            changed_object_type=ObjectType.objects.get_for_model(self.model), changed_object_id=holder.pk
+        )
+        self.assertEqual(change.postchange_data['targets'], self._rows(self.site_a))
+
+    def test_failed_save_keeps_assigned_rows(self):
+        holder = self.model.objects.create(name='holder-1')
+        holder.targets.add(self.site_a)
+        holder.targets = self._rows(self.site_b)
+
+        with (
+            mock.patch.object(models.Model, '_save_table', side_effect=DatabaseError('save failed')),
+            self.assertRaises(DatabaseError),
+            transaction.atomic(),
+        ):
+            holder.save()
+        self.assertEqual(list(holder.targets.all()), [self.site_a])
+        holder.save()
+
+        self.assertEqual(list(holder.targets.all()), [self.site_b])
+
+    def test_refresh_from_db_discards_assigned_rows(self):
+        holder = self.model.objects.create(name='holder-1')
+        holder.targets.add(self.site_a)
+        holder.targets = []
+
+        holder.refresh_from_db()
+        holder.save()
+
+        self.assertEqual(list(holder.targets.all()), [self.site_a])
+
+    def test_rows_take_one_query_per_statement(self):
+        holder = self.model.objects.create(name='holder-1')
+        ContentType.objects.get_for_model(Site)
+
+        # Checking the table exists, deleting the old rows and inserting the new ones.
+        with self.assertNumQueries(3):
+            holder._apply_polymorphic_m2m_rows({'targets': self._rows(self.site_a, self.site_b)}, 'default')
+
+        self.assertEqual(sorted(site.pk for site in holder.targets.all()), [self.site_a.pk, self.site_b.pk])
