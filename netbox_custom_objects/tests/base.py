@@ -19,6 +19,7 @@ from netbox_custom_objects.models import (
     CustomObjectTypeField,
     _deferred_co_field_data,
 )
+from netbox_custom_objects.utilities import is_branching_enabled
 from users.models import ObjectPermission, Token
 from utilities.testing import create_test_user
 
@@ -386,7 +387,12 @@ class TransactionCleanupMixin:
         # Delete COTs and their backing tables before the DB flush.  Cleanup
         # is best-effort — if a previous test left the schema in a weird
         # state, log and continue rather than failing tearDown (which would
-        # mask the real failure that put us here).
+        # mask the real failure that put us here).  Branches' changes would
+        # otherwise make deleting a type in main refuse.
+        if is_branching_enabled():
+            from netbox_branching.models import ChangeDiff
+
+            ChangeDiff.objects.all().delete()
         for cot in CustomObjectType.objects.all():
             try:
                 cot.delete()

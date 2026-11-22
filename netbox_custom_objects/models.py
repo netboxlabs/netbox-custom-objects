@@ -333,6 +333,10 @@ class SchemaChangeRefused(AbortRequest):
     """A type, field or constraint change refused in a branch, as its model is exempt from branching."""
 
 
+class TypeChangedInBranches(AbortRequest):
+    """A type's deletion in main refused, as open branches have changes to its objects."""
+
+
 def exempt_schema_models():
     """Labels of the type, field and constraint models that netbox-branching exempts, e.g. by ``exempt_models``."""
     if not is_branching_enabled():
@@ -2167,10 +2171,12 @@ class CustomObjectType(NetBoxModel):
         # was generated before this target COT, _wire_polymorphic_reverse_descriptors()
         # called during the source's generation would have found model_class() == None
         # for this target and skipped it.  Now that the model class exists, re-wire.
-        own_ot = ObjectType.objects.get_for_model(model)
+        # get_for_model() only if the type has no object type yet: in a branch syncing the
+        # type's deletion from main, it would create one in main again.
+        own_ot_id = self.object_type_id or ObjectType.objects.get_for_model(model).pk
         for inbound_field in CustomObjectTypeField.objects.filter(
             is_polymorphic=True,
-            related_object_types=own_ot,
+            related_object_types=own_ot_id,
         ).exclude(related_name=''):
             _wire_polymorphic_reverse_descriptors(inbound_field)
 
@@ -2623,7 +2629,7 @@ class CustomObjectType(NetBoxModel):
                 # (Same pattern as the existing fix for polymorphic source FKs above at
                 # _after_model_generation lines 526-531.)
                 for inbound_field in CustomObjectTypeField.objects.filter(
-                    related_object_type=self.object_type,
+                    related_object_type_id=self.object_type_id,
                     type=CustomFieldTypeChoices.TYPE_MULTIOBJECT,
                     is_polymorphic=False,
                 ).iterator():
@@ -2669,7 +2675,7 @@ class CustomObjectType(NetBoxModel):
                 # holds a LazyForeignKey pointing here still references the old class.
                 # Walk inbound non-polymorphic object fields and patch them too.
                 for inbound_fk_field in CustomObjectTypeField.objects.filter(
-                    related_object_type=self.object_type,
+                    related_object_type_id=self.object_type_id,
                     type=CustomFieldTypeChoices.TYPE_OBJECT,
                     is_polymorphic=False,
                 ).iterator():
@@ -2951,6 +2957,43 @@ class CustomObjectType(NetBoxModel):
         with transaction.atomic(using=_get_schema_connection().alias):
             self._delete_type(*args, **kwargs)
 
+    def _refuse_delete_with_branch_changes(self):
+        """Refuse to delete this type in main while a branch that isn't merged or archived has
+        changes to its objects.
+
+        Deleting the type deletes its object type, which those changes refer to, so the
+        branch could no longer be synced or merged.  netbox-branching's ChangeDiff protects
+        the object type for this reason.  A merged branch's changes are only needed to revert
+        it.  A branch being merged or reverted counts as merged: its own merge or revert may
+        be what deletes the type.
+        """
+        if not is_branching_enabled() or self.object_type_id is None:
+            return
+        from netbox_branching.choices import BranchStatusChoices
+        from netbox_branching.models import ChangeDiff
+
+        branches = sorted(
+            set(
+                ChangeDiff.objects.filter(object_type_id=self.object_type_id)
+                .exclude(
+                    branch__status__in=(
+                        BranchStatusChoices.MERGING,
+                        BranchStatusChoices.MERGED,
+                        BranchStatusChoices.REVERTING,
+                        BranchStatusChoices.ARCHIVED,
+                    )
+                )
+                .values_list('branch__name', flat=True)
+            )
+        )
+        if branches:
+            raise TypeChangedInBranches(
+                _(
+                    "Custom Object Type {type} can't be deleted while these branches have changes to its "
+                    'objects: {branches}. Merge or delete the branches, or undo those changes in them, first.'
+                ).format(type=self, branches=', '.join(branches))
+            )
+
     def _delete_type(self, *args, **kwargs):
         _check_schema_change_allowed(CustomObjectType)
         # The cascade deletes the type's fields and constraints without calling their delete(),
@@ -2964,6 +3007,8 @@ class CustomObjectType(NetBoxModel):
         cot_id = self.id
         schema_conn = _get_schema_connection()
         in_branch = schema_conn is not connection
+        if not in_branch:
+            self._refuse_delete_with_branch_changes()
 
         # Deleted in main, the COT is gone everywhere, so every context's cached
         # class is stale.  Deleted in a branch, main and other branches still
@@ -2975,13 +3020,17 @@ class CustomObjectType(NetBoxModel):
         # stale class an earlier context cached.
         model = self.get_model()
 
+        # By the object type's id: a branch syncing the type's deletion from main no longer has
+        # the object type itself.
+        object_type_id = self.object_type_id
+
         # Delete all CustomObjectTypeFields that reference this CustomObjectType (non-polymorphic)
-        for field in CustomObjectTypeField.objects.filter(related_object_type=self.object_type):
+        for field in CustomObjectTypeField.objects.filter(related_object_type_id=object_type_id):
             field.delete()
 
         # Handle polymorphic fields that include this CustomObjectType among their allowed types
-        for field in CustomObjectTypeField.objects.filter(is_polymorphic=True, related_object_types=self.object_type):
-            field.related_object_types.remove(self.object_type)
+        for field in CustomObjectTypeField.objects.filter(is_polymorphic=True, related_object_types=object_type_id):
+            field.related_object_types.remove(object_type_id)
             if not field.related_object_types.exists():
                 field.delete()
 
@@ -2990,12 +3039,11 @@ class CustomObjectType(NetBoxModel):
         for field in CustomObjectTypeField.objects.filter(custom_object_type_id=cot_id, is_polymorphic=True):
             _unwire_polymorphic_reverse_descriptors(field)
 
-        object_type = ObjectType.objects.get_for_model(model)
-
         # ObjectChange and ObjectType records live in the main schema. Only clean
         # them up when operating outside a branch; inside a branch they belong to
         # main and must not be touched until the deletion is merged.
         if not in_branch:
+            object_type = ObjectType.objects.get_for_model(model)
             ObjectChange.objects.filter(changed_object_type=object_type).delete()
 
             # Delete any NetBox CustomField records (extras) with related_object_type pointing
@@ -3007,7 +3055,8 @@ class CustomObjectType(NetBoxModel):
 
         if not in_branch:
             # ChangeDiff has a PROTECT FK to ContentType/ObjectType — delete those
-            # records first so object_type.delete() is not blocked.
+            # records first so object_type.delete() is not blocked.  Only merged and
+            # archived branches can have any; see _refuse_delete_with_branch_changes().
             if is_branching_enabled():
                 from netbox_branching.models import ChangeDiff
 
