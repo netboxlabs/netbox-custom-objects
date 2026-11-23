@@ -7,14 +7,17 @@ them syncs the deletion.
 """
 
 import unittest
+from unittest import mock
 
 from django.db import connection as main_conn
+from django.db.models import ProtectedError
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
 from core.models import ObjectType
 from dcim.models import Site
+from netbox_custom_objects import branching
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, TypeChangedInBranches
 
@@ -23,6 +26,7 @@ from .base import HAS_BRANCHING, BranchingTestBase, _make_request, _provision_br
 
 if HAS_BRANCHING:
     from netbox_branching.choices import BranchStatusChoices
+    from netbox_branching.models import Branch
     from netbox_branching.utilities import activate_branch
 
     from netbox.context_managers import event_tracking
@@ -66,7 +70,38 @@ class TypeDeletedInMainTestCase(BranchingTestBase, _TestBase):
         branch = _provision_branch('Branch A', 'iterative', self.user)
         self._edit_widget_in(branch)
 
-        with self.assertRaisesMessage(TypeChangedInBranches, 'Branch A'):
+        with self.assertRaisesMessage(TypeChangedInBranches, 'Branch A. Merge or delete those branches first.'):
+            self._delete_type()
+
+        self.assertTrue(CustomObjectType.objects.filter(pk=self.cot.pk).exists())
+        self.assertTrue(self._object_type_exists())
+
+    def test_delete_refused_while_another_branch_is_merging(self):
+        branch = _provision_branch('Branch A', 'iterative', self.user)
+        self._edit_widget_in(branch)
+        # As while another process merges it.
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.MERGING)
+
+        with self.assertRaises(TypeChangedInBranches):
+            self._delete_type()
+
+    def test_delete_refused_after_branch_merge_failed(self):
+        branch = _provision_branch('Branch A', 'iterative', self.user)
+        self._edit_widget_in(branch)
+        # As left by a failed merge in this process, which netbox-branching sets back to ready.
+        self.addCleanup(branching._applying_branch.reset, branching._applying_branch.set(branch))
+
+        with self.assertRaises(TypeChangedInBranches):
+            self._delete_type()
+
+    def test_branch_change_made_after_the_check_protects_object_type(self):
+        branch = _provision_branch('Branch A', 'iterative', self.user)
+        self._edit_widget_in(branch)
+
+        with (
+            mock.patch.object(CustomObjectType, '_refuse_delete_with_branch_changes'),
+            self.assertRaises(ProtectedError),
+        ):
             self._delete_type()
 
         self.assertTrue(CustomObjectType.objects.filter(pk=self.cot.pk).exists())
@@ -144,6 +179,68 @@ class TypeDeletedInMainTestCase(BranchingTestBase, _TestBase):
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
         self.assertTrue(Site.objects.filter(pk=site.pk).exists())
+
+    def test_branch_syncs_deletion_of_type_with_self_referential_field(self):
+        with event_tracking(_make_request(self.user)):
+            CustomObjectTypeField.objects.create(
+                custom_object_type=self._cot(),
+                name='parent',
+                type='object',
+                related_object_type_id=self.cot.object_type_id,
+            )
+        branch = _provision_branch('Branch A', 'iterative', self.user)
+        self._delete_type()
+
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            self.assertFalse(CustomObjectType.objects.filter(pk=self.cot.pk).exists())
+
+    def test_branch_syncs_deletion_of_type_another_type_points_at(self):
+        with event_tracking(_make_request(self.user)):
+            other = CustomObjectType.objects.create(name='holder', slug='holders')
+            CustomObjectTypeField.objects.create(custom_object_type=other, name='name', type='text', primary=True)
+            CustomObjectTypeField.objects.create(
+                custom_object_type=other, name='widget', type='object', related_object_type_id=self.cot.object_type_id
+            )
+        branch = _provision_branch('Branch A', 'iterative', self.user)
+        self._delete_type()
+
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            self.assertFalse(CustomObjectType.objects.filter(pk=self.cot.pk).exists())
+            self.assertFalse(CustomObjectTypeField.objects.filter(custom_object_type=other, name='widget').exists())
+
+    def test_branch_field_pointing_at_type_blocks_deletion(self):
+        with event_tracking(_make_request(self.user)):
+            other = CustomObjectType.objects.create(name='holder', slug='holders')
+            CustomObjectTypeField.objects.create(custom_object_type=other, name='name', type='text', primary=True)
+        branch = _provision_branch('Branch A', 'iterative', self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            CustomObjectTypeField.objects.create(
+                custom_object_type_id=other.pk,
+                name='widget',
+                type='object',
+                related_object_type_id=self.cot.object_type_id,
+            )
+
+        with self.assertRaisesMessage(TypeChangedInBranches, 'Branch A'):
+            self._delete_type()
+
+    def test_branch_polymorphic_field_allowing_type_blocks_deletion(self):
+        with event_tracking(_make_request(self.user)):
+            other = CustomObjectType.objects.create(name='holder', slug='holders')
+            CustomObjectTypeField.objects.create(custom_object_type=other, name='name', type='text', primary=True)
+        branch = _provision_branch('Branch A', 'iterative', self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            field = CustomObjectTypeField.objects.create(
+                custom_object_type_id=other.pk, name='targets', type='multiobject', is_polymorphic=True
+            )
+            field.related_object_types.set([self.cot.object_type_id, ObjectType.objects.get_for_model(Site).pk])
+
+        with self.assertRaisesMessage(TypeChangedInBranches, 'Branch A'):
+            self._delete_type()
 
     def test_field_change_in_branch_doesnt_block_deletion(self):
         branch = _provision_branch('Branch A', 'iterative', self.user)

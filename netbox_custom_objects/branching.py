@@ -3,6 +3,41 @@
 Registered from ``__init__.ready()`` only when netbox-branching is installed.
 """
 
+from contextvars import ContextVar
+
+# The branch whose merge or revert this process is running, if any; see applying_branch().
+_applying_branch = ContextVar('netbox_custom_objects_applying_branch', default=None)
+
+
+def mark_applying_branch(sender, branch, **kwargs):
+    """netbox-branching's ``pre_merge`` and ``pre_revert`` receiver; see applying_branch()."""
+    _applying_branch.set(branch)
+
+
+def unmark_applying_branch(sender, **kwargs):
+    """netbox-branching's ``post_merge`` and ``post_revert`` receiver.
+
+    Neither is sent when the merge or revert fails, so applying_branch() also checks the
+    branch's status.
+    """
+    _applying_branch.set(None)
+
+
+def applying_branch():
+    """The branch whose merge or revert this process is running, or None."""
+    branch = _applying_branch.get()
+    if branch is None:
+        return None
+
+    from netbox_branching.choices import BranchStatusChoices
+    from netbox_branching.models import Branch
+
+    if not Branch.objects.filter(
+        pk=branch.pk, status__in=(BranchStatusChoices.MERGING, BranchStatusChoices.REVERTING)
+    ).exists():
+        return None
+    return branch
+
 
 def supports_branching_resolver(model):
     """Mark CustomObject M2M through models as branchable.

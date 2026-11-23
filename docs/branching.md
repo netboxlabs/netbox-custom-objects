@@ -55,7 +55,7 @@ Custom Object Types, their fields and constraints, and custom objects work in br
 - **Field renames.** If a field is renamed in both main and the branch, merging keeps the branch's name.
 - **Portable schema.** A [portable schema document](portable-schema.md) can be applied in a branch. Over the REST API, select the branch with the `X-NetBox-Branch` header.
 - **GraphQL.** The GraphQL API follows the active branch, so its custom object types and fields match the branch's Custom Object Types.
-- **Deleting a type in main.** A Custom Object Type can't be deleted in main while a branch that hasn't been merged or archived has changes to its objects, since the branch could then no longer be synced or merged. The error names those branches; merge or delete them, or undo the changes in them, first. Other branches remove the type when they're synced.
+- **Deleting a type in main.** A Custom Object Type can't be deleted in main while a branch that hasn't been merged or archived has changes to its objects, or has added a field that points at it, since the branch could then no longer be synced or merged. The error names those branches; merge or delete them first. Other branches remove the type when they're synced.
 
 ## Upgrades
 
