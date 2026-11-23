@@ -271,41 +271,41 @@ def _apply_poly_m2m_rows(schema_conn, through_table, co_pk, rows):
     matching ``^[a-z0-9]+(_[a-z0-9]+)*$``) — safe to interpolate directly
     into SQL.
     """
-    alias = schema_conn.alias
-    inserted = 0
+    content_types = ContentType.objects.db_manager(schema_conn.alias)
+    values = []
     dropped = 0
+    for row in rows:
+        ct_label = row.get('content_type')
+        obj_id = row.get('object_id')
+        if not ct_label or obj_id is None:
+            dropped += 1
+            continue
+        try:
+            # Cached per alias.
+            ct = content_types.get_by_natural_key(*ct_label.split('.', 1))
+        except (TypeError, ContentType.DoesNotExist) as exc:
+            logger.warning(
+                'poly M2M replay: ct %r unresolved (%s) for %s pk=%s',
+                ct_label,
+                exc,
+                through_table,
+                co_pk,
+            )
+            dropped += 1
+            continue
+        values.append([co_pk, ct.pk, obj_id])
+    inserted = len(values)
     with schema_conn.cursor() as cursor:
         cursor.execute(
             f'DELETE FROM "{through_table}" WHERE source_id = %s',
             [co_pk],
         )
-        for row in rows:
-            ct_label = row.get('content_type')
-            obj_id = row.get('object_id')
-            if not ct_label or obj_id is None:
-                dropped += 1
-                continue
-            try:
-                app_label, model_name = ct_label.split('.', 1)
-                ct = ContentType.objects.using(alias).get(
-                    app_label=app_label,
-                    model=model_name,
-                )
-            except (ValueError, ContentType.DoesNotExist) as exc:
-                logger.warning(
-                    'poly M2M replay: ct %r unresolved (%s) for %s pk=%s',
-                    ct_label,
-                    exc,
-                    through_table,
-                    co_pk,
-                )
-                dropped += 1
-                continue
+        if values:
             cursor.execute(
-                f'INSERT INTO "{through_table}" (source_id, content_type_id, object_id) VALUES (%s, %s, %s)',
-                [co_pk, ct.pk, obj_id],
+                f'INSERT INTO "{through_table}" (source_id, content_type_id, object_id) VALUES '
+                + ', '.join(['(%s, %s, %s)'] * len(values)),
+                [value for row in values for value in row],
             )
-            inserted += 1
     # All rows dropped — flag it.  A CO with poly-M2M data should land with at
     # least one row; zero inserts means the replay silently lost data.
     if rows and inserted == 0 and dropped > 0:
@@ -1341,6 +1341,11 @@ class CustomObject(
 
             def save(self, using=None, **_kwargs):
                 _using = using or DEFAULT_DB_ALIAS
+                # Polymorphic M2M rows are written with the object (CustomObject._save_table()),
+                # directly into the through table on _using.  That bypasses manager.add() →
+                # m2m_changed → handle_changed_object, which can route across DB aliases.
+                if poly_m2m_data:
+                    obj.__dict__.setdefault('_pending_polymorphic_m2m_rows', {}).update(poly_m2m_data)
                 models.Model.save_base(obj, using=_using, raw=True)
                 obj_pk = obj.pk  # captures auto-assigned PK
                 # Re-apply M2M relations.  A field's through table can be missing from
@@ -1372,22 +1377,6 @@ class CustomObject(
                         )
                         continue
                     manager.set(related_pks)
-                # Replay polymorphic M2M directly via the through, pinned to
-                # _using.  Bypasses manager.add() → m2m_changed →
-                # handle_changed_object, which can route across DB aliases.
-                schema_conn_local = connections[_using]
-                for field_name, rows in poly_m2m_data.items():
-                    through_table = through_table_name_for(cot_id, field_name)
-                    # The same check as above: these queries are unqualified too.
-                    if not _table_exists(through_table, conn=schema_conn_local):
-                        logger.debug(
-                            'deserialize_object: skipped polymorphic M2M %r on %s pk=%s (through table absent)',
-                            field_name,
-                            table_name,
-                            obj_pk,
-                        )
-                        continue
-                    _apply_poly_m2m_rows(schema_conn_local, through_table, obj_pk, rows)
                 # Stash full data for deferred column updates (squash ordering fix).
                 deferred = _deferred_co_field_data.get()
                 if deferred is None:
@@ -1522,6 +1511,52 @@ class CustomObject(
     def _generated_table_model(self):
         # An indication that the model is a generated table model.
         return True
+
+    def _save_table(self, raw=False, cls=None, force_insert=False, force_update=False, using=None, update_fields=None):
+        """Also write polymorphic multi-object rows assigned to this object (see
+        PolymorphicM2MDescriptor.__set__()).
+
+        Both save() and save_base() (used by deserialize_object()) come through here.  The
+        rows are written once the object's row is, before post_save, so its change record
+        has them, and in the same transaction.
+        """
+        pending = self.__dict__.get('_pending_polymorphic_m2m_rows')
+        if not pending:
+            return super()._save_table(raw, cls, force_insert, force_update, using, update_fields)
+        with transaction.atomic(using=using, savepoint=False):
+            updated = super()._save_table(raw, cls, force_insert, force_update, using, update_fields)
+            self._apply_polymorphic_m2m_rows(pending, using)
+        del self.__dict__['_pending_polymorphic_m2m_rows']
+        return updated
+
+    def _apply_polymorphic_m2m_rows(self, rows_by_field, using):
+        """Replace the rows of polymorphic multi-object fields with *rows_by_field*, as
+        ``{field_name: [{'content_type': 'app_label.model', 'object_id': id}, ...]}``, on
+        connection *using*."""
+        schema_conn = connections[using]
+        for field_name, rows in rows_by_field.items():
+            through_table = through_table_name_for(self.custom_object_type_id, field_name)
+            # Only this schema's own table: in a branch, an unqualified query for a table it
+            # lacks falls through to main's.
+            if not _table_exists(through_table, conn=schema_conn):
+                # A new object's can be missing in a squash merge, until the field's own
+                # create is replayed.
+                logger.log(
+                    logging.DEBUG if self._state.adding else logging.WARNING,
+                    'Not setting %r on %s pk=%s: its table %s is missing from this schema',
+                    field_name,
+                    self._meta.db_table,
+                    self.pk,
+                    through_table,
+                )
+                continue
+            _apply_poly_m2m_rows(schema_conn, through_table, self.pk, rows)
+            getattr(self, '_prefetched_objects_cache', {}).pop(field_name, None)
+
+    def refresh_from_db(self, *args, **kwargs):
+        # Discard rows assigned but not yet saved, like the object's other unsaved values.
+        self.__dict__.pop('_pending_polymorphic_m2m_rows', None)
+        super().refresh_from_db(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
         # Two prep steps before super() so the deletion collector doesn't

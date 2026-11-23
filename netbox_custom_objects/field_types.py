@@ -2541,6 +2541,16 @@ class PolymorphicManyToManyManager:
         return iter(self.all())
 
 
+def _is_serialized_polymorphic_m2m_rows(value):
+    """True if *value* is a polymorphic multi-object field's serialized rows: a list of
+    ``{'content_type': 'app_label.model', 'object_id': id}``, or None for none (as
+    netbox-branching sends for a value one side of a change doesn't have)."""
+    return value is None or (
+        isinstance(value, list)
+        and all(isinstance(row, dict) and set(row) == {'content_type', 'object_id'} for row in value)
+    )
+
+
 class PolymorphicM2MDescriptor:
     """
     Descriptor for polymorphic many-to-many fields.
@@ -2568,6 +2578,13 @@ class PolymorphicM2MDescriptor:
         )
 
     def __set__(self, instance, value):
+        # netbox-branching applies a change to an existing object (merge, sync or revert)
+        # by assigning each changed value, here the field's rows as
+        # CustomObject.serialize_object() writes them.  They're applied when the object is
+        # saved; see CustomObject._save_table().
+        if _is_serialized_polymorphic_m2m_rows(value):
+            instance.__dict__.setdefault('_pending_polymorphic_m2m_rows', {})[self.field_name] = list(value or ())
+            return
         raise AttributeError(
             f"Direct assignment to '{self.field_name}' is not supported. "
             f"Use '{self.field_name}.set(objs)' to update polymorphic M2M fields."
