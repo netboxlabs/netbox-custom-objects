@@ -144,18 +144,20 @@ def _register_branching_hooks_once():
 
     from .branching import (
         add_custom_object_dependencies,
-        mark_merging_branch,
+        mark_applying_branch,
         objectchange_field_migrator,
         remove_unmerged_object_types,
         supports_branching_resolver,
-        unmark_merging_branch,
+        unmark_applying_branch,
     )
 
     for sig in (pre_merge, post_merge, pre_sync, post_sync, pre_revert, post_revert):
         sig.connect(_reset_deferred_co_field_data, weak=False)
+    for sig in (pre_merge, pre_revert):
+        sig.connect(mark_applying_branch, weak=False)
+    for sig in (post_merge, post_revert):
+        sig.connect(unmark_applying_branch, weak=False)
     branching_post_migrate.connect(_heal_branch_on_migrate, weak=False)
-    pre_merge.connect(mark_merging_branch, weak=False)
-    post_merge.connect(unmark_merging_branch, weak=False)
     post_delete.connect(remove_unmerged_object_types, sender=Branch, weak=False)
 
     register_branching_resolver(supports_branching_resolver)

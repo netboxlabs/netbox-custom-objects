@@ -55,6 +55,7 @@ Custom Object Types, their fields and constraints, and custom objects work in br
 - **Field renames.** If a field is renamed in both main and the branch, merging keeps the branch's name.
 - **Portable schema.** A [portable schema document](portable-schema.md) can be applied in a branch. Over the REST API, select the branch with the `X-NetBox-Branch` header.
 - **GraphQL.** The GraphQL API follows the active branch, so its custom object types and fields match the branch's Custom Object Types.
+- **Deleting types in main.** Deletion is blocked if an active branch has changed the type's objects or added a field referencing it. Merge or delete the listed branches first. Unaffected branches can sync the deletion.
 
 ## Upgrades
 
@@ -63,4 +64,5 @@ When an upgrade adds columns to Custom Object Type tables, `manage.py migrate` u
 ## Known Limitations
 
 - **Reverting a deleted Custom Object Type doesn't restore its objects.** If a Custom Object Type is deleted in a branch and the branch is merged and then reverted, the type, its fields and its table come back with their original IDs, but its objects don't. Deleting the type drops its table directly, so there is no change record for each object to replay.
+- **Reverting after type deletion.** A merged branch cannot be reverted if a Custom Object Type whose objects it changed has since been deleted in main.
 - **Reverse relations for polymorphic fields.** For a polymorphic field added in a branch, its reverse relation on the target models (the field's **Related name**) isn't available until the branch is merged.

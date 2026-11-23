@@ -13,8 +13,35 @@ from django.db.utils import OperationalError, ProgrammingError
 
 logger = logging.getLogger(__name__)
 
-# The branch this process is merging, if any; see merging_branch_model().
-_merging_branch = ContextVar('netbox_custom_objects_merging_branch', default=None)
+# The branch whose merge or revert this process is running, if any; see applying_branch().
+_applying_branch = ContextVar('netbox_custom_objects_applying_branch', default=None)
+
+
+def mark_applying_branch(sender, branch, **kwargs):
+    """netbox-branching's ``pre_merge`` and ``pre_revert`` receiver; see applying_branch()."""
+    _applying_branch.set(branch)
+
+
+def unmark_applying_branch(sender, **kwargs):
+    """Clear the branch context after a merge or revert."""
+    _applying_branch.set(None)
+
+
+def applying_branch():
+    """The branch whose merge or revert this process is running, or None."""
+    branch = _applying_branch.get()
+    if branch is None:
+        return None
+
+    from netbox_branching.choices import BranchStatusChoices
+    from netbox_branching.models import Branch
+
+    # Failed operations skip the post signals, so ignore stale branch contexts.
+    if not Branch.objects.filter(
+        pk=branch.pk, status__in=(BranchStatusChoices.MERGING, BranchStatusChoices.REVERTING)
+    ).exists():
+        return None
+    return branch
 
 
 def supports_branching_resolver(model):
@@ -250,26 +277,14 @@ def add_custom_object_dependencies(sender, collapsed_changes, **kwargs):
                     cc.depended_by.add(ref)
 
 
-def mark_merging_branch(sender, branch, **kwargs):
-    """netbox-branching's ``pre_merge`` receiver; see merging_branch_model()."""
-    _merging_branch.set(branch)
-
-
-def unmark_merging_branch(sender, **kwargs):
-    """netbox-branching's ``post_merge`` receiver.
-
-    It isn't sent when a merge fails, so merging_branch_model() also checks the branch's status.
-    """
-    _merging_branch.set(None)
-
-
 def merging_branch_model(cot_id):
     """The model of Custom Object Type *cot_id* in the branch this process is merging, or None.
 
     netbox-branching's squash merge looks up the model of every changed object before it
     applies any change, so before the branch's new types exist in main.
     """
-    branch = _merging_branch.get()
+    # Not applying_branch(): the branch must be merging, not reverting.
+    branch = _applying_branch.get()
     if branch is None:
         return None
 

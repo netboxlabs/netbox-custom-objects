@@ -123,7 +123,7 @@ class BranchOnlyTypeTestCase(BranchingTestBase, _TestBase):
         branch = _provision_branch('Branch A', 'iterative', self.user)
         cot = self._create_type_in(branch, 'widget')
         # As left by a failed merge, which netbox-branching sets back to ready.
-        self.addCleanup(branching._merging_branch.reset, branching._merging_branch.set(branch))
+        self.addCleanup(branching._applying_branch.reset, branching._applying_branch.set(branch))
 
         self.assertIsNone(self._object_type(cot).model_class())
 
@@ -131,7 +131,7 @@ class BranchOnlyTypeTestCase(BranchingTestBase, _TestBase):
         branch = _provision_branch('Branch A', 'iterative', self.user)
         cot = self._create_type_in(branch, 'widget')
         Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.MERGING)
-        self.addCleanup(branching._merging_branch.reset, branching._merging_branch.set(branch))
+        self.addCleanup(branching._applying_branch.reset, branching._applying_branch.set(branch))
 
         with mock.patch('netbox_branching.utilities.activate_branch', side_effect=ProgrammingError):
             self.assertIsNone(self._object_type(cot).model_class())
