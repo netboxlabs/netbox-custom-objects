@@ -225,6 +225,13 @@ def _table_exists(table_name, conn=None):
         return cursor.fetchone()[0]
 
 
+def _own_table_names(conn):
+    """The names of the tables in *conn*'s own schema; see ``_table_exists()``."""
+    with conn.cursor() as cursor:
+        cursor.execute('SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = current_schema()')
+        return {row[0] for row in cursor.fetchall()}
+
+
 USER_TABLE_DATABASE_NAME_PREFIX = 'custom_objects_'
 
 
@@ -1577,26 +1584,37 @@ class CustomObject(
         super().refresh_from_db(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        # Two prep steps before super() so the deletion collector doesn't
+        # Three prep steps before super() so the deletion collector doesn't
         # raise traversing reverse FKs from through models:
-        #   1. Realign each through's ``source`` FK to ``type(self)`` —
-        #      isinstance(instance, fk.related_model) otherwise sees two
-        #      Table*Model classes and fails.
+        #   1. Realign each through's ``source`` and ``target`` FKs to
+        #      ``type(self)`` — isinstance(instance, fk.related_model) otherwise
+        #      sees two Table*Model classes and fails.
         #   2. Temporarily unregister throughs whose physical table is gone
         #      (squash revert drops field-CREATEs before CO-CREATEs, so the
         #      CO's collector hits ``relation does not exist`` otherwise).
+        #   3. In a branch, give ``type(self)`` the reverse FKs of the throughs.
+        #      Django only builds reverse relations for registered models, and
+        #      apps.all_models holds main's class, so the collector would leave
+        #      the object's through rows behind.
         cls = type(self)
         prefix = f'through_{cls._meta.db_table}'
         registry = apps.all_models.get(APP_LABEL, {})
         # Branch contexts may have through tables only in the branch schema, so
         # introspect via the active schema's connection, not the main one.
-        existing_tables = _get_schema_connection().introspection.table_names()
+        schema_conn = _get_schema_connection()
+        existing_tables = schema_conn.introspection.table_names()
+        # But only the schema's own tables get their rows deleted: a branch's search
+        # path falls through to main's, and deleting rows there would change main.
+        own_tables = _own_table_names(schema_conn)
         hidden = {}
+        relation_tree = []
         for name, through in list(registry.items()):
-            if not name.startswith(prefix):
+            if not name.startswith('through_'):
                 continue
-            if through._meta.db_table not in existing_tables:
+            if name.startswith(prefix) and through._meta.db_table not in existing_tables:
                 hidden[name] = registry.pop(name)
+                continue
+            if through._meta.db_table not in own_tables:
                 continue
             for fk_name in ('source', 'target'):
                 try:
@@ -1608,10 +1626,17 @@ class CustomObject(
                     continue
                 field.remote_field.model = cls
                 field.__dict__.pop('related_model', None)
+                relation_tree.append(field)
+        unregistered = registry.get(cls._meta.model_name) is not cls
+        if unregistered:
+            cls._meta._expire_cache(forward=False)
+            cls._meta.__dict__['_relation_tree'] = relation_tree
         try:
             return super().delete(*args, **kwargs)
         finally:
             registry.update(hidden)
+            if unregistered:
+                cls._meta._expire_cache(forward=False)
 
     @property
     def clone_fields(self):
