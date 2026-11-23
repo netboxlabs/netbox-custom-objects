@@ -1,10 +1,4 @@
-"""
-A Custom Object Type deleted in main while branches exist.
-
-Deleting it removes its object type, which a branch's changes to the type's objects refer
-to, so the deletion is refused while an open branch has such changes.  A branch without
-them syncs the deletion.
-"""
+"""Tests for deleting Custom Object Types in main with existing branches."""
 
 import unittest
 from unittest import mock
@@ -19,7 +13,7 @@ from core.models import ObjectType
 from dcim.models import Site
 from netbox_custom_objects import branching
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, TypeChangedInBranches
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, TypeReferencedInBranches
 
 from ..base import create_token
 from .base import HAS_BRANCHING, BranchingTestBase, _make_request, _provision_branch, _TestBase
@@ -69,12 +63,15 @@ class TypeDeletedInMainTestCase(BranchingTestBase, _TestBase):
     def test_delete_refused_while_branch_has_changes_to_objects(self):
         branch = _provision_branch('Branch A', 'iterative', self.user)
         self._edit_widget_in(branch)
+        model = self._cot().get_model()
 
-        with self.assertRaisesMessage(TypeChangedInBranches, 'Branch A. Merge or delete those branches first.'):
+        with self.assertRaisesMessage(TypeReferencedInBranches, 'Branch A. Merge or delete those branches first.'):
             self._delete_type()
 
         self.assertTrue(CustomObjectType.objects.filter(pk=self.cot.pk).exists())
         self.assertTrue(self._object_type_exists())
+        # Refused before the cached model is cleared.
+        self.assertIs(self._cot().get_model(), model)
 
     def test_delete_refused_while_another_branch_is_merging(self):
         branch = _provision_branch('Branch A', 'iterative', self.user)
@@ -82,7 +79,7 @@ class TypeDeletedInMainTestCase(BranchingTestBase, _TestBase):
         # As while another process merges it.
         Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.MERGING)
 
-        with self.assertRaises(TypeChangedInBranches):
+        with self.assertRaises(TypeReferencedInBranches):
             self._delete_type()
 
     def test_delete_refused_after_branch_merge_failed(self):
@@ -91,15 +88,24 @@ class TypeDeletedInMainTestCase(BranchingTestBase, _TestBase):
         # As left by a failed merge in this process, which netbox-branching sets back to ready.
         self.addCleanup(branching._applying_branch.reset, branching._applying_branch.set(branch))
 
-        with self.assertRaises(TypeChangedInBranches):
+        with self.assertRaises(TypeReferencedInBranches):
             self._delete_type()
 
     def test_branch_change_made_after_the_check_protects_object_type(self):
         branch = _provision_branch('Branch A', 'iterative', self.user)
-        self._edit_widget_in(branch)
+        check = CustomObjectType._refuse_delete_with_branch_changes
+
+        def check_then_edit_in_branch(cot, object_type_id):
+            check(cot, object_type_id)
+            self._edit_widget_in(branch)
 
         with (
-            mock.patch.object(CustomObjectType, '_refuse_delete_with_branch_changes'),
+            mock.patch.object(
+                CustomObjectType,
+                '_refuse_delete_with_branch_changes',
+                autospec=True,
+                side_effect=check_then_edit_in_branch,
+            ),
             self.assertRaises(ProtectedError),
         ):
             self._delete_type()
@@ -127,7 +133,7 @@ class TypeDeletedInMainTestCase(BranchingTestBase, _TestBase):
         with activate_branch(branch), event_tracking(_make_request(self.user)):
             self._cot().get_model().objects.create(name='widget-2', qty=3)
 
-        with self.assertRaises(TypeChangedInBranches):
+        with self.assertRaises(TypeReferencedInBranches):
             self._delete_type()
 
     def test_delete_allowed_once_branch_is_deleted(self):
@@ -225,7 +231,7 @@ class TypeDeletedInMainTestCase(BranchingTestBase, _TestBase):
                 related_object_type_id=self.cot.object_type_id,
             )
 
-        with self.assertRaisesMessage(TypeChangedInBranches, 'Branch A'):
+        with self.assertRaisesMessage(TypeReferencedInBranches, 'Branch A'):
             self._delete_type()
 
     def test_branch_polymorphic_field_allowing_type_blocks_deletion(self):
@@ -239,7 +245,7 @@ class TypeDeletedInMainTestCase(BranchingTestBase, _TestBase):
             )
             field.related_object_types.set([self.cot.object_type_id, ObjectType.objects.get_for_model(Site).pk])
 
-        with self.assertRaisesMessage(TypeChangedInBranches, 'Branch A'):
+        with self.assertRaisesMessage(TypeReferencedInBranches, 'Branch A'):
             self._delete_type()
 
     def test_field_change_in_branch_doesnt_block_deletion(self):

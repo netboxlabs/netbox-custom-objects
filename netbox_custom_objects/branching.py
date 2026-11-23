@@ -15,11 +15,7 @@ def mark_applying_branch(sender, branch, **kwargs):
 
 
 def unmark_applying_branch(sender, **kwargs):
-    """netbox-branching's ``post_merge`` and ``post_revert`` receiver.
-
-    Neither is sent when the merge or revert fails, so applying_branch() also checks the
-    branch's status.
-    """
+    """Clear the branch context after a merge or revert."""
     _applying_branch.set(None)
 
 
@@ -32,6 +28,7 @@ def applying_branch():
     from netbox_branching.choices import BranchStatusChoices
     from netbox_branching.models import Branch
 
+    # Failed operations skip the post signals, so ignore stale branch contexts.
     if not Branch.objects.filter(
         pk=branch.pk, status__in=(BranchStatusChoices.MERGING, BranchStatusChoices.REVERTING)
     ).exists():
