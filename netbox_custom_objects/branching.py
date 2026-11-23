@@ -365,6 +365,13 @@ def remove_unmerged_object_types(sender, instance, **kwargs):
 
         for cot_id in sorted(orphan_ids):
             object_type = candidates[cot_id]
+            # Before the delete: a registered model's content type foreign keys (a polymorphic
+            # field's, which are SET_NULL) would have the cascade update its table, which main
+            # doesn't have.
+            model = apps.all_models.get(APP_LABEL, {}).get(object_type.model)
+            if model is not None:
+                CustomObjectType.unregister_model(model)
+            CustomObjectType.clear_model_cache(cot_id, all_branches=True)
             # As in CustomObjectType.delete(): keep core's pre_delete handler out of it.
             request_token = current_request.set(None)
             try:
@@ -383,10 +390,6 @@ def remove_unmerged_object_types(sender, instance, **kwargs):
                 continue
             finally:
                 current_request.reset(request_token)
-            model = apps.all_models.get(APP_LABEL, {}).get(object_type.model)
-            if model is not None:
-                CustomObjectType.unregister_model(model)
-            CustomObjectType.clear_model_cache(cot_id, all_branches=True)
             # Other worker processes may have this model registered too.
             transaction.on_commit(partial(signal_custom_object_type_deleted, cot_id))
     ContentType.objects.clear_cache()

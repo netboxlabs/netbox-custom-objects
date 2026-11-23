@@ -150,6 +150,20 @@ class BranchOnlyTypeTestCase(BranchingTestBase, _TestBase):
         self.assertIsNotNone(self._object_type(gadget))
         signal.assert_called_once_with(widget.pk)
 
+    def test_deleting_branch_removes_object_type_of_unmerged_type_with_polymorphic_field(self):
+        branch = _provision_branch('Branch A', 'iterative', self.user)
+        widget = self._create_type_in(branch, 'widget')
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            field = CustomObjectTypeField.objects.create(
+                custom_object_type_id=widget.pk, name='target', type='object', is_polymorphic=True
+            )
+            field.related_object_types.set([ObjectType.objects.get_for_model(Site)])
+            CustomObjectType.objects.get(pk=widget.pk).get_model()
+
+        branch.delete()
+
+        self.assertIsNone(self._object_type(widget))
+
     def test_deleting_branch_from_another_branch_keeps_types_in_main(self):
         branch_a = _provision_branch('Branch A', 'iterative', self.user)
         with event_tracking(_make_request(self.user)):
