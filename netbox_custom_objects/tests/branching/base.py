@@ -30,7 +30,7 @@ from netbox_custom_objects.utilities import is_branching_enabled
 HAS_BRANCHING = is_branching_enabled()
 if HAS_BRANCHING:
     from netbox_branching.choices import BranchStatusChoices
-    from netbox_branching.models import Branch
+    from netbox_branching.models import Branch, ChangeDiff
 
 
 logger = logging.getLogger(__name__)
@@ -117,5 +117,8 @@ class BranchingTestBase(TransactionCleanupMixin):
 
     def tearDown(self):
         _close_branch_connections()
+        # The test's branches' changes would make deleting their types in main refuse.
+        if HAS_BRANCHING:
+            ChangeDiff.objects.all().delete()
         # → TransactionCleanupMixin.tearDown() → TransactionTestCase
         super().tearDown()
