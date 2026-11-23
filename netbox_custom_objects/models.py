@@ -683,8 +683,7 @@ def _schema_remove_field(fi, model, schema_editor, schema_conn=None, existing_ta
         through_table = fi.through_table_name
         if existing_tables is None:
             conn = schema_conn if schema_conn is not None else connection
-            with conn.cursor() as cursor:
-                existing_tables = set(conn.introspection.table_names(cursor))
+            existing_tables = _own_table_names(conn)
         if through_table in existing_tables:
             through_meta = type(
                 'Meta',
@@ -856,8 +855,7 @@ def _rename_or_create_m2m_through(old_fi, new_fi, new_mf, model, schema_editor, 
 
     tables = existing_tables
     if tables is None:
-        with schema_conn.cursor() as cursor:
-            tables = schema_conn.introspection.table_names(cursor)
+        tables = _own_table_names(schema_conn)
 
     if old_through in tables:
         old_through_meta = type(
