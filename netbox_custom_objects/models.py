@@ -230,8 +230,7 @@ def _table_exists(table_name, conn=None):
         conn = connection
     with conn.cursor() as cursor:
         cursor.execute(
-            'SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_tables '
-            f'WHERE {_own_schemas_sql(conn)} AND tablename = %s)',
+            f'SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_tables WHERE {_own_schemas_sql(conn)} AND tablename = %s)',
             [table_name],
         )
         return cursor.fetchone()[0]
