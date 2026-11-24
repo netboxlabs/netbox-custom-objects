@@ -64,5 +64,6 @@ When an upgrade adds columns to Custom Object Type tables, `manage.py migrate` u
 ## Known Limitations
 
 - **Reverting a deleted Custom Object Type doesn't restore its objects.** If a Custom Object Type is deleted in a branch and the branch is merged and then reverted, the type, its fields and its table come back with their original IDs, but its objects don't. Deleting the type drops its table directly, so there is no change record for each object to replay.
+- **Polymorphic Multi-object fields need netbox-branching 1.2.4 or later.** Older releases don't give a new branch its own copy of the table of a polymorphic Multi-object field that already exists in main, so changes to that field's values in the branch are made in main. Fields added in the branch, or synced into it from main, get their own copy either way. netbox-branching 1.2.4 requires NetBox 4.7. Branches created before upgrading still don't have their own copy, so merge or delete them.
 - **Reverting after type deletion.** A merged branch cannot be reverted if a Custom Object Type whose objects it changed has since been deleted in main.
 - **Reverse relations for polymorphic fields.** For a polymorphic field added in a branch, its reverse relation on the target models (the field's **Related name**) isn't available until the branch is merged.
