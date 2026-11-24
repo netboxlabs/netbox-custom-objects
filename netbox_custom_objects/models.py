@@ -205,31 +205,61 @@ class UniquenessConstraintTestError(Exception):
     pass
 
 
+def _own_schemas_sql(conn):
+    """SQL condition on ``schemaname`` matching *conn*'s own schemas.
+
+    For a branch's connection, only the branch's schema counts: its search_path
+    falls through to main, so ``introspection.table_names()`` would report main's
+    tables and an unqualified DROP or DELETE would then change main.  Main's own
+    tables are the ones its search path finds; ``current_schema()`` isn't enough
+    there, as it names a schema called after the database user if one exists.
+    """
+    if conn.alias == DEFAULT_DB_ALIAS:
+        return 'schemaname = ANY(current_schemas(false))'
+    return 'schemaname = current_schema()'
+
+
 def _table_exists(table_name, conn=None):
-    """Return True if *table_name* exists in *conn*'s own schema.
+    """Return True if *table_name* exists in *conn*'s own schema; see ``_own_schemas_sql()``.
 
     Defaults to the global ``connection`` (main schema).  When the caller is
     operating inside a branch context, pass the branch's connection so the
-    lookup runs against the active branch's PostgreSQL schema.  Only that
-    schema counts: a branch connection's search_path falls through to main, so
-    ``introspection.table_names()`` would report main's table and an unqualified
-    DROP would then remove it.
+    lookup runs against the active branch's PostgreSQL schema.
     """
     if conn is None:
         conn = connection
     with conn.cursor() as cursor:
         cursor.execute(
-            'SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = current_schema() AND tablename = %s)',
+            'SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_tables '
+            f'WHERE {_own_schemas_sql(conn)} AND tablename = %s)',
             [table_name],
         )
         return cursor.fetchone()[0]
 
 
 def _own_table_names(conn):
-    """The names of the tables in *conn*'s own schema; see ``_table_exists()``."""
+    """The names of the tables in *conn*'s own schema; see ``_own_schemas_sql()``."""
     with conn.cursor() as cursor:
-        cursor.execute('SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = current_schema()')
+        cursor.execute(f'SELECT tablename FROM pg_catalog.pg_tables WHERE {_own_schemas_sql(conn)}')
         return {row[0] for row in cursor.fetchall()}
+
+
+def _realign_through_fks(through, model):
+    """Point *through*'s ``source`` and ``target`` FKs to *model*'s label at *model*; return those FKs."""
+    fields = []
+    for fk_name in ('source', 'target'):
+        try:
+            field = through._meta.get_field(fk_name)
+        except FieldDoesNotExist:
+            continue
+        remote_meta = getattr(field.remote_field.model, '_meta', None)
+        if remote_meta is None or remote_meta.label != model._meta.label:
+            continue
+        if field.remote_field.model is not model:
+            field.remote_field.model = model
+            field.__dict__.pop('related_model', None)
+        fields.append(field)
+    return fields
 
 
 def _set_through_relations(opts, through_fks):
@@ -1596,70 +1626,82 @@ class CustomObject(
         super().refresh_from_db(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        # Three prep steps before super() so the deletion collector doesn't
-        # raise traversing reverse FKs from through models:
-        #   1. Realign each through's ``source`` and ``target`` FKs to
-        #      ``type(self)`` — isinstance(instance, fk.related_model) otherwise
-        #      sees two Table*Model classes and fails.  Other types' throughs
-        #      are put back afterwards, as their other queries need their own
-        #      context's class.
-        #   2. Temporarily unregister throughs whose physical table is gone
-        #      (squash revert drops field-CREATEs before CO-CREATEs, so the
-        #      CO's collector hits ``relation does not exist`` otherwise).
-        #   3. In a branch, give ``type(self)`` the reverse FKs of the throughs
-        #      in the branch's own schema.  Django only builds reverse relations
-        #      for registered models, and apps.all_models usually holds main's
-        #      class, so the collector would leave the object's through rows
-        #      behind.  When it holds the branch's class, Django's relations
-        #      include throughs whose table is main's, through the search path.
+        # Prep steps before super() so the deletion collector doesn't raise
+        # traversing reverse FKs from through models, and deletes only this
+        # context's through rows:
+        #   1. Temporarily unregister this type's throughs whose physical table
+        #      is gone (squash revert drops field-CREATEs before CO-CREATEs, so
+        #      the CO's collector hits ``relation does not exist`` otherwise).
+        #   2. In main, realign this type's throughs' ``source`` and ``target``
+        #      FKs to ``type(self)`` — isinstance(instance, fk.related_model)
+        #      otherwise sees two Table*Model classes and fails.
+        #   3. In a branch, use the branch's own throughs instead; see
+        #      ``_branch_through_fks()``.
         cls = type(self)
-        prefix = f'through_{cls._meta.db_table}'
+        # The trailing underscore keeps type 21 from matching type 212's throughs.
+        prefix = f'through_{cls._meta.db_table}_'
         registry = apps.all_models.get(APP_LABEL, {})
         schema_conn = _get_schema_connection()
-        in_branch = schema_conn is not connection
         # Branch contexts may have through tables only in the branch schema, so
         # introspect via the active schema's connection, not the main one.
         # COMPAT(netbox-branching<1.2.4): this also lists main's tables through the
         # search path, which keeps registered the throughs of polymorphic fields that
         # an older netbox-branching didn't copy into the branch.
         existing_tables = schema_conn.introspection.table_names()
-        # But only the schema's own tables get their rows deleted: a branch's search
-        # path falls through to main's, and deleting rows there would change main.
-        own_tables = _own_table_names(schema_conn) if in_branch else existing_tables
         hidden = {}
-        relation_tree = []
-        realigned = []
         for name, through in list(registry.items()):
-            if not name.startswith('through_'):
-                continue
-            own = name.startswith(prefix)
-            if own and through._meta.db_table not in existing_tables:
+            if name.startswith(prefix) and through._meta.db_table not in existing_tables:
                 hidden[name] = registry.pop(name)
-                continue
-            if through._meta.db_table not in own_tables:
-                continue
-            for fk_name in ('source', 'target'):
-                try:
-                    field = through._meta.get_field(fk_name)
-                except FieldDoesNotExist:
-                    continue
-                remote_meta = getattr(field.remote_field.model, '_meta', None)
-                if remote_meta is None or remote_meta.label != cls._meta.label:
-                    continue
-                if not own:
-                    realigned.append((field, field.remote_field.model))
-                field.remote_field.model = cls
-                field.__dict__.pop('related_model', None)
-                relation_tree.append(field)
-        if in_branch:
-            _set_through_relations(cls._meta, relation_tree)
+        if schema_conn is connection:
+            for name, through in registry.items():
+                if name.startswith(prefix):
+                    _realign_through_fks(through, cls)
+        else:
+            _set_through_relations(cls._meta, self._branch_through_fks(_own_table_names(schema_conn)))
         try:
             return super().delete(*args, **kwargs)
         finally:
             registry.update(hidden)
-            for field, model in realigned:
-                field.remote_field.model = model
-                field.__dict__.pop('related_model', None)
+
+    def _branch_through_fks(self, own_tables):
+        """The FKs to ``type(self)`` from the active branch's throughs with a table in *own_tables*.
+
+        Django builds reverse relations from apps.all_models, which usually holds
+        main's throughs, so the collector would leave the object's rows in the
+        branch's tables behind.  When it holds the branch's throughs instead, it
+        includes those whose table is main's, through the search path.  Main's
+        throughs aren't changed: their FKs stay on main's classes for queries
+        running in main meanwhile.
+        """
+        cls = type(self)
+        branch_id = cls._context_branch_id
+        # Build the models of the types with a Multi-object field to this one, so
+        # their throughs are cached for the branch.
+        referrer_ids = (
+            CustomObjectTypeField.objects.filter(
+                type=CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+                related_object_type__app_label=APP_LABEL,
+                related_object_type__model=cls._meta.model_name,
+            )
+            .values_list('custom_object_type_id', flat=True)
+            .distinct()
+        )
+        for cot in CustomObjectType.objects.filter(pk__in=referrer_ids):
+            if not CustomObjectType.is_model_cached(cot.pk, branch_id):
+                cot.get_model()
+        with CustomObjectType._global_lock:
+            throughs = [
+                through
+                for (_, bucket_branch_id), bucket in CustomObjectType._through_model_cache.items()
+                if bucket_branch_id == branch_id
+                for through in bucket.values()
+            ]
+        return [
+            field
+            for through in throughs
+            if through._meta.db_table in own_tables
+            for field in _realign_through_fks(through, cls)
+        ]
 
     @property
     def clone_fields(self):

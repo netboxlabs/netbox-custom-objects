@@ -136,6 +136,60 @@ class DeleteThroughRowsInBranchTestCase(BranchingTestBase, _TestBase):
         holder = self._model().objects.get(pk=self.holder.pk)
         self.assertEqual(list(self._model(other).objects.filter(holders=holder)), [referrer])
 
+    def _referrer_type(self, **kwargs):
+        other = CustomObjectType.objects.create(name='other', slug='others', **kwargs)
+        CustomObjectTypeField.objects.create(custom_object_type=other, name='name', type='text', primary=True)
+        CustomObjectTypeField.objects.create(
+            custom_object_type=other,
+            name='holders',
+            type='multiobject',
+            related_object_type=self._cot().object_type,
+        )
+        referrer = self._model(other).objects.create(name='other-1')
+        referrer.holders.add(self._model().objects.get(pk=self.holder.pk))
+        return other, referrer
+
+    def test_target_of_field_on_type_with_longer_id_queries_in_main_after_branch_delete(self):
+        # The referring type's table name starts with the holder's: custom_objects_<id>2.
+        with event_tracking(_make_request(self.user)):
+            other, referrer = self._referrer_type(pk=int(f'{self.cot.pk}2'))
+        self._provision_branch()
+
+        self._delete_holder_in_branch()
+
+        holder = self._model().objects.get(pk=self.holder.pk)
+        self.assertEqual(list(self._model(other).objects.filter(holders=holder)), [referrer])
+
+    def test_own_field_queries_in_main_after_branch_delete(self):
+        with event_tracking(_make_request(self.user)):
+            self._add_sites_field()
+        self._provision_branch()
+
+        self._delete_holder_in_branch()
+
+        self.assertEqual(list(self._model().objects.filter(sites=self.site)), [self._model().objects.get()])
+
+    def test_main_throughs_unchanged_by_branch_delete(self):
+        with event_tracking(_make_request(self.user)):
+            self._add_sites_field()
+            self._referrer_type()
+        self._provision_branch()
+
+        def remote_models():
+            return {
+                (name, fk.name): fk.remote_field.model
+                for name, through in apps.all_models['netbox_custom_objects'].items()
+                if name.startswith('through_')
+                for fk in through._meta.fields
+                if fk.name in ('source', 'target')
+            }
+
+        before = remote_models()
+        self._delete_holder_in_branch()
+
+        # Concurrent deletes in other branches can't then leave their classes on main's throughs.
+        self.assertEqual(remote_models(), before)
+
     def test_field_deleted_in_branch_keeps_main_rows(self):
         with event_tracking(_make_request(self.user)):
             field = self._add_sites_field()
