@@ -232,6 +232,20 @@ def _own_table_names(conn):
         return {row[0] for row in cursor.fetchall()}
 
 
+def _set_through_relations(opts, through_fks):
+    """Make *through_fks* the reverse relations from through models in *opts*, keeping the others.
+
+    The tree is left in place rather than reset after the delete, since the model
+    class is shared between threads: resetting it could empty it under another
+    thread's delete.
+    """
+    others = [f for f in opts._relation_tree if not f.model._meta.model_name.startswith('through_')]
+    opts.__dict__['_relation_tree'] = others + list(through_fks)
+    for key in ('related_objects', 'fields_map'):
+        opts.__dict__.pop(key, None)
+    opts._get_fields_cache = {}
+
+
 USER_TABLE_DATABASE_NAME_PREFIX = 'custom_objects_'
 
 
@@ -1586,30 +1600,40 @@ class CustomObject(
         # raise traversing reverse FKs from through models:
         #   1. Realign each through's ``source`` and ``target`` FKs to
         #      ``type(self)`` — isinstance(instance, fk.related_model) otherwise
-        #      sees two Table*Model classes and fails.
+        #      sees two Table*Model classes and fails.  Other types' throughs
+        #      are put back afterwards, as their other queries need their own
+        #      context's class.
         #   2. Temporarily unregister throughs whose physical table is gone
         #      (squash revert drops field-CREATEs before CO-CREATEs, so the
         #      CO's collector hits ``relation does not exist`` otherwise).
-        #   3. In a branch, give ``type(self)`` the reverse FKs of the throughs.
-        #      Django only builds reverse relations for registered models, and
-        #      apps.all_models holds main's class, so the collector would leave
-        #      the object's through rows behind.
+        #   3. In a branch, give ``type(self)`` the reverse FKs of the throughs
+        #      in the branch's own schema.  Django only builds reverse relations
+        #      for registered models, and apps.all_models usually holds main's
+        #      class, so the collector would leave the object's through rows
+        #      behind.  When it holds the branch's class, Django's relations
+        #      include throughs whose table is main's, through the search path.
         cls = type(self)
         prefix = f'through_{cls._meta.db_table}'
         registry = apps.all_models.get(APP_LABEL, {})
+        schema_conn = _get_schema_connection()
+        in_branch = schema_conn is not connection
         # Branch contexts may have through tables only in the branch schema, so
         # introspect via the active schema's connection, not the main one.
-        schema_conn = _get_schema_connection()
+        # COMPAT(netbox-branching<1.2.4): this also lists main's tables through the
+        # search path, which keeps registered the throughs of polymorphic fields that
+        # an older netbox-branching didn't copy into the branch.
         existing_tables = schema_conn.introspection.table_names()
         # But only the schema's own tables get their rows deleted: a branch's search
         # path falls through to main's, and deleting rows there would change main.
-        own_tables = _own_table_names(schema_conn)
+        own_tables = _own_table_names(schema_conn) if in_branch else existing_tables
         hidden = {}
         relation_tree = []
+        realigned = []
         for name, through in list(registry.items()):
             if not name.startswith('through_'):
                 continue
-            if name.startswith(prefix) and through._meta.db_table not in existing_tables:
+            own = name.startswith(prefix)
+            if own and through._meta.db_table not in existing_tables:
                 hidden[name] = registry.pop(name)
                 continue
             if through._meta.db_table not in own_tables:
@@ -1622,19 +1646,20 @@ class CustomObject(
                 remote_meta = getattr(field.remote_field.model, '_meta', None)
                 if remote_meta is None or remote_meta.label != cls._meta.label:
                     continue
+                if not own:
+                    realigned.append((field, field.remote_field.model))
                 field.remote_field.model = cls
                 field.__dict__.pop('related_model', None)
                 relation_tree.append(field)
-        unregistered = registry.get(cls._meta.model_name) is not cls
-        if unregistered:
-            cls._meta._expire_cache(forward=False)
-            cls._meta.__dict__['_relation_tree'] = relation_tree
+        if in_branch:
+            _set_through_relations(cls._meta, relation_tree)
         try:
             return super().delete(*args, **kwargs)
         finally:
             registry.update(hidden)
-            if unregistered:
-                cls._meta._expire_cache(forward=False)
+            for field, model in realigned:
+                field.remote_field.model = model
+                field.__dict__.pop('related_model', None)
 
     @property
     def clone_fields(self):

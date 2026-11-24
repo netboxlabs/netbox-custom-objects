@@ -2,6 +2,7 @@
 
 import unittest
 
+from django.apps import apps
 from django.db import connection as main_conn
 
 from core.models import ObjectType
@@ -116,6 +117,25 @@ class DeleteThroughRowsInBranchTestCase(BranchingTestBase, _TestBase):
         self.assertEqual(self._rows_in(self.branch.schema_name, field.through_table_name, 'target_id'), 0)
         self.assertEqual(self._rows_in(self.main_schema, field.through_table_name, 'target_id'), 1)
 
+    def test_target_of_field_queries_in_main_after_branch_delete(self):
+        with event_tracking(_make_request(self.user)):
+            other = CustomObjectType.objects.create(name='other', slug='others')
+            CustomObjectTypeField.objects.create(custom_object_type=other, name='name', type='text', primary=True)
+            CustomObjectTypeField.objects.create(
+                custom_object_type=other,
+                name='holders',
+                type='multiobject',
+                related_object_type=self._cot().object_type,
+            )
+            referrer = self._model(other).objects.create(name='other-1')
+            referrer.holders.add(self._model().objects.get(pk=self.holder.pk))
+        self._provision_branch()
+
+        self._delete_holder_in_branch()
+
+        holder = self._model().objects.get(pk=self.holder.pk)
+        self.assertEqual(list(self._model(other).objects.filter(holders=holder)), [referrer])
+
     def test_field_deleted_in_branch_keeps_main_rows(self):
         with event_tracking(_make_request(self.user)):
             field = self._add_sites_field()
@@ -125,5 +145,22 @@ class DeleteThroughRowsInBranchTestCase(BranchingTestBase, _TestBase):
             CustomObjectTypeField.objects.get(pk=field.pk).delete()
 
         self._delete_holder_in_branch()
+
+        self.assertEqual(self._rows_in(self.main_schema, field.through_table_name), 1)
+
+    def test_branch_class_registered_keeps_main_rows(self):
+        with event_tracking(_make_request(self.user)):
+            field = self._add_sites_field()
+        self._provision_branch()
+        # As in a branch provisioned before netbox-branching 1.2.4: no copy of the table.
+        with main_conn.cursor() as cursor:
+            cursor.execute(f'DROP TABLE "{self.branch.schema_name}"."{field.through_table_name}"')
+        # As after a restart whose first request is in the branch: the branch's class is registered.
+        CustomObjectType.clear_model_cache()
+        branch, request = self._in_branch()
+        with branch, request:
+            model = self._model()
+            self.assertIs(apps.get_model('netbox_custom_objects', model._meta.model_name), model)
+            model.objects.get(pk=self.holder.pk).delete()
 
         self.assertEqual(self._rows_in(self.main_schema, field.through_table_name), 1)
