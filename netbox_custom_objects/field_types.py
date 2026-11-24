@@ -2163,6 +2163,9 @@ class MultiObjectFieldType(FieldType):
         """
         from netbox_custom_objects.models import _table_exists
 
+        # A branch without its own copy would otherwise drop main's table.
+        if not _table_exists(field_instance.through_table_name, schema_editor.connection):
+            return
         through_model = None
         for tm in getattr(model, '_through_models', None) or ():
             if tm._meta.db_table == field_instance.through_table_name:
@@ -2173,9 +2176,6 @@ class MultiObjectFieldType(FieldType):
                 through_model = model._meta.apps.get_model(APP_LABEL, field_instance.through_model_name)
             except LookupError:
                 return  # already gone
-        # A branch without its own copy would otherwise drop main's table.
-        if not _table_exists(through_model._meta.db_table, schema_editor.connection):
-            return
         schema_editor.delete_model(through_model)
 
 

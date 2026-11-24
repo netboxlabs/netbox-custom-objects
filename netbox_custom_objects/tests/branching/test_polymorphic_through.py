@@ -87,6 +87,7 @@ class PolymorphicThroughTableBranchTestCase(BranchingTestBase, _TestBase):
     def test_field_delete_in_branch_leaves_main_table(self):
         self._create_holder()
         branch = _provision_branch('Poly Branch', 'iterative', self.user)
+        self.assertIsNotNone(self._rows(branch.schema_name))
 
         with activate_branch(branch), event_tracking(_make_request(self.user)):
             CustomObjectTypeField.objects.get(pk=self.field.pk).delete()
