@@ -11,11 +11,12 @@ from functools import wraps
 from django.db import connection, transaction
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.recorder import MigrationRecorder
-from django.db.models.signals import post_migrate, pre_delete, pre_migrate
+from django.db.models.signals import post_delete, post_migrate, pre_delete, pre_migrate
 from django.db.utils import OperationalError, ProgrammingError
 
 from netbox.plugins import PluginConfig
 
+from .branching import merging_branch_model
 from .constants import APP_LABEL as APP_LABEL
 from .utilities import (
     extract_cot_id_from_model_name,
@@ -123,6 +124,7 @@ def _register_branching_hooks_once():
 
     # Unguarded: netbox-branching >= 1.0.4 is required (checks.E002), and an
     # older release should fail loudly rather than silently skip every hook.
+    from netbox_branching.models import Branch
     from netbox_branching.signals import (
         post_merge,
         post_revert,
@@ -142,13 +144,21 @@ def _register_branching_hooks_once():
 
     from .branching import (
         add_custom_object_dependencies,
+        mark_applying_branch,
         objectchange_field_migrator,
+        remove_unmerged_object_types,
         supports_branching_resolver,
+        unmark_applying_branch,
     )
 
     for sig in (pre_merge, post_merge, pre_sync, post_sync, pre_revert, post_revert):
         sig.connect(_reset_deferred_co_field_data, weak=False)
+    for sig in (pre_merge, pre_revert):
+        sig.connect(mark_applying_branch, weak=False)
+    for sig in (post_merge, post_revert):
+        sig.connect(unmark_applying_branch, weak=False)
     branching_post_migrate.connect(_heal_branch_on_migrate, weak=False)
+    post_delete.connect(remove_unmerged_object_types, sender=Branch, weak=False)
 
     register_branching_resolver(supports_branching_resolver)
     register_objectchange_field_migrator(objectchange_field_migrator)
@@ -667,6 +677,41 @@ class CustomObjectsPluginConfig(PluginConfig):
             logger.exception('related_tabs.register_tabs() failed; continuing without tabs')
             self._register_tabs_error = f'{type(exc).__name__}: {exc}'
 
+    def _lacks_current_fields(self, model, cot_id):
+        """True if the registered class *model* misses a field that its type now has.
+
+        A field change evicts the type's cached model but leaves the registered class in place, so only an
+        evicted model is checked, and only in its own context.
+        """
+        from .models import CustomObjectType, CustomObjectTypeField
+
+        context_branch_id = getattr(model, '_context_branch_id', None)
+        if (
+            CustomObjectType.is_model_cached(cot_id, context_branch_id)
+            or context_branch_id != CustomObjectType._active_branch_id()
+        ):
+            return False
+        key = (cot_id, context_branch_id)
+        # Read before the query, so a cache clear that runs during it makes this answer unusable.
+        generation = CustomObjectType._cache_generation
+        if (
+            CustomObjectType._complete_evicted_models.get(key) == (model, generation)
+            or self._dynamic_model_creation_unsafe()
+        ):
+            return False
+        known_field_ids = set(getattr(model, '_field_objects', None) or {})
+        try:
+            stale = (
+                CustomObjectTypeField.objects.filter(custom_object_type_id=cot_id)
+                .exclude(pk__in=known_field_ids)
+                .exists()
+            )
+        except (ProgrammingError, OperationalError):
+            return False
+        if not stale:
+            CustomObjectType._complete_evicted_models[key] = (model, generation)
+        return stale
+
     def get_model(self, model_name, require_ready=True):
         self.apps.check_apps_ready()
         try:
@@ -675,6 +720,15 @@ class CustomObjectsPluginConfig(PluginConfig):
         except LookupError:
             pass
         else:
+            # The registry is process-wide, so a type's model built for one branch also
+            # answers lookups in main and in other branches.  A through model has no type
+            # id of its own.
+            context_branch_id = getattr(model, '_context_branch_id', None)
+            if context_branch_id is not None and isinstance(getattr(model, 'custom_object_type_id', None), int):
+                from .models import CustomObjectType
+
+                if context_branch_id != CustomObjectType._active_branch_id():
+                    return self._get_context_model(model, model_name)
             # A dynamic model built inside a transaction that then rolled back no
             # longer matches its table; rebuild it (issue #767).  See
             # CustomObjectType.get_model() and _mark_registered_in_transaction.
@@ -682,12 +736,16 @@ class CustomObjectsPluginConfig(PluginConfig):
             # should_skip_dynamic_model_creation(): the latter also skips under the
             # test runner, but this class already exists, so tests must rebuild it
             # too (the same guard CustomObjectType.get_model() uses).
-            if getattr(model, '_registered_in', None) is None:
+            cot_id = getattr(model, 'custom_object_type_id', None)
+            # On a static model with a foreign key to the type, this name holds the key's descriptor, not an id.
+            if not isinstance(cot_id, int):
                 return model
             from .models import CustomObjectType, _registration_rolled_back
 
-            cot_id = getattr(model, 'custom_object_type_id', None)
-            if cot_id is None or not _registration_rolled_back(model) or self._dynamic_model_creation_unsafe():
+            stale = self._lacks_current_fields(model, cot_id)
+            if not stale and (getattr(model, '_registered_in', None) is None or not _registration_rolled_back(model)):
+                return model
+            if self._dynamic_model_creation_unsafe():
                 return model
             try:
                 return CustomObjectType.objects.get(pk=cot_id).get_model()
@@ -711,7 +769,11 @@ class CustomObjectsPluginConfig(PluginConfig):
         try:
             obj = CustomObjectType.objects.get(pk=custom_object_type_id)
             return obj.get_model()
-        except (CustomObjectType.DoesNotExist, ProgrammingError, OperationalError):
+        except CustomObjectType.DoesNotExist:
+            if model := merging_branch_model(custom_object_type_id):
+                return model
+            raise LookupError(f"App '{self.label}' doesn't have a '{model_name}' model.") from None
+        except (ProgrammingError, OperationalError):
             # ProgrammingError/OperationalError covers an incomplete DB schema
             # (e.g. unapplied migrations). Treat all three as "model not found"
             # so callers get a predictable LookupError rather than a raw DB
@@ -719,6 +781,33 @@ class CustomObjectsPluginConfig(PluginConfig):
             # inside the block because it also queries CustomObjectTypeField,
             # which could be missing or have an absent column.
             raise LookupError(f"App '{self.label}' doesn't have a '{model_name}' model.")
+
+    def _get_context_model(self, model, model_name):
+        """The active context's class for *model*, which was built for another branch.
+
+        Raises ``LookupError`` if the type isn't in the active context, e.g. one created
+        in a branch that hasn't been merged, as a process that never built it would.
+        Otherwise netbox-branching would replicate the type's table, which main doesn't
+        have, into new branches.  The exception is a type of the branch this process is
+        merging; see merging_branch_model().
+        """
+        from .models import CustomObjectType
+
+        cot_id = model.custom_object_type_id
+        context_model = CustomObjectType.get_cached_model(cot_id, CustomObjectType._active_branch_id())
+        if context_model is not None:
+            return context_model
+        if self._dynamic_model_creation_unsafe():
+            return model
+        try:
+            return CustomObjectType.objects.get(pk=cot_id).get_model()
+        except CustomObjectType.DoesNotExist:
+            pass
+        except (ProgrammingError, OperationalError):
+            return model
+        if merging_model := merging_branch_model(cot_id):
+            return merging_model
+        raise LookupError(f"App '{self.label}' doesn't have a '{model_name}' model.")
 
     def get_models(self, include_auto_created=False, include_swapped=False):
         """Return all models for this plugin, including custom object type models."""

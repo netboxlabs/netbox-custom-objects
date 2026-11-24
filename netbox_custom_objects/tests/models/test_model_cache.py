@@ -321,6 +321,22 @@ class ModelRegistryTestCase(CustomObjectsTestCase, TestCase):
             "Field 'extra' should be present on the regenerated model.",
         )
 
+    def test_evicted_registered_model_is_checked_once(self):
+        """After an eviction, the registered class's fields are checked against the database once, until the
+        next change."""
+        cot = self.create_custom_object_type(name='checkonce', slug='check-once')
+        self.create_custom_object_type_field(cot, name='name', type='text', primary=True)
+        model = cot.get_model()
+        model_name = model._meta.model_name
+        CustomObjectType.clear_model_cache(cot.id)
+
+        self.assertIs(apps.get_model(APP_LABEL, model_name), model)
+        with self.assertNumQueries(0):
+            self.assertIs(apps.get_model(APP_LABEL, model_name), model)
+
+        self.create_custom_object_type_field(cot, name='extra', type='text')
+        self.assertIn('extra', {f.name for f in apps.get_model(APP_LABEL, model_name)._meta.get_fields()})
+
     def test_model_not_in_registry_after_cot_deleted(self):
         """Deleting a COT removes its generated model from Django's app registry."""
         cot = self.create_custom_object_type(name='delregtest', slug='del-reg-test')

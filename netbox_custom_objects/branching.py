@@ -3,6 +3,46 @@
 Registered from ``__init__.ready()`` only when netbox-branching is installed.
 """
 
+import logging
+from contextvars import ContextVar
+from functools import partial
+
+from django.apps import apps
+from django.db import connection
+from django.db.utils import OperationalError, ProgrammingError
+
+logger = logging.getLogger(__name__)
+
+# The branch whose merge or revert this process is running, if any; see applying_branch().
+_applying_branch = ContextVar('netbox_custom_objects_applying_branch', default=None)
+
+
+def mark_applying_branch(sender, branch, **kwargs):
+    """netbox-branching's ``pre_merge`` and ``pre_revert`` receiver; see applying_branch()."""
+    _applying_branch.set(branch)
+
+
+def unmark_applying_branch(sender, **kwargs):
+    """Clear the branch context after a merge or revert."""
+    _applying_branch.set(None)
+
+
+def applying_branch():
+    """The branch whose merge or revert this process is running, or None."""
+    branch = _applying_branch.get()
+    if branch is None:
+        return None
+
+    from netbox_branching.choices import BranchStatusChoices
+    from netbox_branching.models import Branch
+
+    # Failed operations skip the post signals, so ignore stale branch contexts.
+    if not Branch.objects.filter(
+        pk=branch.pk, status__in=(BranchStatusChoices.MERGING, BranchStatusChoices.REVERTING)
+    ).exists():
+        return None
+    return branch
+
 
 def supports_branching_resolver(model):
     """Mark CustomObject M2M through models as branchable.
@@ -127,6 +167,22 @@ def _constraint_field_refs(data, fields_by_schema_id):
     return {fields_by_schema_id[(cot_id, sid)] for sid in schema_ids if (cot_id, sid) in fields_by_schema_id}
 
 
+def _created_field_refs(data, model_label, created_fields_by_column):
+    """Return the refs of fields created in the same squash that an object's *data* writes.
+
+    The object's model class predates those fields, so a walk over its fields can't find them.
+    """
+    from .utilities import extract_cot_id_from_model_name
+
+    if not data or not model_label:
+        return set()
+    cot_id_str = extract_cot_id_from_model_name(model_label.split('.', 1)[-1])
+    if cot_id_str is None:
+        return set()
+    cot_id = int(cot_id_str)
+    return {created_fields_by_column[(cot_id, key)] for key in data if (cot_id, key) in created_fields_by_column}
+
+
 def add_custom_object_dependencies(sender, collapsed_changes, **kwargs):
     """Extend squash's dependency graph with CO-specific edges.
 
@@ -161,6 +217,18 @@ def add_custom_object_dependencies(sender, collapsed_changes, **kwargs):
         elif action == 'delete':
             deletes_map[key] = cc
 
+    from .models import _occupied_columns
+
+    created_fields_by_column = {}
+    for key, cc in creates_map.items():
+        if not (isinstance(key, tuple) and key[0] == field_label):
+            continue
+        data = cc.postchange_data or {}
+        if data.get('custom_object_type') is None or not data.get('name'):
+            continue
+        for column in _occupied_columns(data['name'], data.get('type')):
+            created_fields_by_column[(data['custom_object_type'], column)] = key
+
     for cc in collapsed_changes.values():
         meta = getattr(cc.model_class, '_meta', None)
         # Detect CO models even when model_class is None (dynamically-generated
@@ -190,7 +258,10 @@ def add_custom_object_dependencies(sender, collapsed_changes, **kwargs):
                 if ref in deletes_map:
                     deletes_map[ref].depends_on.add(cc.key)
                     cc.depended_by.add(ref)
-            for ref in collect_refs(cc.postchange_data):
+            post_refs = collect_refs(cc.postchange_data) | _created_field_refs(
+                cc.postchange_data, model_label, created_fields_by_column
+            )
+            for ref in post_refs:
                 if ref in creates_map:
                     cc.depends_on.add(ref)
                     creates_map[ref].depended_by.add(cc.key)
@@ -204,3 +275,121 @@ def add_custom_object_dependencies(sender, collapsed_changes, **kwargs):
                 if ref != cc.key and ref in deletes_map:
                     deletes_map[ref].depends_on.add(cc.key)
                     cc.depended_by.add(ref)
+
+
+def merging_branch_model(cot_id):
+    """The model of Custom Object Type *cot_id* in the branch this process is merging, or None.
+
+    netbox-branching's squash merge looks up the model of every changed object before it
+    applies any change, so before the branch's new types exist in main.
+    """
+    # Not applying_branch(): the branch must be merging, not reverting.
+    branch = _applying_branch.get()
+    if branch is None:
+        return None
+
+    from netbox_branching.choices import BranchStatusChoices
+    from netbox_branching.models import Branch
+    from netbox_branching.utilities import activate_branch
+
+    from netbox_custom_objects.models import CustomObjectType
+
+    try:
+        if not Branch.objects.filter(pk=branch.pk, status=BranchStatusChoices.MERGING).exists():
+            return None
+        with activate_branch(branch):
+            cot = CustomObjectType.objects.filter(pk=cot_id).first()
+            return cot.get_model() if cot is not None else None
+    except (ProgrammingError, OperationalError):
+        return None
+
+
+def _unmerged_type_ids(cot_ids):
+    """Those of *cot_ids* that are neither in main nor in any branch."""
+    from netbox_branching.models import Branch
+
+    from netbox.plugins import get_plugin_config
+    from netbox_custom_objects.models import CustomObjectType
+
+    remaining = set(cot_ids)
+    quote = connection.ops.quote_name
+    schemas = [get_plugin_config('netbox_branching', 'main_schema')]
+    schemas += [branch.schema_name for branch in Branch.objects.all()]
+    with connection.cursor() as cursor:
+        for schema in schemas:
+            if not remaining:
+                break
+            table = f'{quote(schema)}.{quote(CustomObjectType._meta.db_table)}'
+            cursor.execute('SELECT to_regclass(%s)', [table])
+            if cursor.fetchone()[0] is None:
+                continue
+            cursor.execute(f'SELECT id FROM {table} WHERE id = ANY(%s)', [list(remaining)])
+            remaining -= {row[0] for row in cursor.fetchall()}
+    return remaining
+
+
+def remove_unmerged_object_types(sender, instance, **kwargs):
+    """``post_delete`` receiver for netbox-branching's ``Branch``: remove the object types
+    of Custom Object Types that exist neither in main nor in any remaining branch.
+
+    A type's object type is created in main even when the type is created in a branch, and
+    is left behind when the branch is deleted without being merged.  The deleted branch's
+    ChangeDiffs, which protect it, are gone by now.  This is clean-up, so a failure is
+    logged rather than failing the branch's deletion.
+    """
+    from django.contrib.contenttypes.models import ContentType
+    from django.db import transaction
+    from django.db.models import ProtectedError
+    from netbox_branching.utilities import deactivate_branch
+
+    from core.models import ObjectType
+    from netbox.context import current_request
+    from netbox_custom_objects.constants import APP_LABEL
+    from netbox_custom_objects.models import CustomObjectType
+    from netbox_custom_objects.stale_models import signal_custom_object_type_deleted
+    from netbox_custom_objects.utilities import extract_cot_id_from_model_name
+
+    # Another branch may be active, e.g. when this one is deleted from a request made in it.
+    with deactivate_branch():
+        try:
+            with transaction.atomic():
+                candidates = {}
+                for object_type in ObjectType.objects.filter(app_label=APP_LABEL):
+                    cot_id = extract_cot_id_from_model_name(object_type.model)
+                    if cot_id is not None:
+                        candidates[int(cot_id)] = object_type
+                orphan_ids = _unmerged_type_ids(candidates)
+        except Exception:
+            logger.exception('Could not look for object types left behind by deleting branch %s', instance)
+            return
+
+        for cot_id in sorted(orphan_ids):
+            object_type = candidates[cot_id]
+            # Before the delete: a registered model's content type foreign keys (a polymorphic
+            # field's, which are SET_NULL) would have the cascade update its table, which main
+            # doesn't have.
+            model = apps.all_models.get(APP_LABEL, {}).get(object_type.model)
+            if model is not None:
+                CustomObjectType.unregister_model(model)
+            CustomObjectType.clear_model_cache(cot_id, all_branches=True)
+            # As in CustomObjectType.delete(): keep core's pre_delete handler out of it.
+            request_token = current_request.set(None)
+            try:
+                with transaction.atomic():
+                    object_type.delete()
+            except ProtectedError:
+                logger.warning(
+                    'Not removing object type %s of a Custom Object Type that no longer exists: still referenced',
+                    object_type,
+                )
+                continue
+            except Exception:
+                logger.exception(
+                    'Could not remove object type %s of a Custom Object Type that no longer exists', object_type
+                )
+                continue
+            finally:
+                current_request.reset(request_token)
+            # Other worker processes may have this model registered too.
+            transaction.on_commit(partial(signal_custom_object_type_deleted, cot_id))
+    ContentType.objects.clear_cache()
