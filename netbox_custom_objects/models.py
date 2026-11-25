@@ -1625,6 +1625,23 @@ class CustomObject(
         super().refresh_from_db(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
+        # An object loaded before its type's model was rebuilt (e.g. a field added
+        # in between) is deleted as an instance of the current class, so the
+        # throughs below are only ever pointed at the class that the context's
+        # queries use.  Building it now also keeps it from being built during the
+        # delete, after the throughs have been pointed at this one.
+        cls = type(self)
+        current = CustomObjectType.get_cached_model(cls.custom_object_type_id, cls._context_branch_id)
+        if current is None:
+            current = CustomObjectType.objects.get(pk=cls.custom_object_type_id).get_model()
+        if current is not cls:
+            obj = current.__new__(current)
+            obj.__dict__.update(self.__dict__)
+            try:
+                return obj.delete(*args, **kwargs)
+            finally:
+                setattr(self, self._meta.pk.attname, obj.pk)
+
         # Prep steps before super() so the deletion collector doesn't raise
         # traversing reverse FKs from through models, and deletes only this
         # context's through rows:
@@ -1636,7 +1653,6 @@ class CustomObject(
         #      otherwise sees two Table*Model classes and fails.
         #   3. In a branch, use the branch's own throughs instead; see
         #      ``_branch_through_fks()``.
-        cls = type(self)
         # The trailing underscore keeps type 21 from matching type 212's throughs.
         prefix = f'through_{cls._meta.db_table}_'
         registry = apps.all_models.get(APP_LABEL, {})

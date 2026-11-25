@@ -190,6 +190,25 @@ class DeleteThroughRowsInBranchTestCase(BranchingTestBase, _TestBase):
         # Concurrent deletes in other branches can't then leave their classes on main's throughs.
         self.assertEqual(remote_models(), before)
 
+    def test_object_loaded_before_type_rebuilt_in_branch(self):
+        with event_tracking(_make_request(self.user)):
+            other, referrer = self._referrer_type()
+            holder_2 = self._model().objects.create(name='holder-2')
+            referrer.holders.add(holder_2)
+        self._provision_branch()
+        branch, request = self._in_branch()
+        with branch, request:
+            stale = self._model().objects.get(pk=self.holder.pk)
+            # Rebuilds the type's model in the branch.
+            CustomObjectTypeField.objects.create(custom_object_type=self._cot(), name='notes', type='text')
+            stale.delete()
+
+            self.assertFalse(self._model().objects.filter(pk=self.holder.pk).exists())
+            self.assertIsNone(stale.pk)
+            holder_2 = self._model().objects.get(pk=holder_2.pk)
+            referrers = self._model(other).objects.filter(holders=holder_2)
+            self.assertEqual(list(referrers.values_list('pk', flat=True)), [referrer.pk])
+
     def test_field_deleted_in_branch_keeps_main_rows(self):
         with event_tracking(_make_request(self.user)):
             field = self._add_sites_field()
