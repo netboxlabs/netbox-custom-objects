@@ -243,36 +243,41 @@ def _own_table_names(conn):
         return {row[0] for row in cursor.fetchall()}
 
 
-def _realign_through_fks(through, model):
-    """Point *through*'s ``source`` and ``target`` FKs to *model*'s label at *model*; return those FKs."""
-    fields = []
-    for fk_name in ('source', 'target'):
-        try:
-            field = through._meta.get_field(fk_name)
-        except FieldDoesNotExist:
-            continue
-        remote_meta = getattr(field.remote_field.model, '_meta', None)
-        if remote_meta is None or remote_meta.label != model._meta.label:
-            continue
-        if field.remote_field.model is not model:
-            field.remote_field.model = model
-            field.__dict__.pop('related_model', None)
-        fields.append(field)
-    return fields
+def delete_branch_through_rows(objects, conn):
+    """Delete the through rows of the custom objects in *objects* from *conn*'s own tables.
 
-
-def _set_through_relations(opts, through_fks):
-    """Make *through_fks* the reverse relations from through models in *opts*, keeping the others.
-
-    The tree is left in place rather than reset after the delete, since the model
-    class is shared between threads: resetting it could empty it under another
-    thread's delete.
+    *objects* maps each custom object model to the ids of its objects being deleted.  In a
+    branch, the deletion collector skips through models (see ``utilities._related_objects()``):
+    Django finds them from apps.all_models, which holds main's throughs, so it would miss the
+    tables of fields added in the branch and, through the search path, reach main's tables
+    where the branch has no copy.  The rows are deleted by id instead, after the objects,
+    which the deferred FK constraints allow, so ``pre_delete`` handlers still see them.
     """
-    others = [f for f in opts._relation_tree if not f.model._meta.model_name.startswith('through_')]
-    opts.__dict__['_relation_tree'] = others + list(through_fks)
-    for key in ('related_objects', 'fields_map'):
-        opts.__dict__.pop(key, None)
-    opts._get_fields_cache = {}
+    own_tables = _own_table_names(conn)
+    with conn.cursor() as cursor:
+        for model, pks in objects.items():
+            cot_id = model.custom_object_type_id
+            fields = CustomObjectTypeField.objects.filter(type=CustomFieldTypeChoices.TYPE_MULTIOBJECT).filter(
+                Q(custom_object_type_id=cot_id)
+                | Q(
+                    is_polymorphic=False,
+                    related_object_type__app_label=APP_LABEL,
+                    related_object_type__model=model._meta.model_name,
+                )
+            )
+            for field in fields.select_related('related_object_type'):
+                if field.through_table_name not in own_tables:
+                    continue
+                columns = []
+                if field.custom_object_type_id == cot_id:
+                    columns.append('source_id')
+                if not field.is_polymorphic and field.related_object_type.model == model._meta.model_name:
+                    columns.append('target_id')
+                for column in columns:
+                    cursor.execute(
+                        f'DELETE FROM {conn.ops.quote_name(field.through_table_name)} WHERE {column} = ANY(%s)',
+                        [list(pks)],
+                    )
 
 
 USER_TABLE_DATABASE_NAME_PREFIX = 'custom_objects_'
@@ -1625,98 +1630,43 @@ class CustomObject(
         super().refresh_from_db(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        # An object loaded before its type's model was rebuilt (e.g. a field added
-        # in between) is deleted as an instance of the current class, so the
-        # throughs below are only ever pointed at the class that the context's
-        # queries use.  Building it now also keeps it from being built during the
-        # delete, after the throughs have been pointed at this one.
+        # In a branch, the collector leaves through rows to ``delete_branch_through_rows()``.
+        if _get_schema_connection() is not connection:
+            return super().delete(*args, **kwargs)
+        # Two prep steps before super() so the deletion collector doesn't
+        # raise traversing reverse FKs from through models:
+        #   1. Realign each through's ``source`` FK to ``type(self)`` —
+        #      isinstance(instance, fk.related_model) otherwise sees two
+        #      Table*Model classes and fails.
+        #   2. Temporarily unregister throughs whose physical table is gone
+        #      (squash revert drops field-CREATEs before CO-CREATEs, so the
+        #      CO's collector hits ``relation does not exist`` otherwise).
         cls = type(self)
-        current = CustomObjectType.get_cached_model(cls.custom_object_type_id, cls._context_branch_id)
-        if current is None:
-            current = CustomObjectType.objects.get(pk=cls.custom_object_type_id).get_model()
-        if current is not cls:
-            obj = current.__new__(current)
-            obj.__dict__.update(self.__dict__)
-            try:
-                return obj.delete(*args, **kwargs)
-            finally:
-                setattr(self, self._meta.pk.attname, obj.pk)
-
-        # Prep steps before super() so the deletion collector doesn't raise
-        # traversing reverse FKs from through models, and deletes only this
-        # context's through rows:
-        #   1. Temporarily unregister this type's throughs whose physical table
-        #      is gone (squash revert drops field-CREATEs before CO-CREATEs, so
-        #      the CO's collector hits ``relation does not exist`` otherwise).
-        #   2. In main, realign this type's throughs' ``source`` and ``target``
-        #      FKs to ``type(self)`` — isinstance(instance, fk.related_model)
-        #      otherwise sees two Table*Model classes and fails.
-        #   3. In a branch, use the branch's own throughs instead; see
-        #      ``_branch_through_fks()``.
         # The trailing underscore keeps type 21 from matching type 212's throughs.
         prefix = f'through_{cls._meta.db_table}_'
         registry = apps.all_models.get(APP_LABEL, {})
-        schema_conn = _get_schema_connection()
-        # Branch contexts may have through tables only in the branch schema, so
-        # introspect via the active schema's connection, not the main one.
-        # COMPAT(netbox-branching<1.2.4): this also lists main's tables through the
-        # search path, which keeps registered the throughs of polymorphic fields that
-        # an older netbox-branching didn't copy into the branch.
-        existing_tables = schema_conn.introspection.table_names()
+        existing_tables = connection.introspection.table_names()
         hidden = {}
         for name, through in list(registry.items()):
-            if name.startswith(prefix) and through._meta.db_table not in existing_tables:
+            if not name.startswith(prefix):
+                continue
+            if through._meta.db_table not in existing_tables:
                 hidden[name] = registry.pop(name)
-        if schema_conn is connection:
-            for name, through in registry.items():
-                if name.startswith(prefix):
-                    _realign_through_fks(through, cls)
-        else:
-            _set_through_relations(cls._meta, self._branch_through_fks(_own_table_names(schema_conn)))
+                continue
+            for fk_name in ('source', 'target'):
+                try:
+                    field = through._meta.get_field(fk_name)
+                except FieldDoesNotExist:
+                    continue
+                remote_meta = getattr(field.remote_field.model, '_meta', None)
+                if remote_meta is None or remote_meta.label != cls._meta.label:
+                    continue
+                field.remote_field.model = cls
+                field.__dict__.pop('related_model', None)
         try:
             return super().delete(*args, **kwargs)
         finally:
             registry.update(hidden)
-
-    def _branch_through_fks(self, own_tables):
-        """The FKs to ``type(self)`` from the active branch's throughs with a table in *own_tables*.
-
-        Django builds reverse relations from apps.all_models, which usually holds
-        main's throughs, so the collector would leave the object's rows in the
-        branch's tables behind.  When it holds the branch's throughs instead, it
-        includes those whose table is main's, through the search path.  Main's
-        throughs aren't changed: their FKs stay on main's classes for queries
-        running in main meanwhile.
-        """
-        cls = type(self)
-        branch_id = cls._context_branch_id
-        # Build the models of the types with a Multi-object field to this one, so
-        # their throughs are cached for the branch.
-        referrer_ids = (
-            CustomObjectTypeField.objects.filter(
-                type=CustomFieldTypeChoices.TYPE_MULTIOBJECT,
-                related_object_type__app_label=APP_LABEL,
-                related_object_type__model=cls._meta.model_name,
-            )
-            .values_list('custom_object_type_id', flat=True)
-            .distinct()
-        )
-        for cot in CustomObjectType.objects.filter(pk__in=referrer_ids):
-            if not CustomObjectType.is_model_cached(cot.pk, branch_id):
-                cot.get_model()
-        with CustomObjectType._global_lock:
-            throughs = [
-                through
-                for (_, bucket_branch_id), bucket in CustomObjectType._through_model_cache.items()
-                if bucket_branch_id == branch_id
-                for through in bucket.values()
-            ]
-        return [
-            field
-            for through in throughs
-            if through._meta.db_table in own_tables
-            for field in _realign_through_fks(through, cls)
-        ]
 
     @property
     def clone_fields(self):

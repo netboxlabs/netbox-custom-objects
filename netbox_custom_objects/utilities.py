@@ -1,9 +1,10 @@
 import re
 import threading
 import warnings
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 
 from django.apps import apps
+from django.db import DEFAULT_DB_ALIAS, connections, transaction
 from django.db.models import Q, QuerySet
 from django.db.models.deletion import Collector
 
@@ -149,6 +150,9 @@ def _related_objects(self, related_model, related_fields, objs):
     model = objs.model if isinstance(objs, QuerySet) else type(objs[0]) if objs else None
     if model is None or not _is_custom_object_model(model):
         return _real_related_objects(self, related_model, related_fields, objs)
+    if self.using != DEFAULT_DB_ALIAS and _is_through_model(related_model):
+        # A branch's through rows are deleted by delete_branch_through_rows().
+        return related_model._base_manager.using(self.using).none()
 
     def keys(field):
         attname = field.target_field.attname
@@ -175,11 +179,21 @@ def _check_protection_first(real_delete):
     def delete(self):
         if getattr(self, '_polymorphic_on_delete_prepared', False):
             return real_delete(self)
-        from netbox_custom_objects.models import polymorphic_on_delete
+        from netbox_custom_objects.models import delete_branch_through_rows, polymorphic_on_delete
 
         self._polymorphic_on_delete_prepared = True
-        with polymorphic_on_delete(self.data):
-            return real_delete(self)
+        branch_objects = {}
+        if self.using != DEFAULT_DB_ALIAS:
+            branch_objects = {
+                model: {obj.pk for obj in objs} for model, objs in self.data.items() if _is_custom_object_model(model)
+            }
+        # One transaction, so the rows go with the objects.
+        atomic = transaction.atomic(using=self.using) if branch_objects else nullcontext()
+        with polymorphic_on_delete(self.data), atomic:
+            result = real_delete(self)
+            if branch_objects:
+                delete_branch_through_rows(branch_objects, connections[self.using])
+            return result
 
     delete.checks_polymorphic_protection = True
     return delete
@@ -210,6 +224,11 @@ def install_collector_patch():
         real_delete = collector.__dict__.get('delete')
         if real_delete is not None and not getattr(real_delete, 'checks_polymorphic_protection', False):
             collector.delete = _check_protection_first(real_delete)
+
+
+def _is_through_model(model):
+    """True if *model* is a custom object type's through model."""
+    return model._meta.app_label == APP_LABEL and model._meta.model_name.startswith('through_')
 
 
 def _is_custom_object_model(model):

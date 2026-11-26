@@ -4,6 +4,7 @@ import unittest
 
 from django.apps import apps
 from django.db import connection as main_conn
+from django.utils import timezone
 
 from core.models import ObjectType
 from dcim.models import Site
@@ -205,6 +206,23 @@ class DeleteThroughRowsInBranchTestCase(BranchingTestBase, _TestBase):
 
             self.assertFalse(self._model().objects.filter(pk=self.holder.pk).exists())
             self.assertIsNone(stale.pk)
+            holder_2 = self._model().objects.get(pk=holder_2.pk)
+            referrers = self._model(other).objects.filter(holders=holder_2)
+            self.assertEqual(list(referrers.values_list('pk', flat=True)), [referrer.pk])
+
+    def test_object_loaded_before_type_changed_in_another_worker(self):
+        with event_tracking(_make_request(self.user)):
+            other, referrer = self._referrer_type()
+            holder_2 = self._model().objects.create(name='holder-2')
+            referrer.holders.add(holder_2)
+        self._provision_branch()
+        branch, request = self._in_branch()
+        with branch, request:
+            stale = self._model().objects.get(pk=self.holder.pk)
+            # As when another worker changes the type: its cached model is now out of date.
+            CustomObjectType.objects.filter(pk=self.cot.pk).update(cache_timestamp=timezone.now())
+            stale.delete()
+
             holder_2 = self._model().objects.get(pk=holder_2.pk)
             referrers = self._model(other).objects.filter(holders=holder_2)
             self.assertEqual(list(referrers.values_list('pk', flat=True)), [referrer.pk])
