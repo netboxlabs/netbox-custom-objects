@@ -205,24 +205,79 @@ class UniquenessConstraintTestError(Exception):
     pass
 
 
+def _own_schemas_sql(conn):
+    """SQL condition on ``schemaname`` matching *conn*'s own schemas.
+
+    For a branch's connection, only the branch's schema counts: its search_path
+    falls through to main, so ``introspection.table_names()`` would report main's
+    tables and an unqualified DROP or DELETE would then change main.  Main's own
+    tables are the ones its search path finds; ``current_schema()`` isn't enough
+    there, as it names a schema called after the database user if one exists.
+    """
+    if conn.alias == DEFAULT_DB_ALIAS:
+        return 'schemaname = ANY(current_schemas(false))'
+    return 'schemaname = current_schema()'
+
+
 def _table_exists(table_name, conn=None):
-    """Return True if *table_name* exists in *conn*'s own schema.
+    """Return True if *table_name* exists in *conn*'s own schema; see ``_own_schemas_sql()``.
 
     Defaults to the global ``connection`` (main schema).  When the caller is
     operating inside a branch context, pass the branch's connection so the
-    lookup runs against the active branch's PostgreSQL schema.  Only that
-    schema counts: a branch connection's search_path falls through to main, so
-    ``introspection.table_names()`` would report main's table and an unqualified
-    DROP would then remove it.
+    lookup runs against the active branch's PostgreSQL schema.
     """
     if conn is None:
         conn = connection
     with conn.cursor() as cursor:
         cursor.execute(
-            'SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = current_schema() AND tablename = %s)',
+            f'SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_tables WHERE {_own_schemas_sql(conn)} AND tablename = %s)',
             [table_name],
         )
         return cursor.fetchone()[0]
+
+
+def _own_table_names(conn):
+    """The names of the tables in *conn*'s own schema; see ``_own_schemas_sql()``."""
+    with conn.cursor() as cursor:
+        cursor.execute(f'SELECT tablename FROM pg_catalog.pg_tables WHERE {_own_schemas_sql(conn)}')
+        return {row[0] for row in cursor.fetchall()}
+
+
+def delete_branch_through_rows(objects, conn):
+    """Delete the through rows of the custom objects in *objects* from *conn*'s own tables.
+
+    *objects* maps each custom object model to the ids of its objects being deleted.  In a
+    branch, the deletion collector skips through models (see ``utilities._related_objects()``):
+    Django finds them from apps.all_models, which holds main's throughs, so it would miss the
+    tables of fields added in the branch and, through the search path, reach main's tables
+    where the branch has no copy.  The rows are deleted by id instead; see
+    ``utilities._BranchThroughRows`` for when.
+    """
+    own_tables = _own_table_names(conn)
+    with conn.cursor() as cursor:
+        for model, pks in objects.items():
+            cot_id = model.custom_object_type_id
+            fields = CustomObjectTypeField.objects.filter(type=CustomFieldTypeChoices.TYPE_MULTIOBJECT).filter(
+                Q(custom_object_type_id=cot_id)
+                | Q(
+                    is_polymorphic=False,
+                    related_object_type__app_label=APP_LABEL,
+                    related_object_type__model=model._meta.model_name,
+                )
+            )
+            for field in fields.select_related('related_object_type'):
+                if field.through_table_name not in own_tables:
+                    continue
+                columns = []
+                if field.custom_object_type_id == cot_id:
+                    columns.append('source_id')
+                if not field.is_polymorphic and field.related_object_type.model == model._meta.model_name:
+                    columns.append('target_id')
+                for column in columns:
+                    cursor.execute(
+                        f'DELETE FROM {conn.ops.quote_name(field.through_table_name)} WHERE {column} = ANY(%s)',
+                        [list(pks)],
+                    )
 
 
 USER_TABLE_DATABASE_NAME_PREFIX = 'custom_objects_'
@@ -676,8 +731,7 @@ def _schema_remove_field(fi, model, schema_editor, schema_conn=None, existing_ta
         through_table = fi.through_table_name
         if existing_tables is None:
             conn = schema_conn if schema_conn is not None else connection
-            with conn.cursor() as cursor:
-                existing_tables = set(conn.introspection.table_names(cursor))
+            existing_tables = _own_table_names(conn)
         if through_table in existing_tables:
             through_meta = type(
                 'Meta',
@@ -849,8 +903,7 @@ def _rename_or_create_m2m_through(old_fi, new_fi, new_mf, model, schema_editor, 
 
     tables = existing_tables
     if tables is None:
-        with schema_conn.cursor() as cursor:
-            tables = schema_conn.introspection.table_names(cursor)
+        tables = _own_table_names(schema_conn)
 
     if old_through in tables:
         old_through_meta = type(
@@ -1577,6 +1630,9 @@ class CustomObject(
         super().refresh_from_db(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
+        # In a branch, the collector deletes the through rows with ``delete_branch_through_rows()``.
+        if _get_schema_connection() is not connection:
+            return super().delete(*args, **kwargs)
         # Two prep steps before super() so the deletion collector doesn't
         # raise traversing reverse FKs from through models:
         #   1. Realign each through's ``source`` FK to ``type(self)`` —
@@ -1586,11 +1642,10 @@ class CustomObject(
         #      (squash revert drops field-CREATEs before CO-CREATEs, so the
         #      CO's collector hits ``relation does not exist`` otherwise).
         cls = type(self)
-        prefix = f'through_{cls._meta.db_table}'
+        # The trailing underscore keeps type 21 from matching type 212's throughs.
+        prefix = f'through_{cls._meta.db_table}_'
         registry = apps.all_models.get(APP_LABEL, {})
-        # Branch contexts may have through tables only in the branch schema, so
-        # introspect via the active schema's connection, not the main one.
-        existing_tables = _get_schema_connection().introspection.table_names()
+        existing_tables = connection.introspection.table_names()
         hidden = {}
         for name, through in list(registry.items()):
             if not name.startswith(prefix):

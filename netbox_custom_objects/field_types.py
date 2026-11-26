@@ -2010,11 +2010,14 @@ class MultiObjectFieldType(FieldType):
         field.remote_field.model = to_model
         field.remote_field.field_name = to_model._meta.pk.name
 
+        from netbox_custom_objects.models import _table_exists
+
         with connection.schema_editor() as schema_editor:
             table_name = through._meta.db_table
             with connection.cursor() as cursor:
-                tables = connection.introspection.table_names(cursor)
-                if table_name not in tables:
+                # Only the schema's own tables count: a branch's search path falls through
+                # to main's table, and the branch needs its own.
+                if not _table_exists(table_name, connection):
                     schema_editor.create_model(through)
                     # Add the target FK as DEFERRABLE INITIALLY DEFERRED.
                     # get_through_model uses db_constraint=False so Django

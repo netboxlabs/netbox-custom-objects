@@ -102,6 +102,38 @@ class SchemaOperationsTestCase(CustomObjectsTestCase, TestCase):
         self.assertIn('geo_latitude', columns)
         self.assertIn('geo_longitude', columns)
 
+    def test_multiobject_field_rename_with_schema_named_after_user(self):
+        """Renaming a Multi-object field keeps its values when a schema named after the database user exists.
+
+        That schema comes first in the default search path ("$user", public), so
+        ``current_schema()`` names it although the tables are in public.
+        """
+        from core.models import ObjectType
+        from dcim.models import Site
+
+        cot = self.create_custom_object_type(name='userschema', slug='user-schema')
+        self.create_custom_object_type_field(cot, name='name', label='Name', type='text', primary=True)
+        field = self.create_custom_object_type_field(
+            cot,
+            name='sites',
+            label='Sites',
+            type='multiobject',
+            related_object_type=ObjectType.objects.get_for_model(Site),
+        )
+        site = Site.objects.create(name='Site A', slug='site-a')
+        obj = cot.get_model().objects.create(name='obj-1')
+        obj.sites.add(site)
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT current_user')
+            cursor.execute(f'CREATE SCHEMA IF NOT EXISTS {connection.ops.quote_name(cursor.fetchone()[0])}')
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.name = 'places'
+        field.save()
+
+        cot.refresh_from_db()
+        self.assertEqual(list(cot.get_model().objects.get(pk=obj.pk).places.all()), [site])
+
     def test_coordinates_field_delete_drops_both_columns(self):
         """Deleting a coordinates field drops both backing DB columns."""
         cot = self.create_custom_object_type(name='coorddelete', slug='coord-delete')
