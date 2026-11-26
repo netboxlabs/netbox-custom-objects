@@ -1,10 +1,10 @@
 import re
 import threading
 import warnings
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 
 from django.apps import apps
-from django.db import DEFAULT_DB_ALIAS, connections, transaction
+from django.db import DEFAULT_DB_ALIAS, connections
 from django.db.models import Q, QuerySet
 from django.db.models.deletion import Collector
 
@@ -147,11 +147,15 @@ def _related_objects(self, related_model, related_fields, objs):
     then raises "Cannot query 'X': Must be 'TableNModel' instance."; filtering by the
     target field's values runs the same query without that class check.
     """
+    in_branch = self.using != DEFAULT_DB_ALIAS and _is_through_model(related_model)
     model = objs.model if isinstance(objs, QuerySet) else type(objs[0]) if objs else None
     if model is None or not _is_custom_object_model(model):
+        if in_branch and related_model._meta.db_table not in _own_tables(self):
+            # The branch has no copy of the table: through the search path, its rows are main's.
+            return related_model._base_manager.using(self.using).none()
         return _real_related_objects(self, related_model, related_fields, objs)
-    if self.using != DEFAULT_DB_ALIAS and _is_through_model(related_model):
-        # A branch's through rows are deleted by delete_branch_through_rows().
+    if in_branch:
+        # A branch's through rows of custom objects are deleted by _BranchThroughRows.
         return related_model._base_manager.using(self.using).none()
 
     def keys(field):
@@ -167,33 +171,61 @@ def _related_objects(self, related_model, related_fields, objs):
     return related_model._base_manager.using(self.using).filter(predicate)
 
 
+def _own_tables(collector):
+    """The tables in the schema of *collector*'s connection, looked up once per collector."""
+    tables = collector.__dict__.get('_own_tables')
+    if tables is None:
+        from netbox_custom_objects.models import _own_table_names
+
+        tables = collector._own_tables = _own_table_names(connections[collector.using])
+    return tables
+
+
+class _BranchThroughRows:
+    """
+    A ``Collector.fast_deletes`` entry that deletes the through rows of the custom objects
+    being deleted in a branch (see ``models.delete_branch_through_rows()``).
+
+    The collector runs fast deletes after the ``pre_delete`` signals, so their handlers still
+    see the rows, and before deleting the objects, so the rows are gone before the FK
+    constraints are checked, even if a schema change earlier in the transaction made them
+    immediate.  Returns 0, so the rows aren't counted in the collector's result.
+    """
+
+    def __init__(self, objects):
+        self.objects = objects
+
+    def _raw_delete(self, using):
+        from netbox_custom_objects.models import delete_branch_through_rows
+
+        delete_branch_through_rows(self.objects, connections[using])
+        return 0
+
+
 def _check_protection_first(real_delete):
     """
     Wrap a collector's ``delete()`` in ``polymorphic_on_delete()``.  That refuses the deletion if
     a polymorphic Object field protects one of the objects, at the same point Django refuses a
     deletion that a real foreign key protects: before any signal is sent or the deletion's
     transaction starts.  It also looks up, once, the polymorphic fields the deletion's
-    ``pre_delete`` handler needs.
+    ``pre_delete`` handler needs, and in a branch adds the custom objects' through rows to the
+    deletion (see ``_BranchThroughRows``).
     """
 
     def delete(self):
         if getattr(self, '_polymorphic_on_delete_prepared', False):
             return real_delete(self)
-        from netbox_custom_objects.models import delete_branch_through_rows, polymorphic_on_delete
+        from netbox_custom_objects.models import polymorphic_on_delete
 
         self._polymorphic_on_delete_prepared = True
-        branch_objects = {}
         if self.using != DEFAULT_DB_ALIAS:
-            branch_objects = {
+            objects = {
                 model: {obj.pk for obj in objs} for model, objs in self.data.items() if _is_custom_object_model(model)
             }
-        # One transaction, so the rows go with the objects.
-        atomic = transaction.atomic(using=self.using) if branch_objects else nullcontext()
-        with polymorphic_on_delete(self.data), atomic:
-            result = real_delete(self)
-            if branch_objects:
-                delete_branch_through_rows(branch_objects, connections[self.using])
-            return result
+            if objects:
+                self.fast_deletes.append(_BranchThroughRows(objects))
+        with polymorphic_on_delete(self.data):
+            return real_delete(self)
 
     delete.checks_polymorphic_protection = True
     return delete

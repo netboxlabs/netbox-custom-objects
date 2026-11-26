@@ -250,8 +250,8 @@ def delete_branch_through_rows(objects, conn):
     branch, the deletion collector skips through models (see ``utilities._related_objects()``):
     Django finds them from apps.all_models, which holds main's throughs, so it would miss the
     tables of fields added in the branch and, through the search path, reach main's tables
-    where the branch has no copy.  The rows are deleted by id instead, after the objects,
-    which the deferred FK constraints allow, so ``pre_delete`` handlers still see them.
+    where the branch has no copy.  The rows are deleted by id instead; see
+    ``utilities._BranchThroughRows`` for when.
     """
     own_tables = _own_table_names(conn)
     with conn.cursor() as cursor:
@@ -1630,7 +1630,7 @@ class CustomObject(
         super().refresh_from_db(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        # In a branch, the collector leaves through rows to ``delete_branch_through_rows()``.
+        # In a branch, the collector deletes the through rows with ``delete_branch_through_rows()``.
         if _get_schema_connection() is not connection:
             return super().delete(*args, **kwargs)
         # Two prep steps before super() so the deletion collector doesn't

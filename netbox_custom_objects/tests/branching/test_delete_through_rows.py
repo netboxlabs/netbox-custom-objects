@@ -4,6 +4,7 @@ import unittest
 
 from django.apps import apps
 from django.db import connection as main_conn
+from django.db import transaction
 from django.utils import timezone
 
 from core.models import ObjectType
@@ -226,6 +227,31 @@ class DeleteThroughRowsInBranchTestCase(BranchingTestBase, _TestBase):
             holder_2 = self._model().objects.get(pk=holder_2.pk)
             referrers = self._model(other).objects.filter(holders=holder_2)
             self.assertEqual(list(referrers.values_list('pk', flat=True)), [referrer.pk])
+
+    def test_field_added_and_object_deleted_in_one_transaction(self):
+        # As when a sync replays main's changes: adding the field makes the FK constraints
+        # immediate for the rest of the transaction.
+        self._provision_branch()
+        branch, request = self._in_branch()
+        with branch, request, transaction.atomic(using=self.branch.connection_name):
+            field = self._add_sites_field()
+            self._model().objects.get(pk=self.holder.pk).delete()
+
+        self.assertEqual(self._rows_in(self.branch.schema_name, field.through_table_name), 0)
+
+    def test_target_deleted_in_branch_without_copy_keeps_main_rows(self):
+        with event_tracking(_make_request(self.user)):
+            field = self._add_sites_field()
+        self._provision_branch()
+        # As in a branch provisioned before netbox-branching 1.2.4: no copy of the table.
+        with main_conn.cursor() as cursor:
+            cursor.execute(f'DROP TABLE "{self.branch.schema_name}"."{field.through_table_name}"')
+        # No request: with one, core's change logging removes the Site from the field, and like
+        # any change to the field's values in such a branch, that goes to main's table.
+        with activate_branch(self.branch):
+            Site.objects.get(pk=self.site.pk).delete()
+
+        self.assertEqual(self._rows_in(self.main_schema, field.through_table_name), 1)
 
     def test_field_deleted_in_branch_keeps_main_rows(self):
         with event_tracking(_make_request(self.user)):
